@@ -18,7 +18,7 @@ public class SecurityConfig {
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
                 // Actuator endpoints
-                .requestMatchers("/actuator/health/**", "/actuator/info", "/actuator/prometheus").permitAll()
+                .requestMatchers("/actuator/**").permitAll()
                 // User profile APIs require authentication
                 .requestMatchers("/api/v1/profiles/me/**").authenticated()
                 .anyRequest().authenticated()

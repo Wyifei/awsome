@@ -57,3 +57,15 @@ variable "eks_security_group_id" {
   description = "EKS Worker 安全组 ID"
   type        = string
 }
+
+variable "aws_region" {
+  description = "AWS 区域"
+  type        = string
+  default     = "ap-northeast-1"
+}
+
+variable "prometheus_workspace_arn" {
+  description = "AWS Managed Prometheus Workspace ARN (用于 ADOT Collector)"
+  type        = string
+  default     = ""
+}

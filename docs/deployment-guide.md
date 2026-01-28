@@ -26,7 +26,7 @@
 
 ### 技术栈
 
-- **运行时**: Java 17, Spring Boot 3.2
+- **运行时**: Java 21, Spring Boot 3.2
 - **构建工具**: Maven 3.8+
 - **容器化**: Docker
 - **编排**: Kubernetes (EKS 1.31)
@@ -48,7 +48,7 @@
 ### 本地开发环境
 
 ```bash
-# Java 17
+# Java 21 (必须使用 Java 21，Lombok 依赖此版本)
 java -version
 
 # Maven 3.8+
@@ -122,9 +122,12 @@ export S3_AVATARS_BUCKET=$(terraform output -raw s3_avatars_bucket)
 export CLOUDFRONT_DOMAIN=$(terraform output -raw cloudfront_domain_name)
 cd ..
 
+# 数据库用户名 (Aurora 默认用户名是 postgres)
+export DB_USERNAME="postgres"
+
 # 需要手动设置的值
-export DB_PASSWORD="<从 Secrets Manager 获取或设置>"
-export INTERNAL_API_KEY="<生成一个安全的 API Key>"
+export DB_PASSWORD="<从 Secrets Manager 获取>"
+export INTERNAL_API_KEY="$(openssl rand -hex 32)"  # 自动生成安全 API Key
 export SES_FROM_EMAIL="noreply@your-domain.com"
 
 # 验证变量
@@ -167,13 +170,45 @@ source ~/.auth-platform-env
 
 ### 从 Secrets Manager 获取数据库密码
 
+Aurora 使用 RDS 自动管理的 Secret，需要先获取 Secret ARN：
+
 ```bash
+# 方法 1: 从 Terraform 输出获取 RDS Secret ARN
+cd infrastructure
+RDS_SECRET_ARN=$(terraform output -raw aurora_master_secret_arn)
+cd ..
+
+# 方法 2: 通过 AWS CLI 查找 RDS 管理的 Secret
+RDS_SECRET_ARN=$(aws secretsmanager list-secrets \
+  --region ap-northeast-1 \
+  --query "SecretList[?contains(Name, 'rds!cluster')].ARN | [0]" \
+  --output text)
+
+echo "RDS Secret ARN: $RDS_SECRET_ARN"
+
 # 获取 Aurora 凭证
-aws secretsmanager get-secret-value \
-  --secret-id auth-platform-production/aurora-credentials \
+DB_PASSWORD=$(aws secretsmanager get-secret-value \
+  --secret-id "$RDS_SECRET_ARN" \
+  --region ap-northeast-1 \
   --query SecretString \
-  --output text | jq -r '.password'
+  --output text | jq -r '.password')
+
+DB_USERNAME=$(aws secretsmanager get-secret-value \
+  --secret-id "$RDS_SECRET_ARN" \
+  --region ap-northeast-1 \
+  --query SecretString \
+  --output text | jq -r '.username')
+
+echo "DB_USERNAME: $DB_USERNAME"
+echo "DB_PASSWORD: $DB_PASSWORD"
 ```
+
+> **注意**: RDS 自动管理的 Secret (格式为 `rds!cluster-*`) 中的密码才是正确的。
+> 请勿使用 `auth-platform-production/aurora-credentials` Secret，该 Secret 中的密码可能与实际密码不同步。
+
+> **注意**: 数据库密码可能包含特殊字符 (`|`, `]`, `<`, `>`, `&` 等)。
+> 在创建 Kubernetes Secret 时，建议使用 `kubectl create secret` 命令而不是通过 kustomize 的 envsubst 替换，
+> 以避免 shell 转义问题。
 
 ## 构建流程
 
@@ -208,7 +243,7 @@ source ~/.auth-platform-env
 | `-p, --push` | 推送镜像到 ECR | false |
 | `-e, --env` | 环境 (dev/production) | production |
 | `-t, --tag` | Docker 镜像标签 | latest |
-| `-r, --registry` | AWS Account ID | - |
+| `-r, --registry` | AWS Account ID (仅数字，如 123456789012) | - |
 | `--region` | AWS 区域 | ap-northeast-1 |
 
 #### 常用命令
@@ -352,25 +387,16 @@ source ~/.auth-platform-env
 # 设置镜像标签
 IMAGE_TAG="v1.0.0"
 
-# 创建变量替换函数
-substitute_vars() {
-  sed "s|\${AWS_ACCOUNT_ID}|${AWS_ACCOUNT_ID}|g" | \
-  sed "s|\${APP_SERVICE_ROLE_ARN}|${APP_SERVICE_ROLE_ARN}|g" | \
-  sed "s|\${AURORA_CLUSTER_ENDPOINT}|${AURORA_CLUSTER_ENDPOINT}|g" | \
-  sed "s|\${DB_PASSWORD}|${DB_PASSWORD}|g" | \
-  sed "s|\${COGNITO_USER_POOL_ID}|${COGNITO_USER_POOL_ID}|g" | \
-  sed "s|\${S3_AVATARS_BUCKET}|${S3_AVATARS_BUCKET}|g" | \
-  sed "s|\${CLOUDFRONT_DOMAIN}|${CLOUDFRONT_DOMAIN}|g" | \
-  sed "s|\${INTERNAL_API_KEY}|${INTERNAL_API_KEY}|g" | \
-  sed "s|\${SES_FROM_EMAIL}|${SES_FROM_EMAIL}|g"
-}
+# 使用 envsubst 进行变量替换 (支持密码中的特殊字符)
+# 定义需要替换的变量列表
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
 
 # 部署所有服务
 for SERVICE in user-service profile-service notification-service; do
   echo "Deploying $SERVICE..."
 
   kustomize build services/${SERVICE}/kustomize/overlays/production | \
-    substitute_vars | \
+    envsubst "$ENVSUBST_VARS" | \
     kubectl apply -f -
 done
 
@@ -386,22 +412,12 @@ kubectl rollout status deployment/notification-service -n auth-platform
 # 加载环境变量
 source ~/.auth-platform-env
 
-# 定义变量替换
-substitute_vars() {
-  sed "s|\${AWS_ACCOUNT_ID}|${AWS_ACCOUNT_ID}|g" | \
-  sed "s|\${APP_SERVICE_ROLE_ARN}|${APP_SERVICE_ROLE_ARN}|g" | \
-  sed "s|\${AURORA_CLUSTER_ENDPOINT}|${AURORA_CLUSTER_ENDPOINT}|g" | \
-  sed "s|\${DB_PASSWORD}|${DB_PASSWORD}|g" | \
-  sed "s|\${COGNITO_USER_POOL_ID}|${COGNITO_USER_POOL_ID}|g" | \
-  sed "s|\${S3_AVATARS_BUCKET}|${S3_AVATARS_BUCKET}|g" | \
-  sed "s|\${CLOUDFRONT_DOMAIN}|${CLOUDFRONT_DOMAIN}|g" | \
-  sed "s|\${INTERNAL_API_KEY}|${INTERNAL_API_KEY}|g" | \
-  sed "s|\${SES_FROM_EMAIL}|${SES_FROM_EMAIL}|g"
-}
+# 定义需要替换的变量列表
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
 
 # 部署 user-service
 kustomize build services/user-service/kustomize/overlays/production | \
-  substitute_vars | \
+  envsubst "$ENVSUBST_VARS" | \
   kubectl apply -f -
 
 # 等待部署完成
@@ -422,7 +438,7 @@ kubectl set image deployment/user-service \
 # 方法 2: 使用 kustomize (推荐)
 cd services/user-service/kustomize/overlays/production
 kustomize edit set image user-service=$ECR_REGISTRY/auth-platform-production/user-service:v1.1.0
-kustomize build . | substitute_vars | kubectl apply -f -
+kustomize build . | envsubst "$ENVSUBST_VARS" | kubectl apply -f -
 cd -
 ```
 
@@ -432,24 +448,15 @@ cd -
 # 加载环境变量
 source ~/.auth-platform-env
 
-# Dev 环境变量替换函数
-substitute_vars_dev() {
-  sed "s|\${AWS_ACCOUNT_ID}|${AWS_ACCOUNT_ID}|g" | \
-  sed "s|\${AURORA_CLUSTER_ENDPOINT}|${AURORA_CLUSTER_ENDPOINT}|g" | \
-  sed "s|\${DB_PASSWORD}|${DB_PASSWORD}|g" | \
-  sed "s|\${COGNITO_USER_POOL_ID}|${COGNITO_USER_POOL_ID}|g" | \
-  sed "s|\${S3_AVATARS_BUCKET}|${S3_AVATARS_BUCKET}|g" | \
-  sed "s|\${CLOUDFRONT_DOMAIN}|${CLOUDFRONT_DOMAIN}|g" | \
-  sed "s|\${INTERNAL_API_KEY}|${INTERNAL_API_KEY}|g" | \
-  sed "s|\${SES_FROM_EMAIL}|${SES_FROM_EMAIL}|g"
-}
+# 定义需要替换的变量列表
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
 
 # 部署所有服务到 dev
 for SERVICE in user-service profile-service notification-service; do
   echo "Deploying $SERVICE to dev..."
 
   kustomize build services/${SERVICE}/kustomize/overlays/dev | \
-    substitute_vars_dev | \
+    envsubst "$ENVSUBST_VARS" | \
     kubectl apply -f -
 done
 ```
@@ -520,15 +527,52 @@ pkill -f "port-forward.*user-service"
 
 ### Secrets 管理
 
-生产环境使用 Kubernetes Secrets，建议后续迁移到 External Secrets Operator：
+生产环境使用 Kubernetes Secrets，建议后续迁移到 External Secrets Operator。
+
+> **重要**: 由于数据库密码可能包含特殊字符，**强烈建议**使用 `kubectl create secret` 命令直接创建 Secrets，
+> 而不是通过 kustomize 的变量替换 (envsubst)。
+
+#### 推荐方式：直接创建 Secrets
 
 ```bash
-# 创建数据库密码 Secret
-kubectl create secret generic user-service-secret \
-  -n auth-platform \
-  --from-literal=DB_PASSWORD='your-db-password' \
+# 首先从 RDS 管理的 Secret 获取凭证
+RDS_SECRET_ARN=$(aws secretsmanager list-secrets \
+  --region ap-northeast-1 \
+  --query "SecretList[?contains(Name, 'rds!cluster')].ARN | [0]" \
+  --output text)
+
+DB_PASSWORD=$(aws secretsmanager get-secret-value \
+  --secret-id "$RDS_SECRET_ARN" \
+  --region ap-northeast-1 \
+  --query SecretString --output text | jq -r '.password')
+
+INTERNAL_API_KEY=$(openssl rand -hex 32)
+
+# 创建 user-service Secret
+kubectl delete secret user-service-secret -n auth-platform 2>/dev/null || true
+kubectl create secret generic user-service-secret -n auth-platform \
+  --from-literal=DB_HOST='auth-platform-production-aurora.cluster-xxxxxx.ap-northeast-1.rds.amazonaws.com' \
+  --from-literal=DB_USERNAME='postgres' \
+  --from-literal=DB_PASSWORD="$DB_PASSWORD" \
   --from-literal=COGNITO_USER_POOL_ID='ap-northeast-1_xxxxxxxx' \
-  --from-literal=INTERNAL_API_KEY='your-internal-api-key'
+  --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY"
+
+# 创建 profile-service Secret
+kubectl delete secret profile-service-secret -n auth-platform 2>/dev/null || true
+kubectl create secret generic profile-service-secret -n auth-platform \
+  --from-literal=DB_HOST='auth-platform-production-aurora.cluster-xxxxxx.ap-northeast-1.rds.amazonaws.com' \
+  --from-literal=DB_USERNAME='postgres' \
+  --from-literal=DB_PASSWORD="$DB_PASSWORD" \
+  --from-literal=COGNITO_USER_POOL_ID='ap-northeast-1_xxxxxxxx' \
+  --from-literal=S3_AVATAR_BUCKET='auth-platform-production-avatars-xxxxxx' \
+  --from-literal=CLOUDFRONT_DOMAIN='xxxxxx.cloudfront.net'
+
+# 创建 notification-service Secret
+kubectl delete secret notification-service-secret -n auth-platform 2>/dev/null || true
+kubectl create secret generic notification-service-secret -n auth-platform \
+  --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY" \
+  --from-literal=SES_FROM_EMAIL='noreply@example.com' \
+  --from-literal=SES_FROM_NAME='Auth Platform'
 
 # 查看 Secret
 kubectl get secret -n auth-platform
@@ -563,11 +607,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: '21'
+          distribution: 'corretto'
           cache: maven
 
       - name: Build with Maven
@@ -713,16 +757,65 @@ kubectl exec -it -n auth-platform deploy/user-service -- \
 kubectl get deployment user-service -n auth-platform -o yaml | grep -A 10 readinessProbe
 ```
 
+#### 4.1 健康检查返回 401 Unauthorized
+
+如果探针失败并显示 `HTTP probe failed with statuscode: 401`，说明 Spring Security 配置未正确放行 actuator 端点。
+
+**解决方案**: 修改 `SecurityConfig.java`，确保 actuator 端点允许匿名访问：
+
+```java
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    http
+        .authorizeHttpRequests(auth -> auth
+            // 允许所有 actuator 端点匿名访问
+            .requestMatchers("/actuator/**").permitAll()
+            .anyRequest().authenticated()
+        )
+        // ... 其他配置
+    return http.build();
+}
+```
+
+修改后需要重新构建并推送镜像。
+
+#### 4.2 Spring Profile 配置错误
+
+如果启动时出现类似以下错误：
+```
+Property 'spring.profiles.active' imported from location 'class path resource [application-production.yml]' is invalid
+```
+
+**原因**: `spring.profiles.active` 不能在 profile-specific 配置文件 (如 `application-production.yml`) 中定义。
+
+**解决方案**: 从 `application-production.yml` 中删除 `spring.profiles.active` 配置，该值应通过环境变量 `SPRING_PROFILES_ACTIVE` 设置。
+
 #### 5. 数据库连接问题
 
 ```bash
 # 检查 Pod 环境变量
 kubectl exec -it -n auth-platform deploy/user-service -- env | grep DB_
 
-# 测试数据库连接
+# 测试数据库连接 (从 Pod 内部)
 kubectl exec -it -n auth-platform deploy/user-service -- \
-  nc -zv $DB_HOST $DB_PORT
+  nc -zv auth-platform-production-aurora.cluster-xxxxxx.ap-northeast-1.rds.amazonaws.com 5432
 ```
+
+**常见原因:**
+
+1. **密码认证失败 (28P01)**
+   - 检查 DB_USERNAME 是否正确 (应为 `postgres` 而非 `admin`)
+   - 检查 DB_PASSWORD 是否包含特殊字符并被正确传递
+   - 使用 `kubectl create secret` 重新创建 Secret
+
+2. **连接超时**
+   - 检查 Aurora 安全组是否允许来自 EKS 节点安全组的入站连接
+   - EKS 模块会创建自己的节点安全组，需要在 Terraform 中添加额外的安全组规则
+   - 参考 infrastructure/main.tf 中的 `aws_security_group_rule.aurora_from_eks_nodes`
+
+3. **DNS 解析失败**
+   - 检查 VPC DNS 设置
+   - 确保 Aurora 端点主机名正确
 
 ### 回滚部署
 
@@ -814,18 +907,8 @@ set -e
 # 加载环境变量
 source ~/.auth-platform-env
 
-# 变量替换函数
-substitute_vars() {
-  sed "s|\${AWS_ACCOUNT_ID}|${AWS_ACCOUNT_ID}|g" | \
-  sed "s|\${APP_SERVICE_ROLE_ARN}|${APP_SERVICE_ROLE_ARN}|g" | \
-  sed "s|\${AURORA_CLUSTER_ENDPOINT}|${AURORA_CLUSTER_ENDPOINT}|g" | \
-  sed "s|\${DB_PASSWORD}|${DB_PASSWORD}|g" | \
-  sed "s|\${COGNITO_USER_POOL_ID}|${COGNITO_USER_POOL_ID}|g" | \
-  sed "s|\${S3_AVATARS_BUCKET}|${S3_AVATARS_BUCKET}|g" | \
-  sed "s|\${CLOUDFRONT_DOMAIN}|${CLOUDFRONT_DOMAIN}|g" | \
-  sed "s|\${INTERNAL_API_KEY}|${INTERNAL_API_KEY}|g" | \
-  sed "s|\${SES_FROM_EMAIL}|${SES_FROM_EMAIL}|g"
-}
+# 定义需要替换的变量列表
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
 
 echo "Building and pushing images..."
 ./scripts/build.sh -d -p -e production -r $AWS_ACCOUNT_ID -t $(git rev-parse --short HEAD) all
@@ -834,7 +917,7 @@ echo "Deploying to EKS..."
 for SERVICE in user-service profile-service notification-service; do
   echo "  - Deploying $SERVICE..."
   kustomize build services/${SERVICE}/kustomize/overlays/production | \
-    substitute_vars | \
+    envsubst "$ENVSUBST_VARS" | \
     kubectl apply -f -
 done
 

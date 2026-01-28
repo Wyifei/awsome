@@ -1,13 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Form, Input, Button, Card, Typography, message, Modal } from 'antd'
-import { UserOutlined, LockOutlined, MailOutlined } from '@ant-design/icons'
+import { LockOutlined, MailOutlined } from '@ant-design/icons'
 import { useAuth } from '../hooks/useAuth'
 
 const { Title, Text } = Typography
 
 interface RegisterForm {
-  username: string
   email: string
   password: string
   confirmPassword: string
@@ -16,18 +15,20 @@ interface RegisterForm {
 export default function RegisterPage() {
   const [loading, setLoading] = useState(false)
   const [verifyModalVisible, setVerifyModalVisible] = useState(false)
-  const [verifyUsername, setVerifyUsername] = useState('')
+  const [verifyEmail, setVerifyEmail] = useState('')
   const [verifyCode, setVerifyCode] = useState('')
-  const { register, confirmRegistration } = useAuth()
+  const [resendLoading, setResendLoading] = useState(false)
+  const { register, confirmRegistration, resendVerificationCode } = useAuth()
   const navigate = useNavigate()
 
   const onFinish = async (values: RegisterForm) => {
     setLoading(true)
     try {
-      await register(values.username, values.email, values.password)
-      setVerifyUsername(values.username)
+      // 注册时 username 参数已不使用，使用 email 作为用户名
+      await register(values.email, values.email, values.password)
+      setVerifyEmail(values.email)
       setVerifyModalVisible(true)
-      message.success('注册成功，请查收验证码')
+      message.success('注册成功，验证码已发送到您的邮箱')
     } catch (error) {
       message.error(error instanceof Error ? error.message : '注册失败')
     } finally {
@@ -42,7 +43,7 @@ export default function RegisterPage() {
     }
     setLoading(true)
     try {
-      await confirmRegistration(verifyUsername, verifyCode)
+      await confirmRegistration(verifyEmail, verifyCode)
       message.success('验证成功，请登录')
       setVerifyModalVisible(false)
       navigate('/login')
@@ -50,6 +51,18 @@ export default function RegisterPage() {
       message.error(error instanceof Error ? error.message : '验证失败')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleResendCode = async () => {
+    setResendLoading(true)
+    try {
+      await resendVerificationCode(verifyEmail)
+      message.success('验证码已重新发送')
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '发送失败')
+    } finally {
+      setResendLoading(false)
     }
   }
 
@@ -73,15 +86,6 @@ export default function RegisterPage() {
           size="large"
         >
           <Form.Item
-            name="username"
-            rules={[
-              { required: true, message: '请输入用户名' },
-              { min: 3, message: '用户名至少3个字符' }
-            ]}
-          >
-            <Input prefix={<UserOutlined />} placeholder="用户名" />
-          </Form.Item>
-          <Form.Item
             name="email"
             rules={[
               { required: true, message: '请输入邮箱' },
@@ -94,7 +98,11 @@ export default function RegisterPage() {
             name="password"
             rules={[
               { required: true, message: '请输入密码' },
-              { min: 8, message: '密码至少8个字符' }
+              { min: 8, message: '密码至少8个字符' },
+              {
+                pattern: /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/,
+                message: '密码需包含大小写字母和数字'
+              }
             ]}
           >
             <Input.Password prefix={<LockOutlined />} placeholder="密码" />
@@ -138,13 +146,25 @@ export default function RegisterPage() {
         cancelText="取消"
       >
         <p style={{ marginBottom: 16 }}>
-          验证码已发送到您的邮箱，请输入验证码完成注册：
+          验证码已发送到 <strong>{verifyEmail}</strong>，请输入验证码完成注册：
         </p>
         <Input
-          placeholder="请输入验证码"
+          placeholder="请输入6位验证码"
           value={verifyCode}
           onChange={(e) => setVerifyCode(e.target.value)}
+          maxLength={6}
+          style={{ marginBottom: 12 }}
         />
+        <div style={{ textAlign: 'right' }}>
+          <Button
+            type="link"
+            onClick={handleResendCode}
+            loading={resendLoading}
+            style={{ padding: 0 }}
+          >
+            重新发送验证码
+          </Button>
+        </div>
       </Modal>
     </div>
   )

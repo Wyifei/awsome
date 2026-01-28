@@ -17,7 +17,13 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
+                .requestMatchers("/actuator/**").permitAll()
+                // Auth endpoints - no authentication required
+                .requestMatchers("/users/register").permitAll()
+                .requestMatchers("/users/verify-email").permitAll()
+                .requestMatchers("/users/resend-verification").permitAll()
+                .requestMatchers("/users/forgot-password").permitAll()
+                .requestMatchers("/users/reset-password").permitAll()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2

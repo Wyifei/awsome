@@ -35,6 +35,9 @@ public class BusinessMetrics {
     private static final String METRIC_USER_CREATED = "auth_user_created";
     private static final String METRIC_USER_DELETED = "auth_user_deleted";
     private static final String METRIC_USER_SYNCED = "auth_user_synced";
+    private static final String METRIC_EMAIL_VERIFIED = "auth_email_verified";
+    private static final String METRIC_PASSWORD_CHANGED = "auth_password_changed";
+    private static final String METRIC_PASSWORD_RESET = "auth_password_reset";
     private static final String METRIC_PROFILE_UPDATED = "auth_profile_updated";
     private static final String METRIC_PROFILE_FETCHED = "auth_profile_fetched";
     private static final String METRIC_ERRORS = "auth_errors";
@@ -57,6 +60,9 @@ public class BusinessMetrics {
 
     // 基础计数器
     private Counter userSyncedCounter;
+    private Counter emailVerifiedCounter;
+    private Counter passwordChangedCounter;
+    private Counter passwordResetCounter;
     private Counter profileFetchedCounter;
 
     @PostConstruct
@@ -64,6 +70,18 @@ public class BusinessMetrics {
         // 初始化固定的计数器
         userSyncedCounter = Counter.builder(METRIC_USER_SYNCED + "_total")
                 .description("Total number of user sync operations from Cognito")
+                .register(meterRegistry);
+
+        emailVerifiedCounter = Counter.builder(METRIC_EMAIL_VERIFIED + "_total")
+                .description("Total number of email verification operations")
+                .register(meterRegistry);
+
+        passwordChangedCounter = Counter.builder(METRIC_PASSWORD_CHANGED + "_total")
+                .description("Total number of password change operations")
+                .register(meterRegistry);
+
+        passwordResetCounter = Counter.builder(METRIC_PASSWORD_RESET + "_total")
+                .description("Total number of password reset operations")
                 .register(meterRegistry);
 
         profileFetchedCounter = Counter.builder(METRIC_PROFILE_FETCHED + "_total")
@@ -143,6 +161,33 @@ public class BusinessMetrics {
      */
     public void incrementUserSynced() {
         userSyncedCounter.increment();
+    }
+
+    // ==================== 邮箱验证指标 ====================
+
+    /**
+     * 记录邮箱验证成功
+     */
+    public void incrementEmailVerified() {
+        emailVerifiedCounter.increment();
+    }
+
+    // ==================== 密码修改指标 ====================
+
+    /**
+     * 记录密码修改
+     */
+    public void incrementPasswordChanged() {
+        passwordChangedCounter.increment();
+    }
+
+    // ==================== 密码重置指标 ====================
+
+    /**
+     * 记录密码重置
+     */
+    public void incrementPasswordReset() {
+        passwordResetCounter.increment();
     }
 
     // ==================== 资料更新指标 ====================

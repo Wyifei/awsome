@@ -125,6 +125,11 @@ output "aws_lb_controller_role_arn" {
   value       = module.eks.aws_lb_controller_role_arn
 }
 
+output "adot_collector_role_arn" {
+  description = "ADOT Collector IAM Role ARN (用于 Prometheus Remote Write)"
+  value       = module.eks.adot_collector_role_arn
+}
+
 # ------------------------------------------------------------------------------
 # ECR
 # ------------------------------------------------------------------------------
@@ -166,4 +171,23 @@ output "nginx_ingress_class_name" {
 output "alb_ingress_class_name" {
   description = "ALB Ingress Class 名称"
   value       = module.kubernetes.alb_ingress_class_name
+}
+
+# ------------------------------------------------------------------------------
+# Monitoring (AWS Managed Prometheus & Grafana)
+# ------------------------------------------------------------------------------
+
+output "prometheus_endpoint" {
+  description = "AWS Managed Prometheus Endpoint"
+  value       = var.enable_monitoring ? module.monitoring[0].prometheus_endpoint : null
+}
+
+output "prometheus_remote_write_url" {
+  description = "Prometheus Remote Write URL"
+  value       = var.enable_monitoring ? module.monitoring[0].prometheus_remote_write_url : null
+}
+
+output "grafana_endpoint" {
+  description = "Grafana URL (Self-hosted in EKS, 通过 NGINX Ingress 访问)"
+  value       = var.enable_monitoring ? "${module.kubernetes.alb_dns_name}${module.kubernetes.grafana_path}" : null
 }

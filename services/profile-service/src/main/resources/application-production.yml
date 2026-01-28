@@ -1,8 +1,5 @@
 # Production configuration
 spring:
-  profiles:
-    active: production
-
   jpa:
     show-sql: false
     properties:

@@ -1,8 +1,4 @@
 # Production configuration
-spring:
-  profiles:
-    active: production
-
 # Logging
 logging:
   level:

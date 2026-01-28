@@ -30,33 +30,64 @@ public class EmailService {
     private String companyName;
 
     /**
-     * Send account modified notification email
+     * Send verification code email (for registration or password reset)
      */
-    public EmailResponse sendAccountModifiedEmail(String to, String firstName) {
-        String subject = "您的账户信息已更新";
-        String body = buildAccountModifiedEmailBody(firstName);
+    public EmailResponse sendVerificationCodeEmail(String to, String code, String type, int expiresInMinutes) {
+        String subject;
+        String body;
+        String emailType;
 
-        return sendEmail(to, subject, body, BusinessMetrics.EMAIL_TYPE_ACCOUNT_MODIFIED);
+        if ("EMAIL_VERIFICATION".equals(type)) {
+            subject = "您的邮箱验证码";
+            body = buildEmailVerificationCodeBody(code, expiresInMinutes);
+            emailType = BusinessMetrics.EMAIL_TYPE_VERIFICATION_CODE;
+        } else {
+            subject = "您的密码重置验证码";
+            body = buildPasswordResetCodeBody(code, expiresInMinutes);
+            emailType = BusinessMetrics.EMAIL_TYPE_PASSWORD_RESET_CODE;
+        }
+
+        return sendEmail(to, subject, body, emailType);
+    }
+
+    /**
+     * Send welcome email after registration verification
+     */
+    public EmailResponse sendWelcomeEmail(String to, String nickname) {
+        String subject = "欢迎加入 " + companyName;
+        String body = buildWelcomeEmailBody(nickname);
+
+        return sendEmail(to, subject, body, BusinessMetrics.EMAIL_TYPE_WELCOME);
+    }
+
+    /**
+     * Send password changed notification email
+     */
+    public EmailResponse sendPasswordChangedEmail(String to, String nickname) {
+        String subject = "您的密码已修改";
+        String body = buildPasswordChangedEmailBody(nickname);
+
+        return sendEmail(to, subject, body, BusinessMetrics.EMAIL_TYPE_PASSWORD_CHANGED);
+    }
+
+    /**
+     * Send profile updated notification email
+     */
+    public EmailResponse sendProfileUpdatedEmail(String to, String nickname) {
+        String subject = "您的个人资料已更新";
+        String body = buildProfileUpdatedEmailBody(nickname);
+
+        return sendEmail(to, subject, body, BusinessMetrics.EMAIL_TYPE_PROFILE_UPDATED);
     }
 
     /**
      * Send account deleted notification email
      */
-    public EmailResponse sendAccountDeletedEmail(String to, String firstName) {
+    public EmailResponse sendAccountDeletedEmail(String to, String nickname) {
         String subject = "您的账号已删除";
-        String body = buildAccountDeletedEmailBody(firstName);
+        String body = buildAccountDeletedEmailBody(nickname);
 
         return sendEmail(to, subject, body, BusinessMetrics.EMAIL_TYPE_ACCOUNT_DELETED);
-    }
-
-    /**
-     * Send welcome email (for future use)
-     */
-    public EmailResponse sendWelcomeEmail(String to, String firstName) {
-        String subject = "欢迎加入 " + companyName;
-        String body = buildWelcomeEmailBody(firstName);
-
-        return sendEmail(to, subject, body, BusinessMetrics.EMAIL_TYPE_WELCOME);
     }
 
     private EmailResponse sendEmail(String to, String subject, String body, String emailType) {
@@ -117,8 +148,96 @@ public class EmailService {
         }
     }
 
-    private String buildAccountModifiedEmailBody(String firstName) {
-        String name = firstName != null && !firstName.isBlank() ? firstName : "用户";
+    private String buildEmailVerificationCodeBody(String code, int expiresInMinutes) {
+        return String.format("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h2 style="color: #333333; margin-bottom: 20px;">欢迎注册 %s</h2>
+                        <p style="color: #666666; line-height: 1.6;">您的邮箱验证码是：</p>
+                        <div style="background-color: #f0f0f0; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                            <span style="font-size: 32px; font-weight: bold; color: #4CAF50; letter-spacing: 8px;">%s</span>
+                        </div>
+                        <p style="color: #666666; line-height: 1.6;">验证码将在 <strong>%d 分钟</strong>后过期。</p>
+                        <p style="color: #999999; line-height: 1.6;">如果这不是您本人的操作，请忽略此邮件。</p>
+                        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
+                        <p style="color: #999999; font-size: 14px;">
+                            此邮件由系统自动发送，请勿直接回复。<br>
+                            %s 团队
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, companyName, code, expiresInMinutes, companyName);
+    }
+
+    private String buildPasswordResetCodeBody(String code, int expiresInMinutes) {
+        return String.format("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h2 style="color: #333333; margin-bottom: 20px;">密码重置请求</h2>
+                        <p style="color: #666666; line-height: 1.6;">您正在重置 %s 账号密码，验证码是：</p>
+                        <div style="background-color: #fff3e0; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                            <span style="font-size: 32px; font-weight: bold; color: #FF9800; letter-spacing: 8px;">%s</span>
+                        </div>
+                        <p style="color: #666666; line-height: 1.6;">验证码将在 <strong>%d 分钟</strong>后过期。</p>
+                        <p style="color: #e74c3c; line-height: 1.6;">如果这不是您本人的操作，请立即联系客服。</p>
+                        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
+                        <p style="color: #999999; font-size: 14px;">
+                            此邮件由系统自动发送，请勿直接回复。<br>
+                            %s 团队
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, companyName, code, expiresInMinutes, companyName);
+    }
+
+    private String buildWelcomeEmailBody(String nickname) {
+        String name = nickname != null && !nickname.isBlank() ? nickname : "用户";
+
+        return String.format("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h2 style="color: #333333; margin-bottom: 20px;">欢迎加入，%s！</h2>
+                        <p style="color: #666666; line-height: 1.6;">感谢您注册 %s。您的账号已成功创建。</p>
+                        <p style="color: #666666; line-height: 1.6;">现在您可以登录并开始使用我们的服务。</p>
+                        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
+                        <p style="color: #999999; font-size: 14px;">
+                            此邮件由系统自动发送，请勿直接回复。<br>
+                            %s 团队
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, name, companyName, companyName);
+    }
+
+    private String buildPasswordChangedEmailBody(String nickname) {
+        String name = nickname != null && !nickname.isBlank() ? nickname : "用户";
 
         return String.format("""
             <!DOCTYPE html>
@@ -131,7 +250,35 @@ public class EmailService {
                 <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
                     <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
                         <h2 style="color: #333333; margin-bottom: 20px;">您好，%s</h2>
-                        <p style="color: #666666; line-height: 1.6;">您的账户信息已成功更新。</p>
+                        <p style="color: #666666; line-height: 1.6;">您的账户密码已成功修改。</p>
+                        <p style="color: #e74c3c; line-height: 1.6;">如果这不是您本人的操作，请立即联系我们的客服团队。</p>
+                        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
+                        <p style="color: #999999; font-size: 14px;">
+                            此邮件由系统自动发送，请勿直接回复。<br>
+                            %s 团队
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, name, companyName);
+    }
+
+    private String buildProfileUpdatedEmailBody(String nickname) {
+        String name = nickname != null && !nickname.isBlank() ? nickname : "用户";
+
+        return String.format("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h2 style="color: #333333; margin-bottom: 20px;">您好，%s</h2>
+                        <p style="color: #666666; line-height: 1.6;">您的个人资料已成功更新。</p>
                         <p style="color: #666666; line-height: 1.6;">如果这不是您本人的操作，请立即联系我们的客服团队。</p>
                         <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
                         <p style="color: #999999; font-size: 14px;">
@@ -145,8 +292,8 @@ public class EmailService {
             """, name, companyName);
     }
 
-    private String buildAccountDeletedEmailBody(String firstName) {
-        String name = firstName != null && !firstName.isBlank() ? firstName : "用户";
+    private String buildAccountDeletedEmailBody(String nickname) {
+        String name = nickname != null && !nickname.isBlank() ? nickname : "用户";
 
         return String.format("""
             <!DOCTYPE html>
@@ -171,34 +318,6 @@ public class EmailService {
             </body>
             </html>
             """, name, companyName);
-    }
-
-    private String buildWelcomeEmailBody(String firstName) {
-        String name = firstName != null && !firstName.isBlank() ? firstName : "用户";
-
-        return String.format("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            </head>
-            <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
-                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-                    <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-                        <h2 style="color: #333333; margin-bottom: 20px;">欢迎加入，%s！</h2>
-                        <p style="color: #666666; line-height: 1.6;">感谢您注册 %s。</p>
-                        <p style="color: #666666; line-height: 1.6;">我们很高兴您加入我们的平台，希望您能享受我们提供的服务。</p>
-                        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
-                        <p style="color: #999999; font-size: 14px;">
-                            此邮件由系统自动发送，请勿直接回复。<br>
-                            %s 团队
-                        </p>
-                    </div>
-                </div>
-            </body>
-            </html>
-            """, name, companyName, companyName);
     }
 
     private String maskEmail(String email) {

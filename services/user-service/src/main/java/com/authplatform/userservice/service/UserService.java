@@ -1,9 +1,8 @@
 package com.authplatform.userservice.service;
 
+import com.authplatform.userservice.client.NotificationServiceClient;
 import com.authplatform.userservice.dto.ClientInfo;
-import com.authplatform.userservice.dto.UpdateProfileRequest;
 import com.authplatform.userservice.dto.UserDto;
-import com.authplatform.userservice.dto.UserProfileDto;
 import com.authplatform.userservice.entity.User;
 import com.authplatform.userservice.exception.ResourceNotFoundException;
 import com.authplatform.userservice.logging.LogEvent;
@@ -21,6 +20,8 @@ public class UserService {
 
     private final UserRepository userRepository;
     private final BusinessMetrics businessMetrics;
+    private final CognitoService cognitoService;
+    private final NotificationServiceClient notificationClient;
 
     public UserDto getUserById(String userId) {
         log.debug("Fetching user by ID: {}", userId);
@@ -93,64 +94,23 @@ public class UserService {
         return email.substring(0, 3) + "***" + email.substring(atIndex);
     }
 
-    public UserProfileDto getProfile(String userId) {
-        log.debug("Fetching profile for user: {}", userId);
-        businessMetrics.incrementProfileFetched();
-
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> {
-                    LogEvent.business("USER_NOT_FOUND")
-                        .with("target_user_id", userId)
-                        .warn("User not found for profile");
-                    return new ResourceNotFoundException("User not found: " + userId);
-                });
-        return toProfileDto(user);
-    }
-
-    @Transactional
-    public UserProfileDto updateProfile(String userId, UpdateProfileRequest request) {
+    /**
+     * 修改密码（调用 Cognito API）
+     */
+    public void changePassword(String userId, String accessToken, String oldPassword, String newPassword) {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
-        StringBuilder updatedFields = new StringBuilder();
+        cognitoService.changePassword(accessToken, oldPassword, newPassword);
 
-        if (request.getNickname() != null) {
-            user.setNickname(request.getNickname());
-            updatedFields.append("nickname,");
-        }
-        if (request.getAvatar() != null) {
-            user.setAvatar(request.getAvatar());
-            updatedFields.append("avatar,");
-        }
-        if (request.getGender() != null) {
-            user.setGender(User.Gender.valueOf(request.getGender().toUpperCase()));
-            updatedFields.append("gender,");
-        }
-        if (request.getBirthday() != null) {
-            user.setBirthday(request.getBirthday());
-            updatedFields.append("birthday,");
-        }
-        if (request.getAddress() != null) {
-            user.setAddress(request.getAddress());
-            updatedFields.append("address,");
-        }
+        LogEvent.audit("PASSWORD_CHANGED")
+            .with("user_id", userId)
+            .info("User password changed successfully");
 
-        user = userRepository.save(user);
+        businessMetrics.incrementPasswordChanged();
 
-        String fields = updatedFields.length() > 0
-            ? updatedFields.substring(0, updatedFields.length() - 1)
-            : "none";
-
-        LogEvent.audit("PROFILE_UPDATED")
-            .with("target_user_id", userId)
-            .with("updated_fields", fields)
-            .info("User profile updated");
-
-        if (updatedFields.length() > 0) {
-            businessMetrics.incrementProfileUpdated(fields.split(","));
-        }
-
-        return toProfileDto(user);
+        // Send password changed notification
+        notificationClient.sendPasswordChangedEmail(user.getEmail(), user.getNickname());
     }
 
     @Transactional
@@ -158,6 +118,13 @@ public class UserService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
+        String email = user.getEmail();
+        String nickname = user.getNickname();
+
+        // Delete from Cognito first
+        cognitoService.deleteUser(userId);
+
+        // Then delete from local database
         userRepository.delete(user);
 
         LogEvent.audit("USER_DELETED")
@@ -166,6 +133,9 @@ public class UserService {
             .info("User deleted");
 
         businessMetrics.incrementUserDeleted(reason);
+
+        // Send account deleted notification
+        notificationClient.sendAccountDeletedEmail(email, nickname);
     }
 
     private UserDto toUserDto(User user) {
@@ -179,17 +149,6 @@ public class UserService {
                 .status(user.getStatus().name())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
-                .build();
-    }
-
-    private UserProfileDto toProfileDto(User user) {
-        return UserProfileDto.builder()
-                .userId(user.getId())
-                .nickname(user.getNickname())
-                .avatar(user.getAvatar())
-                .gender(user.getGender() != null ? user.getGender().name().toLowerCase() : null)
-                .birthday(user.getBirthday())
-                .address(user.getAddress())
                 .build();
     }
 }

@@ -22,8 +22,10 @@ resource "aws_cognito_user_pool" "main" {
   name = var.user_pool_name
 
   # 登录配置
-  username_attributes      = ["email"]
-  auto_verified_attributes = ["email"]
+  username_attributes = ["email"]
+  # 注意: 禁用自动邮箱验证，由 User Service 通过 Notification Service 发送验证码
+  # User Service 验证成功后通过 Admin API 设置 email_verified = true
+  # auto_verified_attributes = ["email"]  # 已禁用
 
   # 密码策略
   password_policy {
@@ -103,20 +105,34 @@ resource "aws_cognito_user_pool" "main" {
     }
   }
 
-  # 邮件配置 (使用 SES)
+  # ==============================================================================
+  # 邮件配置 - 已禁用 Cognito 自动发送邮件
+  # ==============================================================================
+  # 所有邮件现在由 Notification Service 通过 SES 发送:
+  # - 注册验证码: User Service -> Notification Service
+  # - 密码重置验证码: User Service -> Notification Service
+  # - 欢迎邮件、密码修改通知等: 各服务 -> Notification Service
+  #
+  # Cognito 邮件被禁用的方式:
+  # 1. auto_verified_attributes 已注释 - 禁用自动验证邮件
+  # 2. AdminCreateUser 使用 MessageActionType.SUPPRESS - 禁用邀请邮件
+  # 3. 不调用 Cognito ForgotPassword API - 使用自定义密码重置流程
+  #
+  # 保留 SES 配置仅作为备用，实际上 Cognito 不会发送任何邮件
+  # ==============================================================================
   email_configuration {
     email_sending_account = "DEVELOPER"
     source_arn            = aws_ses_email_identity.main.arn
     from_email_address    = var.ses_email_address
   }
 
-  # 验证消息模板
+  # 验证消息模板 (未使用 - 验证码由 Notification Service 发送)
   verification_message_template {
     default_email_option  = "CONFIRM_WITH_CODE"
-    email_subject         = "您的验证码"
-    email_message         = "您的验证码是 {####}"
-    email_subject_by_link = "验证您的邮箱"
-    email_message_by_link = "请点击链接验证您的邮箱: {##Click Here##}"
+    email_subject         = "[未使用] 验证码"
+    email_message         = "[未使用] 您的验证码是 {####}"
+    email_subject_by_link = "[未使用] 验证邮箱"
+    email_message_by_link = "[未使用] {##Click Here##}"
   }
 
   # 用户池 Add-ons
@@ -125,13 +141,15 @@ resource "aws_cognito_user_pool" "main" {
   }
 
   # 管理员创建用户配置
+  # 注意: 邀请邮件在代码层面被禁用 (CognitoService 使用 MessageActionType.SUPPRESS)
   admin_create_user_config {
     allow_admin_create_user_only = false
 
+    # 邀请消息模板 (未使用 - 被 MessageActionType.SUPPRESS 禁用)
     invite_message_template {
-      email_subject = "欢迎注册"
-      email_message = "您的用户名是 {username}，临时密码是 {####}"
-      sms_message   = "您的用户名是 {username}，临时密码是 {####}"
+      email_subject = "[未使用] 欢迎注册"
+      email_message = "[未使用] 用户名 {username}，密码 {####}"
+      sms_message   = "[未使用] 用户名 {username}，密码 {####}"
     }
   }
 

@@ -17,13 +17,13 @@ import org.springframework.web.multipart.MultipartFile;
  * Profile API Controller
  *
  * Endpoints:
- * - GET /api/v1/profiles/me - Get current user's profile
- * - PUT /api/v1/profiles/me - Update current user's profile
- * - POST /api/v1/profiles/me/avatar - Upload avatar
- * - DELETE /api/v1/profiles/me/avatar - Delete avatar
+ * - GET /api/profiles/me - Get current user's profile
+ * - PUT /api/profiles/me - Update current user's profile
+ * - POST /api/profiles/me/avatar - Upload avatar
+ * - DELETE /api/profiles/me/avatar - Delete avatar
  */
 @RestController
-@RequestMapping("/api/v1/profiles")
+@RequestMapping("/profiles")
 @RequiredArgsConstructor
 public class ProfileController {
 
@@ -48,7 +48,7 @@ public class ProfileController {
             @Valid @RequestBody UpdateProfileRequest request) {
         String userId = jwt.getSubject();
         ProfileResponse profile = profileService.updateProfile(userId, request);
-        return ApiResponse.success(profile, "Profile updated successfully");
+        return ApiResponse.success("PROFILE_UPDATED", "资料更新成功", profile);
     }
 
     /**
@@ -66,7 +66,7 @@ public class ProfileController {
                 .avatarUrl(avatarUrl)
                 .build();
 
-        return ApiResponse.success(response);
+        return ApiResponse.success("AVATAR_UPLOADED", "头像上传成功", response);
     }
 
     /**
@@ -76,6 +76,6 @@ public class ProfileController {
     public ApiResponse<Void> deleteAvatar(@AuthenticationPrincipal Jwt jwt) {
         String userId = jwt.getSubject();
         profileService.deleteAvatar(userId);
-        return ApiResponse.success(null, "Avatar deleted successfully");
+        return ApiResponse.success("AVATAR_DELETED", "头像删除成功", null);
     }
 }

@@ -1,5 +1,7 @@
 server:
   port: 8080
+  servlet:
+    context-path: /api
 
 spring:
   application:
@@ -39,6 +41,15 @@ spring:
     multipart:
       max-file-size: 5MB
       max-request-size: 10MB
+
+# Internal services
+services:
+  notification:
+    url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8080}
+
+# Internal API key for service-to-service communication
+internal:
+  api-key: ${INTERNAL_API_KEY:}
 
 # AWS Configuration
 aws:
@@ -80,8 +91,6 @@ management:
     distribution:
       percentiles-histogram:
         http.server.requests: true
-      percentiles:
-        http.server.requests: 0.5, 0.95, 0.99
 
 # Logging
 logging:

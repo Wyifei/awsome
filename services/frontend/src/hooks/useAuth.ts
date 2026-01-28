@@ -2,11 +2,10 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   getCurrentUser,
   signIn,
-  signUp,
   signOut,
-  confirmSignUp,
   fetchUserAttributes
 } from 'aws-amplify/auth'
+import { authService } from '../services/authService'
 import type { AuthState, User } from '../types'
 
 export function useAuth() {
@@ -29,6 +28,7 @@ export function useAuth() {
         phoneNumber: attributes.phone_number,
         emailVerified: attributes.email_verified === 'true',
         phoneNumberVerified: attributes.phone_number_verified === 'true',
+        status: 'ACTIVE',
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
       }
@@ -68,16 +68,15 @@ export function useAuth() {
     }
   }
 
-  const register = async (username: string, email: string, password: string) => {
+  /**
+   * 注册新用户 - 调用 User Service API
+   * 注册成功后会发送验证码到用户邮箱
+   */
+  const register = async (_username: string, email: string, password: string) => {
     try {
       setAuthState(prev => ({ ...prev, isLoading: true, error: null }))
-      const result = await signUp({
-        username,
-        password,
-        options: {
-          userAttributes: { email }
-        }
-      })
+      // 调用 User Service 注册 API
+      const result = await authService.register(email, password)
       setAuthState(prev => ({ ...prev, isLoading: false }))
       return result
     } catch (error) {
@@ -90,9 +89,45 @@ export function useAuth() {
     }
   }
 
-  const confirmRegistration = async (username: string, code: string) => {
+  /**
+   * 验证邮箱 - 调用 User Service API
+   */
+  const confirmRegistration = async (email: string, code: string) => {
     try {
-      await confirmSignUp({ username, confirmationCode: code })
+      await authService.verifyEmail(email, code)
+    } catch (error) {
+      throw error
+    }
+  }
+
+  /**
+   * 重新发送验证码
+   */
+  const resendVerificationCode = async (email: string) => {
+    try {
+      await authService.resendVerification(email)
+    } catch (error) {
+      throw error
+    }
+  }
+
+  /**
+   * 忘记密码 - 发送重置验证码
+   */
+  const forgotPassword = async (email: string) => {
+    try {
+      await authService.forgotPassword(email)
+    } catch (error) {
+      throw error
+    }
+  }
+
+  /**
+   * 重置密码
+   */
+  const resetPassword = async (email: string, code: string, newPassword: string) => {
+    try {
+      await authService.resetPassword(email, code, newPassword)
     } catch (error) {
       throw error
     }
@@ -117,6 +152,9 @@ export function useAuth() {
     login,
     register,
     confirmRegistration,
+    resendVerificationCode,
+    forgotPassword,
+    resetPassword,
     logout,
     refreshAuth: checkAuthStatus
   }

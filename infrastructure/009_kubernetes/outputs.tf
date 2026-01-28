@@ -46,3 +46,17 @@ output "nginx_nodeport_https" {
   description = "NGINX Ingress Controller HTTPS NodePort"
   value       = var.enable_nginx_ingress ? 30443 : null
 }
+
+# ==============================================================================
+# Monitoring Outputs
+# ==============================================================================
+
+output "prometheus_namespace" {
+  description = "Prometheus 命名空间"
+  value       = var.enable_prometheus ? kubernetes_namespace.monitoring[0].metadata[0].name : null
+}
+
+output "grafana_path" {
+  description = "Grafana 访问路径 (通过 NGINX Ingress)"
+  value       = var.enable_grafana ? "/grafana" : null
+}

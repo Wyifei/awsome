@@ -48,6 +48,11 @@ output "app_service_role_arn" {
   value       = module.app_service_irsa_role.iam_role_arn
 }
 
+output "adot_collector_role_arn" {
+  description = "ADOT Collector IAM Role ARN (用于 Prometheus Remote Write)"
+  value       = module.adot_irsa_role.iam_role_arn
+}
+
 output "alb_dns_name" {
   description = "ALB DNS 名称 (由 AWS Load Balancer Controller 创建)"
   value       = "" # 将由 Ingress 资源创建后填充

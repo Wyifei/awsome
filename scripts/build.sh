@@ -17,7 +17,7 @@
 #   -p, --push          Push Docker images to ECR (requires -d)
 #   -e, --env ENV       Environment (dev/production, default: production)
 #   -t, --tag TAG       Docker image tag (default: latest)
-#   -r, --registry REG  ECR registry URL (AWS Account ID)
+#   -r, --registry ID   AWS Account ID for ECR (e.g., 123456789012)
 #
 # Services:
 #   user-service, profile-service, notification-service, all (default)
@@ -27,7 +27,7 @@
 #   ./scripts/build.sh user-service                 # Build only user-service
 #   ./scripts/build.sh -c -s all                    # Clean build all, skip tests
 #   ./scripts/build.sh -d -t v1.0.0 all             # Build all with Docker images
-#   ./scripts/build.sh -d -p -e production -r 123456789012 all  # Build and push to ECR
+#   ./scripts/build.sh -d -p -r $AWS_ACCOUNT_ID all # Build and push to ECR
 # ==============================================================================
 
 set -e
@@ -105,7 +105,7 @@ check_prerequisites() {
         JAVA_VERSION=$(java -version 2>&1 | head -n 1 | cut -d'"' -f2)
         print_success "Java found: $JAVA_VERSION"
     else
-        print_error "Java not found. Please install Java 17 or higher."
+        print_error "Java not found. Please install Java 21 (required for Lombok compatibility)."
         exit 1
     fi
 
@@ -140,7 +140,16 @@ check_prerequisites() {
         fi
 
         if [ -z "$ECR_REGISTRY" ]; then
-            print_error "ECR registry URL is required for pushing images. Use -r option."
+            print_error "AWS Account ID is required for pushing images. Use -r option."
+            print_info "Example: -r 123456789012"
+            exit 1
+        fi
+
+        # Validate that ECR_REGISTRY is an AWS Account ID (12 digits)
+        if [[ ! "$ECR_REGISTRY" =~ ^[0-9]{12}$ ]]; then
+            print_error "Invalid AWS Account ID: $ECR_REGISTRY"
+            print_info "AWS Account ID should be a 12-digit number (e.g., 123456789012)"
+            print_info "Do NOT pass the full ECR URL, only the Account ID"
             exit 1
         fi
     fi
@@ -225,6 +234,8 @@ build_docker_image() {
 
         # Tag for ECR if registry is provided
         if [ -n "$ECR_REGISTRY" ]; then
+            # ECR_REGISTRY should be AWS Account ID only (e.g., 123456789012)
+            # Build full ECR URL from account ID
             local ecr_url="${ECR_REGISTRY}.dkr.ecr.${AWS_REGION}.amazonaws.com"
             local ecr_tag="${ecr_url}/${ecr_repo_name}:${DOCKER_TAG}"
             docker tag "$local_tag" "$ecr_tag"

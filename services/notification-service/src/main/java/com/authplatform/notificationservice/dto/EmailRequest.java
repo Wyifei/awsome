@@ -1,5 +1,6 @@
 package com.authplatform.notificationservice.dto;
 
+import com.fasterxml.jackson.annotation.JsonAlias;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.AllArgsConstructor;
@@ -17,5 +18,6 @@ public class EmailRequest {
     @Email(message = "Invalid email format")
     private String to;
 
+    @JsonAlias({"nickname", "firstName"})
     private String firstName;
 }

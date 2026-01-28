@@ -9,7 +9,7 @@
 ### 1.2 目标
 
 - 提供统一的用户身份认证服务
-- 支持多种登录方式（密码登录、邮件 OTP 无密码登录）
+- 支持密码登录（标准 OAuth2 流程）
 - 支持多端接入（Web、移动 APP、第三方应用）
 - 符合 OIDC/OAuth 2.0 标准
 - 高可用、可扩展、安全可靠
@@ -18,13 +18,14 @@
 
 | 功能模块 | 实现方式 | 说明 |
 |---------|---------|------|
-| 用户注册 | User Service + Cognito | 账号创建与验证 |
-| 用户登录 | Cognito | 用户名+密码、邮件 OTP |
+| 用户注册 | User Service + Cognito | 账号创建，User Service 生成验证码 |
+| 邮箱验证 | User Service + Notification Service | User Service 验证，Notification Service 发送邮件 |
+| 用户登录 | Cognito | 用户名+密码，标准 OAuth2 流程 |
 | OIDC 认证 | Cognito | 标准 OIDC/OAuth2 流程 |
+| 密码重置 | User Service + Notification Service | User Service 生成验证码，Notification Service 发送邮件 |
 | 用户资料管理 | Profile Service | 用户基本档案修改 |
 | 账号管理 | User Service | 用户账号注册/删除 |
-| 邮件通知 | Notification Service | 账号修改/删除通知 |
-| 验证码发送 | Cognito | 注册/登录验证码 (自动) |
+| 邮件通知 | Notification Service | 所有邮件通知 (验证码/欢迎/密码变更/资料变更/账号删除) |
 
 ---
 
@@ -74,9 +75,32 @@
 | 服务 | 职责 | 部署位置 | 数据存储 |
 |------|------|---------|---------|
 | Frontend Service | 用户界面、Cognito 认证集成 | S3 + CloudFront | - |
-| User Service | 用户账号注册、删除、状态管理 | EKS | Cognito + Aurora |
-| Profile Service | 用户基本档案查看与修改 | EKS | Aurora |
+| User Service | 用户身份管理、认证状态同步、账户生命周期、密码修改 | EKS | Cognito + Aurora |
+| Profile Service | 用户个人资料管理、头像文件处理 | EKS | Aurora + S3 |
 | Notification Service | 账号修改/删除通知邮件 | EKS | SES |
+
+### 2.3 User Service 与 Profile Service 职责边界
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    users 表 (共享)                           │
+├─────────────────────────────┬───────────────────────────────┤
+│   user-service 管理 (R/W)   │   profile-service 管理 (R/W)  │
+│   ─────────────────────────┼───────────────────────────────│
+│   id (PK)                   │   nickname                    │
+│   username                  │   avatar                      │
+│   email                     │   gender                      │
+│   phone_number              │   birthday                    │
+│   email_verified            │   address                     │
+│   phone_number_verified     │   preferences                 │
+│   status                    │                               │
+│   created_at                │   updated_at (共享)           │
+└─────────────────────────────┴───────────────────────────────┘
+
+读写权限说明：
+- user-service：Identity 字段 (R/W)，Profile 字段 (R)
+- profile-service：Identity 字段 (R)，Profile 字段 (R/W)
+```
 
 ---
 
@@ -108,8 +132,8 @@ Frontend
 │   └── 登出处理
 │
 └── API 调用
-    ├── User Service API (获取/更新用户信息)
-    └── Profile Service API (获取/更新用户资料)
+    ├── User Service API (获取用户身份信息、修改密码、注销账户)
+    └── Profile Service API (获取/更新用户资料、头像管理)
 ```
 
 ### 3.3 技术栈
@@ -321,179 +345,434 @@ CloudFront:
 | 部署位置 | EKS |
 | 技术栈 | Spring Boot 3.2 + AWS SDK |
 | 端口 | 8080 |
-| API 前缀 | /api/v1/users |
+| API 前缀 | /api/users |
 
 ### 4.2 职责
+
+**核心职责**：用户身份管理、注册流程、验证码管理、账户生命周期
 
 ```
 User Service
 ├── 用户注册
-│   ├── 接收注册请求
-│   ├── 业务规则验证 (邮箱域名限制等)
-│   └── 调用 Cognito 创建用户 (Cognito 自动发送验证码)
+│   ├── 创建 Cognito 用户 (禁用自动邮箱验证)
+│   ├── 创建本地数据库用户记录
+│   ├── 生成验证码并存储到 verification_codes 表
+│   └── 调用 Notification Service 发送验证码邮件
 │
-├── 用户删除/注销
+├── 邮箱验证
+│   ├── 验证用户提交的验证码
+│   ├── 验证通过后删除验证码记录
+│   └── 更新 Cognito 和本地数据库的 email_verified 状态
+│
+├── 密码重置
+│   ├── 生成重置验证码并存储
+│   ├── 调用 Notification Service 发送重置邮件
+│   ├── 验证重置验证码
+│   └── 调用 Cognito 设置新密码
+│
+├── 身份同步
+│   └── 从 Cognito Token 自动创建/更新用户记录
+│
+├── 身份信息管理
+│   ├── 管理 username, email, phone
+│   └── 管理验证状态 (email_verified, phone_number_verified)
+│
+├── 账户状态管理
+│   └── 管理 status (ACTIVE/INACTIVE/SUSPENDED)
+│
+├── 账户删除
 │   ├── 用户自助注销
-│   ├── 管理员删除用户
-│   ├── 调用 Cognito 删除用户
-│   ├── 清理关联数据 (通知 Profile Service)
-│   └── 发送删除通知邮件 (调用 Notification Service)
+│   └── 调用 Notification Service 发送删除通知邮件
 │
-└── 账号状态管理
-    ├── 启用/禁用用户
-    ├── 锁定/解锁账号
-    └── 管理员用户列表查询
+└── 密码修改
+    ├── 调用 Cognito 修改密码
+    └── 调用 Notification Service 发送密码变更通知
 ```
+
+**管理的数据字段**：
+- id (UUID)
+- username
+- email
+- phone_number
+- email_verified
+- phone_number_verified
+- status
+- created_at
+- updated_at
+
+**不再负责的功能**（移至 Profile Service）：
+- ~~获取用户资料~~ → Profile Service
+- ~~更新用户资料~~ → Profile Service
 
 ### 4.3 API 设计
 
 ```yaml
+# =====================================================
+# 用户注册相关 API (无需认证)
+# =====================================================
+
 # 用户注册
-POST /api/v1/users/register
+POST /api/users/register
 Request:
   {
     "email": "user@example.com",
     "password": "Password123!",
-    "firstName": "John",
-    "lastName": "Doe"
+    "nickname": "John"
   }
 Response:
   {
     "success": true,
-    "userId": "cognito-sub-uuid",
-    "message": "Registration successful. Please verify your email."
+    "code": "REGISTRATION_PENDING",
+    "message": "注册成功，请查收验证码邮件",
+    "data": {
+      "userId": "cognito-sub-uuid",
+      "email": "user@example.com"
+    },
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 
-# 用户注销 (当前用户)
-DELETE /api/v1/users/me
+# 验证邮箱
+POST /api/users/verify-email
+Request:
+  {
+    "email": "user@example.com",
+    "code": "123456"
+  }
+Response:
+  {
+    "success": true,
+    "code": "EMAIL_VERIFIED",
+    "message": "邮箱验证成功",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
+  }
+
+# 重新发送验证码
+POST /api/users/resend-verification
+Request:
+  {
+    "email": "user@example.com"
+  }
+Response:
+  {
+    "success": true,
+    "code": "VERIFICATION_SENT",
+    "message": "验证码已发送",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
+  }
+
+# 忘记密码 (发送重置验证码)
+POST /api/users/forgot-password
+Request:
+  {
+    "email": "user@example.com"
+  }
+Response:
+  {
+    "success": true,
+    "code": "RESET_CODE_SENT",
+    "message": "密码重置验证码已发送",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
+  }
+
+# 重置密码
+POST /api/users/reset-password
+Request:
+  {
+    "email": "user@example.com",
+    "code": "123456",
+    "newPassword": "NewPassword456!"
+  }
+Response:
+  {
+    "success": true,
+    "code": "PASSWORD_RESET",
+    "message": "密码重置成功",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
+  }
+
+# =====================================================
+# 已认证用户 API (需要 JWT Token)
+# =====================================================
+
+# 获取当前用户身份信息
+GET /api/users/me
 Headers:
   Authorization: Bearer {access_token}
 Response:
   {
     "success": true,
-    "message": "Account deleted successfully"
+    "code": "SUCCESS",
+    "message": "操作成功",
+    "data": {
+      "id": "cognito-sub-uuid",
+      "username": "user@example.com",
+      "email": "user@example.com",
+      "phoneNumber": "+1234567890",
+      "emailVerified": true,
+      "phoneNumberVerified": false,
+      "status": "ACTIVE",
+      "createdAt": "2024-01-01T00:00:00Z",
+      "updatedAt": "2024-01-01T00:00:00Z"
+    },
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 
-# 获取用户列表 (管理员)
-GET /api/v1/users?page=0&size=20&status=CONFIRMED
+# 用户注销 (当前用户)
+DELETE /api/users/me
 Headers:
-  Authorization: Bearer {admin_token}
+  Authorization: Bearer {access_token}
 Response:
   {
-    "users": [
-      {
-        "userId": "cognito-sub-uuid",
-        "email": "user@example.com",
-        "status": "CONFIRMED",
-        "enabled": true,
-        "createdAt": "2024-01-01T00:00:00Z"
-      }
-    ],
-    "pagination": {
-      "page": 0,
-      "size": 20,
-      "totalElements": 100,
-      "totalPages": 5
-    }
+    "success": true,
+    "code": "ACCOUNT_DELETED",
+    "message": "账户已成功删除",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 
-# 获取单个用户 (管理员)
-GET /api/v1/users/{userId}
+# 修改密码
+POST /api/users/me/change-password
 Headers:
-  Authorization: Bearer {admin_token}
-Response:
-  {
-    "userId": "cognito-sub-uuid",
-    "email": "user@example.com",
-    "firstName": "John",
-    "lastName": "Doe",
-    "status": "CONFIRMED",
-    "enabled": true,
-    "emailVerified": true,
-    "createdAt": "2024-01-01T00:00:00Z",
-    "lastModifiedAt": "2024-01-01T00:00:00Z"
-  }
-
-# 禁用用户 (管理员)
-POST /api/v1/users/{userId}/disable
-Headers:
-  Authorization: Bearer {admin_token}
+  Authorization: Bearer {access_token}
 Request:
   {
-    "reason": "Violation of terms of service"
+    "oldPassword": "OldPassword123!",
+    "newPassword": "NewPassword456!"
   }
 Response:
   {
     "success": true,
-    "message": "User disabled"
-  }
-
-# 启用用户 (管理员)
-POST /api/v1/users/{userId}/enable
-Headers:
-  Authorization: Bearer {admin_token}
-Response:
-  {
-    "success": true,
-    "message": "User enabled"
-  }
-
-# 删除用户 (管理员)
-DELETE /api/v1/users/{userId}
-Headers:
-  Authorization: Bearer {admin_token}
-Response:
-  {
-    "success": true,
-    "message": "User deleted"
+    "code": "PASSWORD_CHANGED",
+    "message": "密码修改成功",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 ```
 
-### 4.4 项目结构
+### 4.4 统一响应格式
+
+```json
+{
+  "success": true,
+  "code": "SUCCESS",
+  "message": "操作成功",
+  "data": { ... },
+  "timestamp": "2024-01-28T10:30:00Z"
+}
+```
+
+**错误响应**：
+```json
+{
+  "success": false,
+  "code": "USER_NOT_FOUND",
+  "message": "用户不存在",
+  "data": null,
+  "timestamp": "2024-01-28T10:30:00Z"
+}
+```
+
+**错误码定义**：
+
+| 错误码 | HTTP 状态 | 说明 |
+|--------|----------|------|
+| SUCCESS | 200 | 操作成功 |
+| REGISTRATION_PENDING | 200 | 注册成功，待邮箱验证 |
+| EMAIL_VERIFIED | 200 | 邮箱验证成功 |
+| VERIFICATION_SENT | 200 | 验证码已发送 |
+| RESET_CODE_SENT | 200 | 密码重置验证码已发送 |
+| PASSWORD_RESET | 200 | 密码重置成功 |
+| PASSWORD_CHANGED | 200 | 密码已修改 |
+| ACCOUNT_DELETED | 200 | 账户已删除 |
+| USER_NOT_FOUND | 404 | 用户不存在 |
+| EMAIL_ALREADY_EXISTS | 409 | 邮箱已被注册 |
+| INVALID_VERIFICATION_CODE | 400 | 验证码无效或已过期 |
+| INVALID_PASSWORD | 400 | 密码格式不正确 |
+| PASSWORD_MISMATCH | 400 | 原密码错误 |
+| EMAIL_NOT_VERIFIED | 400 | 邮箱未验证 |
+| UNAUTHORIZED | 401 | 未授权 |
+| FORBIDDEN | 403 | 禁止访问 |
+| INTERNAL_ERROR | 500 | 服务器内部错误 |
+
+### 4.5 项目结构
 
 ```
 user-service/
-├── src/main/java/com/xxx/user/
+├── src/main/java/com/authplatform/userservice/
 │   ├── UserServiceApplication.java
 │   │
 │   ├── config/
-│   │   ├── SecurityConfig.java        # Spring Security 配置
-│   │   ├── CognitoConfig.java          # Cognito 客户端配置
-│   │   └── WebConfig.java              # Web 配置
+│   │   ├── SecurityConfig.java         # OAuth2 JWT 安全配置
+│   │   └── CognitoConfig.java          # Cognito 客户端配置
 │   │
 │   ├── controller/
-│   │   ├── UserController.java         # 用户 API
-│   │   └── AdminUserController.java    # 管理员 API
+│   │   ├── UserController.java         # 已认证用户 API (/api/users/me)
+│   │   └── AuthController.java         # 注册/验证 API (/api/users/register等)
 │   │
 │   ├── service/
 │   │   ├── UserService.java            # 用户业务逻辑
-│   │   ├── CognitoService.java         # Cognito 交互
-│   │   └── UserEventPublisher.java     # 事件发布 (通知其他服务)
+│   │   ├── VerificationCodeService.java # 验证码管理
+│   │   └── CognitoService.java         # Cognito 操作封装
+│   │
+│   ├── client/
+│   │   └── NotificationServiceClient.java # Notification Service 调用
+│   │
+│   ├── repository/
+│   │   ├── UserRepository.java         # 用户数据库访问
+│   │   └── VerificationCodeRepository.java # 验证码数据库访问
+│   │
+│   ├── entity/
+│   │   ├── User.java                   # 用户实体
+│   │   └── VerificationCode.java       # 验证码实体
 │   │
 │   ├── dto/
-│   │   ├── RegisterRequest.java
-│   │   ├── RegisterResponse.java
-│   │   ├── UserResponse.java
-│   │   └── UserListResponse.java
+│   │   ├── UserDto.java                # 用户信息响应
+│   │   ├── RegisterRequest.java        # 注册请求
+│   │   ├── VerifyEmailRequest.java     # 邮箱验证请求
+│   │   ├── ForgotPasswordRequest.java  # 忘记密码请求
+│   │   ├── ResetPasswordRequest.java   # 重置密码请求
+│   │   ├── ChangePasswordRequest.java  # 修改密码请求
+│   │   └── ApiResponse.java            # 统一响应格式
 │   │
 │   ├── exception/
-│   │   ├── UserNotFoundException.java
-│   │   ├── RegistrationException.java
+│   │   ├── ResourceNotFoundException.java
+│   │   ├── EmailAlreadyExistsException.java
+│   │   ├── InvalidVerificationCodeException.java
 │   │   └── GlobalExceptionHandler.java
 │   │
-│   └── client/
-│       ├── ProfileServiceClient.java   # Profile Service 调用
-│       └── NotificationServiceClient.java # Notification Service 调用
+│   ├── metrics/
+│   │   └── BusinessMetrics.java        # Prometheus 业务指标
+│   │
+│   └── logging/
+│       ├── LoggingFilter.java          # HTTP 日志过滤器
+│       └── LogEvent.java               # 结构化日志事件
 │
 ├── src/main/resources/
 │   ├── application.yml
-│   └── application-production.yml
+│   ├── application-production.yml
+│   └── db/migration/                   # Flyway 数据库迁移
+│       ├── V1__create_users_table.sql
+│       └── V2__create_verification_codes_table.sql
 │
 ├── build.gradle
 └── Dockerfile
 ```
 
-### 4.5 核心代码示例
+### 4.6 核心代码示例
+
+```java
+// AuthController.java - 注册/验证相关 API (无需认证)
+@RestController
+@RequestMapping("/api/users")
+@RequiredArgsConstructor
+@Slf4j
+public class AuthController {
+
+    private final UserService userService;
+
+    /**
+     * 用户注册
+     */
+    @PostMapping("/register")
+    public ResponseEntity<ApiResponse<Map<String, String>>> register(
+            @Valid @RequestBody RegisterRequest request) {
+        String userId = userService.register(request.getEmail(), request.getPassword(), request.getNickname());
+        return ResponseEntity.ok(ApiResponse.success("REGISTRATION_PENDING",
+            "注册成功，请查收验证码邮件",
+            Map.of("userId", userId, "email", request.getEmail())));
+    }
+
+    /**
+     * 验证邮箱
+     */
+    @PostMapping("/verify-email")
+    public ResponseEntity<ApiResponse<Void>> verifyEmail(
+            @Valid @RequestBody VerifyEmailRequest request) {
+        userService.verifyEmail(request.getEmail(), request.getCode());
+        return ResponseEntity.ok(ApiResponse.success("EMAIL_VERIFIED", "邮箱验证成功", null));
+    }
+
+    /**
+     * 重发验证码
+     */
+    @PostMapping("/resend-verification")
+    public ResponseEntity<ApiResponse<Void>> resendVerification(
+            @RequestBody Map<String, String> request) {
+        userService.resendVerificationCode(request.get("email"));
+        return ResponseEntity.ok(ApiResponse.success("VERIFICATION_SENT", "验证码已发送", null));
+    }
+
+    /**
+     * 忘记密码
+     */
+    @PostMapping("/forgot-password")
+    public ResponseEntity<ApiResponse<Void>> forgotPassword(
+            @Valid @RequestBody ForgotPasswordRequest request) {
+        userService.forgotPassword(request.getEmail());
+        return ResponseEntity.ok(ApiResponse.success("RESET_CODE_SENT", "密码重置验证码已发送", null));
+    }
+
+    /**
+     * 重置密码
+     */
+    @PostMapping("/reset-password")
+    public ResponseEntity<ApiResponse<Void>> resetPassword(
+            @Valid @RequestBody ResetPasswordRequest request) {
+        userService.resetPassword(request.getEmail(), request.getCode(), request.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.success("PASSWORD_RESET", "密码重置成功", null));
+    }
+}
+```
+
+```java
+// UserController.java - 已认证用户 API
+@RestController
+@RequestMapping("/api/users")
+@RequiredArgsConstructor
+public class UserController {
+
+    private final UserService userService;
+
+    /**
+     * 获取当前用户身份信息
+     */
+    @GetMapping("/me")
+    public ResponseEntity<ApiResponse<UserDto>> getCurrentUser(
+            @AuthenticationPrincipal Jwt jwt) {
+        String userId = jwt.getSubject();
+        UserDto user = userService.getUser(userId);
+        return ResponseEntity.ok(ApiResponse.success(user));
+    }
+
+    /**
+     * 删除当前用户账户
+     */
+    @DeleteMapping("/me")
+    public ResponseEntity<ApiResponse<Void>> deleteCurrentUser(
+            @AuthenticationPrincipal Jwt jwt) {
+        String userId = jwt.getSubject();
+        userService.deleteUser(userId);
+        return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
+    }
+
+    /**
+     * 修改密码
+     */
+    @PostMapping("/me/change-password")
+    public ResponseEntity<ApiResponse<Void>> changePassword(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody ChangePasswordRequest request) {
+        String userId = jwt.getSubject();
+        String accessToken = jwt.getTokenValue();
+        userService.changePassword(userId, accessToken, request.getOldPassword(), request.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.success("PASSWORD_CHANGED", "密码修改成功", null));
+    }
+}
+```
 
 ```java
 // UserService.java
@@ -502,179 +781,214 @@ user-service/
 @Slf4j
 public class UserService {
 
+    private final UserRepository userRepository;
+    private final VerificationCodeService verificationCodeService;
     private final CognitoService cognitoService;
-    private final ProfileServiceClient profileServiceClient;
-    private final NotificationServiceClient notificationServiceClient;
+    private final NotificationServiceClient notificationClient;
+    private final BusinessMetrics metrics;
 
     /**
      * 用户注册
-     * 注: 验证码邮件由 Cognito 自动发送
      */
     @Transactional
-    public RegisterResponse register(RegisterRequest request) {
-        // 1. 业务规则验证
-        validateRegistration(request);
+    public String register(String email, String password, String nickname) {
+        // 1. 检查邮箱是否已存在
+        if (userRepository.existsByEmail(email)) {
+            throw new EmailAlreadyExistsException("邮箱已被注册");
+        }
 
-        // 2. 调用 Cognito 创建用户 (Cognito 会自动发送验证码邮件)
-        String userId = cognitoService.createUser(
-            request.getEmail(),
-            request.getPassword(),
-            request.getFirstName(),
-            request.getLastName()
-        );
+        // 2. 在 Cognito 创建用户 (禁用自动邮箱验证)
+        String userId = cognitoService.createUser(email, password);
 
-        log.info("User registered successfully: {}", userId);
-
-        return RegisterResponse.builder()
-            .success(true)
-            .userId(userId)
-            .message("Registration successful. Please verify your email.")
+        // 3. 创建本地数据库记录
+        User user = User.builder()
+            .id(userId)
+            .username(email)
+            .email(email)
+            .nickname(nickname)
+            .emailVerified(false)
+            .status(UserStatus.PENDING_VERIFICATION)
             .build();
+        userRepository.save(user);
+
+        // 4. 生成验证码并发送邮件
+        String code = verificationCodeService.generateCode(email, VerificationType.EMAIL_VERIFICATION);
+        notificationClient.sendVerificationCode(email, code, "EMAIL_VERIFICATION", 15);
+
+        metrics.incrementUserRegistered();
+        log.info("User registered: email={}, userId={}", email, userId);
+        return userId;
     }
 
     /**
-     * 删除当前用户
+     * 验证邮箱
      */
     @Transactional
-    public void deleteCurrentUser(String userId, String email, String firstName) {
-        // 1. 删除 Cognito 用户
+    public void verifyEmail(String email, String code) {
+        // 1. 验证验证码
+        verificationCodeService.verifyCode(email, code, VerificationType.EMAIL_VERIFICATION);
+
+        // 2. 更新本地数据库
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+        user.setEmailVerified(true);
+        user.setStatus(UserStatus.ACTIVE);
+        userRepository.save(user);
+
+        // 3. 更新 Cognito 邮箱验证状态
+        cognitoService.verifyUserEmail(user.getId());
+
+        // 4. 删除验证码记录
+        verificationCodeService.deleteCode(email, VerificationType.EMAIL_VERIFICATION);
+
+        // 5. 发送欢迎邮件
+        notificationClient.sendWelcomeEmail(email, user.getNickname());
+
+        metrics.incrementEmailVerified();
+        log.info("Email verified: email={}", email);
+    }
+
+    /**
+     * 忘记密码
+     */
+    public void forgotPassword(String email) {
+        // 验证用户存在
+        userRepository.findByEmail(email)
+            .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+
+        // 生成重置验证码并发送
+        String code = verificationCodeService.generateCode(email, VerificationType.PASSWORD_RESET);
+        notificationClient.sendVerificationCode(email, code, "PASSWORD_RESET", 15);
+
+        log.info("Password reset code sent: email={}", email);
+    }
+
+    /**
+     * 重置密码
+     */
+    @Transactional
+    public void resetPassword(String email, String code, String newPassword) {
+        // 1. 验证验证码
+        verificationCodeService.verifyCode(email, code, VerificationType.PASSWORD_RESET);
+
+        // 2. 获取用户
+        User user = userRepository.findByEmail(email)
+            .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+
+        // 3. 在 Cognito 设置新密码
+        cognitoService.adminSetUserPassword(user.getId(), newPassword);
+
+        // 4. 删除验证码记录
+        verificationCodeService.deleteCode(email, VerificationType.PASSWORD_RESET);
+
+        metrics.incrementPasswordReset();
+        log.info("Password reset: email={}", email);
+    }
+
+    /**
+     * 修改密码 (已登录用户)
+     */
+    public void changePassword(String userId, String accessToken, String oldPassword, String newPassword) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+
+        cognitoService.changePassword(accessToken, oldPassword, newPassword);
+
+        // 发送密码变更通知
+        notificationClient.sendPasswordChangedEmail(user.getEmail(), user.getNickname());
+
+        log.info("Password changed: userId={}", userId);
+    }
+
+    /**
+     * 删除用户
+     */
+    @Transactional
+    public void deleteUser(String userId) {
+        User user = userRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("用户不存在"));
+
+        // 删除 Cognito 用户
         cognitoService.deleteUser(userId);
 
-        // 2. 通知 Profile Service 清理数据
-        profileServiceClient.deleteProfile(userId);
+        // 删除本地记录
+        userRepository.deleteById(userId);
 
-        // 3. 发送账号删除通知邮件
-        notificationServiceClient.sendAccountDeletedEmail(email, firstName);
+        // 发送账号删除通知
+        notificationClient.sendAccountDeletedEmail(user.getEmail(), user.getNickname());
 
-        log.info("User deleted: {}", userId);
-    }
-
-    /**
-     * 禁用用户 (管理员)
-     */
-    public void disableUser(String userId, String reason) {
-        cognitoService.disableUser(userId);
-        log.info("User disabled: {}, reason: {}", userId, reason);
-    }
-
-    /**
-     * 启用用户 (管理员)
-     */
-    public void enableUser(String userId) {
-        cognitoService.enableUser(userId);
-        log.info("User enabled: {}", userId);
-    }
-
-    private void validateRegistration(RegisterRequest request) {
-        // 邮箱域名限制等业务规则
-        String email = request.getEmail();
-        // 可添加自定义验证逻辑
+        metrics.incrementUserDeleted();
+        log.info("User deleted: userId={}", userId);
     }
 }
 ```
 
 ```java
-// CognitoService.java
+// VerificationCodeService.java
 @Service
 @RequiredArgsConstructor
-public class CognitoService {
+@Slf4j
+public class VerificationCodeService {
 
-    private final CognitoIdentityProviderClient cognitoClient;
+    private final VerificationCodeRepository repository;
 
-    @Value("${cognito.user-pool-id}")
-    private String userPoolId;
+    private static final int CODE_LENGTH = 6;
+    private static final int CODE_EXPIRY_MINUTES = 15;
 
-    public String createUser(String email, String password, String firstName, String lastName) {
-        AdminCreateUserRequest request = AdminCreateUserRequest.builder()
-            .userPoolId(userPoolId)
-            .username(email)
-            .temporaryPassword(password)
-            .userAttributes(
-                AttributeType.builder().name("email").value(email).build(),
-                AttributeType.builder().name("email_verified").value("true").build(),
-                AttributeType.builder().name("given_name").value(firstName).build(),
-                AttributeType.builder().name("family_name").value(lastName).build()
-            )
-            .messageAction(MessageActionType.SUPPRESS)  // 不发送临时密码邮件
+    /**
+     * 生成验证码
+     */
+    @Transactional
+    public String generateCode(String email, VerificationType type) {
+        // 删除旧的验证码
+        repository.deleteByEmailAndType(email, type);
+
+        // 生成新验证码
+        String code = generateRandomCode();
+        VerificationCode entity = VerificationCode.builder()
+            .email(email)
+            .code(code)
+            .type(type)
+            .expiresAt(LocalDateTime.now().plusMinutes(CODE_EXPIRY_MINUTES))
             .build();
 
-        AdminCreateUserResponse response = cognitoClient.adminCreateUser(request);
-
-        // 设置永久密码
-        AdminSetUserPasswordRequest passwordRequest = AdminSetUserPasswordRequest.builder()
-            .userPoolId(userPoolId)
-            .username(email)
-            .password(password)
-            .permanent(true)
-            .build();
-
-        cognitoClient.adminSetUserPassword(passwordRequest);
-
-        return response.user().attributes().stream()
-            .filter(attr -> "sub".equals(attr.name()))
-            .findFirst()
-            .map(AttributeType::value)
-            .orElseThrow();
+        repository.save(entity);
+        log.info("Verification code generated: email={}, type={}", email, type);
+        return code;
     }
 
-    public void deleteUser(String userId) {
-        AdminDeleteUserRequest request = AdminDeleteUserRequest.builder()
-            .userPoolId(userPoolId)
-            .username(userId)
-            .build();
+    /**
+     * 验证验证码
+     */
+    public void verifyCode(String email, String code, VerificationType type) {
+        VerificationCode entity = repository.findByEmailAndType(email, type)
+            .orElseThrow(() -> new InvalidVerificationCodeException("验证码无效"));
 
-        cognitoClient.adminDeleteUser(request);
-    }
-
-    public void disableUser(String userId) {
-        AdminDisableUserRequest request = AdminDisableUserRequest.builder()
-            .userPoolId(userPoolId)
-            .username(userId)
-            .build();
-
-        cognitoClient.adminDisableUser(request);
-    }
-
-    public void enableUser(String userId) {
-        AdminEnableUserRequest request = AdminEnableUserRequest.builder()
-            .userPoolId(userPoolId)
-            .username(userId)
-            .build();
-
-        cognitoClient.adminEnableUser(request);
-    }
-
-    public List<CognitoUser> listUsers(String paginationToken, int limit) {
-        ListUsersRequest.Builder requestBuilder = ListUsersRequest.builder()
-            .userPoolId(userPoolId)
-            .limit(limit);
-
-        if (paginationToken != null) {
-            requestBuilder.paginationToken(paginationToken);
+        if (entity.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new InvalidVerificationCodeException("验证码已过期");
         }
 
-        ListUsersResponse response = cognitoClient.listUsers(requestBuilder.build());
-
-        return response.users().stream()
-            .map(this::mapToCognitoUser)
-            .collect(Collectors.toList());
+        if (!entity.getCode().equals(code)) {
+            throw new InvalidVerificationCodeException("验证码错误");
+        }
     }
 
-    private CognitoUser mapToCognitoUser(UserType user) {
-        Map<String, String> attrs = user.attributes().stream()
-            .collect(Collectors.toMap(AttributeType::name, AttributeType::value));
+    /**
+     * 删除验证码 (验证成功后调用)
+     */
+    @Transactional
+    public void deleteCode(String email, VerificationType type) {
+        repository.deleteByEmailAndType(email, type);
+        log.info("Verification code deleted: email={}, type={}", email, type);
+    }
 
-        return CognitoUser.builder()
-            .userId(attrs.get("sub"))
-            .email(attrs.get("email"))
-            .firstName(attrs.get("given_name"))
-            .lastName(attrs.get("family_name"))
-            .emailVerified(Boolean.parseBoolean(attrs.getOrDefault("email_verified", "false")))
-            .status(user.userStatusAsString())
-            .enabled(user.enabled())
-            .createdAt(user.userCreateDate())
-            .lastModifiedAt(user.userLastModifiedDate())
-            .build();
+    private String generateRandomCode() {
+        SecureRandom random = new SecureRandom();
+        StringBuilder sb = new StringBuilder(CODE_LENGTH);
+        for (int i = 0; i < CODE_LENGTH; i++) {
+            sb.append(random.nextInt(10));
+        }
+        return sb.toString();
     }
 }
 ```
@@ -689,280 +1003,414 @@ public class CognitoService {
 |------|-----|
 | 服务名称 | profile-service |
 | 部署位置 | EKS |
-| 技术栈 | Spring Boot 3.2 + Spring Data JPA |
+| 技术栈 | Spring Boot 3.2 + Spring Data JPA + AWS S3 SDK |
 | 端口 | 8080 |
-| API 前缀 | /api/v1/profiles |
+| API 前缀 | /api/profiles |
 
 ### 5.2 职责
 
+**核心职责**：用户个人资料管理、头像文件处理
+
 ```
 Profile Service
-├── 资料查看
-│   └── 获取当前用户资料
+├── 资料管理
+│   ├── 获取当前用户资料
+│   └── 更新用户资料 (nickname, gender, birthday, address)
 │
-├── 资料修改
-│   ├── 更新基本信息 (姓名、电话等)
-│   ├── 更新地址信息
-│   ├── 上传/更新头像
-│   └── 发送修改通知邮件 (调用 Notification Service)
+├── 头像管理
+│   ├── 上传头像文件 (验证类型、大小)
+│   ├── 存储到 S3
+│   └── 删除头像
 │
-└── 数据同步
-    ├── 接收 Cognito Post Confirmation 事件
-    └── 创建初始用户资料记录
+└── 偏好设置（预留）
+    └── 用户偏好 JSON 存储
 ```
+
+**管理的数据字段**：
+- nickname
+- avatar (S3 URL)
+- gender
+- birthday
+- address
+- preferences (JSONB)
+- updated_at
+
+**只读字段**（从 users 表读取，不可修改）：
+- id
+- email
+- username
 
 ### 5.3 API 设计
 
 ```yaml
 # 获取当前用户资料
-GET /api/v1/profiles/me
+GET /api/profiles/me
 Headers:
   Authorization: Bearer {access_token}
 Response:
   {
-    "userId": "cognito-sub-uuid",
-    "email": "user@example.com",
-    "firstName": "John",
-    "lastName": "Doe",
-    "phone": "+1234567890",
-    "avatar": "https://cdn.xxx.com/avatars/xxx.jpg",
-    "address": {
-      "street": "123 Main St",
-      "city": "Tokyo",
-      "country": "Japan",
-      "postalCode": "100-0001"
+    "success": true,
+    "code": "SUCCESS",
+    "message": "操作成功",
+    "data": {
+      "userId": "cognito-sub-uuid",
+      "email": "user@example.com",
+      "username": "user@example.com",
+      "nickname": "John",
+      "avatar": "https://cdn.xxx.com/avatars/xxx.jpg",
+      "gender": "MALE",
+      "birthday": "1990-01-15",
+      "address": "Tokyo, Japan",
+      "createdAt": "2024-01-01T00:00:00Z",
+      "updatedAt": "2024-01-01T00:00:00Z"
     },
-    "createdAt": "2024-01-01T00:00:00Z",
-    "updatedAt": "2024-01-01T00:00:00Z"
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 
 # 更新用户资料
-PUT /api/v1/profiles/me
+PUT /api/profiles/me
 Headers:
   Authorization: Bearer {access_token}
 Request:
   {
-    "firstName": "John",
-    "lastName": "Smith",
-    "phone": "+1234567890",
-    "address": {
-      "street": "456 Oak Ave",
-      "city": "Tokyo",
-      "country": "Japan",
-      "postalCode": "100-0002"
-    }
+    "nickname": "Johnny",
+    "gender": "MALE",
+    "birthday": "1990-01-15",
+    "address": "Osaka, Japan"
   }
 Response:
   {
     "success": true,
-    "message": "Profile updated successfully"
+    "code": "PROFILE_UPDATED",
+    "message": "资料更新成功",
+    "data": {
+      "userId": "cognito-sub-uuid",
+      "nickname": "Johnny",
+      "avatar": "https://cdn.xxx.com/avatars/xxx.jpg",
+      "gender": "MALE",
+      "birthday": "1990-01-15",
+      "address": "Osaka, Japan",
+      "updatedAt": "2024-01-28T10:30:00Z"
+    },
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 
 # 上传头像
-POST /api/v1/profiles/me/avatar
+POST /api/profiles/me/avatar
 Headers:
   Authorization: Bearer {access_token}
   Content-Type: multipart/form-data
 Request:
-  file: (binary)
+  file: (binary, max 5MB, image/jpeg|image/png|image/gif|image/webp)
 Response:
   {
     "success": true,
-    "avatarUrl": "https://cdn.xxx.com/avatars/xxx.jpg"
+    "code": "AVATAR_UPLOADED",
+    "message": "头像上传成功",
+    "data": {
+      "avatarUrl": "https://cdn.xxx.com/avatars/user-id/uuid.jpg"
+    },
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 
-# 删除用户资料 (内部 API，由 User Service 调用)
-DELETE /api/v1/profiles/{userId}
+# 删除头像
+DELETE /api/profiles/me/avatar
 Headers:
-  X-Internal-Api-Key: {internal_api_key}
+  Authorization: Bearer {access_token}
 Response:
   {
-    "success": true
-  }
-
-# 创建用户资料 (内部 API，由 Lambda Trigger 调用)
-POST /api/v1/profiles
-Headers:
-  X-Internal-Api-Key: {internal_api_key}
-Request:
-  {
-    "userId": "cognito-sub-uuid",
-    "email": "user@example.com",
-    "firstName": "John",
-    "lastName": "Doe"
-  }
-Response:
-  {
-    "success": true
+    "success": true,
+    "code": "AVATAR_DELETED",
+    "message": "头像删除成功",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
   }
 ```
 
-### 5.4 数据库设计
+### 5.4 统一响应格式
+
+与 User Service 保持一致：
+
+```json
+{
+  "success": true,
+  "code": "SUCCESS",
+  "message": "操作成功",
+  "data": { ... },
+  "timestamp": "2024-01-28T10:30:00Z"
+}
+```
+
+**错误码定义**：
+
+| 错误码 | HTTP 状态 | 说明 |
+|--------|----------|------|
+| SUCCESS | 200 | 操作成功 |
+| PROFILE_NOT_FOUND | 404 | 用户资料不存在 |
+| PROFILE_UPDATED | 200 | 资料更新成功 |
+| AVATAR_UPLOADED | 200 | 头像上传成功 |
+| AVATAR_DELETED | 200 | 头像删除成功 |
+| INVALID_FILE_TYPE | 400 | 文件类型不支持 |
+| FILE_TOO_LARGE | 413 | 文件大小超过限制 |
+| UPLOAD_FAILED | 500 | 文件上传失败 |
+| UNAUTHORIZED | 401 | 未授权 |
+| INTERNAL_ERROR | 500 | 服务器内部错误 |
+
+### 5.5 数据库设计
+
+Profile Service 与 User Service **共享同一张 users 表**，通过字段权限划分职责：
 
 ```sql
--- 用户资料表
-CREATE TABLE user_profiles (
-    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
-    user_id         VARCHAR(36) NOT NULL UNIQUE,     -- Cognito sub
-    email           VARCHAR(255) NOT NULL,
-    first_name      VARCHAR(100),
-    last_name       VARCHAR(100),
-    phone           VARCHAR(20),
-    avatar_url      VARCHAR(500),
-    street          VARCHAR(255),
-    city            VARCHAR(100),
-    country         VARCHAR(100),
-    postal_code     VARCHAR(20),
-    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+-- users 表（共享，由 user-service 的 Flyway 管理 schema）
+CREATE TABLE users (
+    -- Identity 字段 (user-service 管理)
+    id                      VARCHAR(36) PRIMARY KEY,  -- Cognito sub
+    username                VARCHAR(255) NOT NULL UNIQUE,
+    email                   VARCHAR(255) NOT NULL UNIQUE,
+    phone_number            VARCHAR(20),
+    email_verified          BOOLEAN DEFAULT FALSE,
+    phone_number_verified   BOOLEAN DEFAULT FALSE,
+    status                  VARCHAR(20) DEFAULT 'ACTIVE',
 
-    INDEX idx_profiles_user_id (user_id),
-    INDEX idx_profiles_email (email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    -- Profile 字段 (profile-service 管理)
+    nickname                VARCHAR(64),
+    avatar                  VARCHAR(512),             -- S3 URL
+    gender                  VARCHAR(10),              -- MALE/FEMALE/OTHER
+    birthday                DATE,
+    address                 VARCHAR(256),
+    preferences             JSONB,                    -- 用户偏好设置
+
+    -- 时间戳（共享）
+    created_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_users_email (email),
+    INDEX idx_users_username (username)
+);
+
+-- verification_codes 表（验证码管理，由 user-service 管理）
+CREATE TABLE verification_codes (
+    id              BIGSERIAL PRIMARY KEY,
+    email           VARCHAR(255) NOT NULL,
+    code            VARCHAR(6) NOT NULL,
+    type            VARCHAR(20) NOT NULL,        -- EMAIL_VERIFICATION / PASSWORD_RESET
+    expires_at      TIMESTAMP NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    INDEX idx_verification_codes_email_type (email, type),
+    INDEX idx_verification_codes_expires_at (expires_at)
+);
+
+-- 注意: 验证码验证成功后应立即删除记录，而不是标记为已使用
+-- 定期清理过期验证码：DELETE FROM verification_codes WHERE expires_at < NOW()
 ```
 
-### 5.5 项目结构
+**重要说明**：
+- Schema 由 user-service 的 Flyway 迁移管理
+- profile-service 的 Flyway 设置为 `enabled: false`
+- profile-service 的 Entity 中 Identity 字段标记为 `updatable=false, insertable=false`
+
+### 5.6 项目结构
 
 ```
 profile-service/
-├── src/main/java/com/xxx/profile/
+├── src/main/java/com/authplatform/profileservice/
 │   ├── ProfileServiceApplication.java
 │   │
 │   ├── config/
-│   │   ├── SecurityConfig.java
-│   │   └── S3Config.java              # S3 头像存储配置
+│   │   ├── SecurityConfig.java         # OAuth2 JWT 安全配置
+│   │   └── S3Config.java               # AWS S3 客户端配置
 │   │
 │   ├── controller/
-│   │   ├── ProfileController.java     # 用户资料 API
-│   │   └── InternalProfileController.java # 内部 API
+│   │   └── ProfileController.java      # 用户资料 API (/api/profiles)
 │   │
 │   ├── service/
-│   │   ├── ProfileService.java
-│   │   └── AvatarService.java         # 头像上传服务
+│   │   ├── ProfileService.java         # 资料管理业务逻辑
+│   │   └── AvatarService.java          # S3 头像上传/删除
 │   │
 │   ├── repository/
 │   │   └── UserProfileRepository.java
 │   │
 │   ├── entity/
-│   │   └── UserProfile.java
+│   │   └── UserProfile.java            # 用户资料实体
 │   │
 │   ├── dto/
-│   │   ├── ProfileResponse.java
-│   │   ├── UpdateProfileRequest.java
-│   │   └── CreateProfileRequest.java
+│   │   ├── ProfileResponse.java        # 资料响应
+│   │   ├── UpdateProfileRequest.java   # 更新资料请求
+│   │   ├── AvatarResponse.java         # 头像上传响应
+│   │   └── ApiResponse.java            # 统一响应格式
 │   │
-│   ├── client/
-│   │   └── NotificationServiceClient.java # Notification Service 调用
+│   ├── exception/
+│   │   ├── ResourceNotFoundException.java
+│   │   ├── AvatarUploadException.java
+│   │   └── GlobalExceptionHandler.java
 │   │
-│   └── exception/
-│       ├── ProfileNotFoundException.java
-│       └── GlobalExceptionHandler.java
+│   ├── metrics/
+│   │   └── BusinessMetrics.java        # Prometheus 业务指标
+│   │
+│   └── logging/
+│       ├── LoggingFilter.java
+│       └── LogEvent.java
 │
 ├── src/main/resources/
-│   └── application.yml
+│   ├── application.yml
+│   └── application-production.yml
 │
 ├── build.gradle
 └── Dockerfile
 ```
 
-### 5.6 核心代码示例
+### 5.7 核心代码示例
+
+```java
+// ProfileController.java
+@RestController
+@RequestMapping("/api/v1/profiles")
+@RequiredArgsConstructor
+public class ProfileController {
+
+    private final ProfileService profileService;
+
+    /**
+     * 获取当前用户资料
+     */
+    @GetMapping("/me")
+    public ResponseEntity<ApiResponse<ProfileResponse>> getProfile(
+            @AuthenticationPrincipal Jwt jwt) {
+        String userId = jwt.getSubject();
+        ProfileResponse profile = profileService.getProfile(userId);
+        return ResponseEntity.ok(ApiResponse.success(profile));
+    }
+
+    /**
+     * 更新用户资料
+     */
+    @PutMapping("/me")
+    public ResponseEntity<ApiResponse<ProfileResponse>> updateProfile(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody UpdateProfileRequest request) {
+        String userId = jwt.getSubject();
+        ProfileResponse profile = profileService.updateProfile(userId, request);
+        return ResponseEntity.ok(ApiResponse.success("PROFILE_UPDATED", "资料更新成功", profile));
+    }
+
+    /**
+     * 上传头像
+     */
+    @PostMapping(value = "/me/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<AvatarResponse>> uploadAvatar(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestParam("file") MultipartFile file) {
+        String userId = jwt.getSubject();
+        String avatarUrl = profileService.uploadAvatar(userId, file);
+        return ResponseEntity.ok(ApiResponse.success("AVATAR_UPLOADED", "头像上传成功",
+            new AvatarResponse(true, avatarUrl)));
+    }
+
+    /**
+     * 删除头像
+     */
+    @DeleteMapping("/me/avatar")
+    public ResponseEntity<ApiResponse<Void>> deleteAvatar(
+            @AuthenticationPrincipal Jwt jwt) {
+        String userId = jwt.getSubject();
+        profileService.deleteAvatar(userId);
+        return ResponseEntity.ok(ApiResponse.success("AVATAR_DELETED", "头像删除成功", null));
+    }
+}
+```
 
 ```java
 // ProfileService.java
 @Service
 @RequiredArgsConstructor
 @Transactional
+@Slf4j
 public class ProfileService {
 
     private final UserProfileRepository profileRepository;
     private final AvatarService avatarService;
-    private final NotificationServiceClient notificationServiceClient;
+    private final BusinessMetrics metrics;
 
     public ProfileResponse getProfile(String userId) {
-        UserProfile profile = profileRepository.findByUserId(userId)
-            .orElseThrow(() -> new ProfileNotFoundException("Profile not found: " + userId));
+        UserProfile profile = profileRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
 
-        return mapToResponse(profile);
+        metrics.incrementProfileFetched();
+        return toProfileResponse(profile);
     }
 
-    public void updateProfile(String userId, UpdateProfileRequest request) {
-        UserProfile profile = profileRepository.findByUserId(userId)
-            .orElseThrow(() -> new ProfileNotFoundException("Profile not found: " + userId));
+    public ProfileResponse updateProfile(String userId, UpdateProfileRequest request) {
+        UserProfile profile = profileRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
 
-        if (request.getFirstName() != null) {
-            profile.setFirstName(request.getFirstName());
+        List<String> updatedFields = new ArrayList<>();
+
+        if (request.getNickname() != null) {
+            profile.setNickname(request.getNickname());
+            updatedFields.add("nickname");
         }
-        if (request.getLastName() != null) {
-            profile.setLastName(request.getLastName());
+        if (request.getGender() != null) {
+            profile.setGender(Gender.valueOf(request.getGender()));
+            updatedFields.add("gender");
         }
-        if (request.getPhone() != null) {
-            profile.setPhone(request.getPhone());
+        if (request.getBirthday() != null) {
+            profile.setBirthday(request.getBirthday());
+            updatedFields.add("birthday");
         }
         if (request.getAddress() != null) {
-            profile.setStreet(request.getAddress().getStreet());
-            profile.setCity(request.getAddress().getCity());
-            profile.setCountry(request.getAddress().getCountry());
-            profile.setPostalCode(request.getAddress().getPostalCode());
+            profile.setAddress(request.getAddress());
+            updatedFields.add("address");
         }
 
         profileRepository.save(profile);
 
-        // 发送账号修改通知邮件
-        notificationServiceClient.sendAccountModifiedEmail(profile.getEmail(), profile.getFirstName());
+        // 记录指标
+        updatedFields.forEach(metrics::incrementProfileUpdated);
+
+        log.info("Profile updated: userId={}, fields={}", userId, updatedFields);
+        return toProfileResponse(profile);
     }
 
     public String uploadAvatar(String userId, MultipartFile file) {
-        UserProfile profile = profileRepository.findByUserId(userId)
-            .orElseThrow(() -> new ProfileNotFoundException("Profile not found: " + userId));
+        UserProfile profile = profileRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
 
+        // 删除旧头像
+        if (profile.getAvatar() != null) {
+            avatarService.deleteAvatar(profile.getAvatar());
+        }
+
+        // 上传新头像到 S3
         String avatarUrl = avatarService.uploadAvatar(userId, file);
 
-        profile.setAvatarUrl(avatarUrl);
+        profile.setAvatar(avatarUrl);
         profileRepository.save(profile);
+
+        metrics.incrementAvatarUploaded();
+        log.info("Avatar uploaded: userId={}, url={}", userId, avatarUrl);
 
         return avatarUrl;
     }
 
-    public void createProfile(CreateProfileRequest request) {
-        UserProfile profile = UserProfile.builder()
-            .userId(request.getUserId())
-            .email(request.getEmail())
-            .firstName(request.getFirstName())
-            .lastName(request.getLastName())
-            .build();
+    public void deleteAvatar(String userId) {
+        UserProfile profile = profileRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
 
-        profileRepository.save(profile);
-    }
-
-    public void deleteProfile(String userId) {
-        profileRepository.deleteByUserId(userId);
-    }
-
-    private ProfileResponse mapToResponse(UserProfile profile) {
-        return ProfileResponse.builder()
-            .userId(profile.getUserId())
-            .email(profile.getEmail())
-            .firstName(profile.getFirstName())
-            .lastName(profile.getLastName())
-            .phone(profile.getPhone())
-            .avatar(profile.getAvatarUrl())
-            .address(AddressDto.builder()
-                .street(profile.getStreet())
-                .city(profile.getCity())
-                .country(profile.getCountry())
-                .postalCode(profile.getPostalCode())
-                .build())
-            .createdAt(profile.getCreatedAt())
-            .updatedAt(profile.getUpdatedAt())
-            .build();
+        if (profile.getAvatar() != null) {
+            avatarService.deleteAvatar(profile.getAvatar());
+            profile.setAvatar(null);
+            profileRepository.save(profile);
+            log.info("Avatar deleted: userId={}", userId);
+        }
     }
 }
 ```
 
 ```java
-// UserProfile.java
+// UserProfile.java - Entity (映射到 users 表)
 @Entity
-@Table(name = "user_profiles")
+@Table(name = "users")
 @Data
 @Builder
 @NoArgsConstructor
@@ -970,46 +1418,46 @@ public class ProfileService {
 public class UserProfile {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @Column(length = 36)
+    private String id;
 
-    @Column(name = "user_id", nullable = false, unique = true, length = 36)
-    private String userId;
-
-    @Column(nullable = false)
+    // Identity 字段 - 只读
+    @Column(nullable = false, unique = true, updatable = false, insertable = false)
     private String email;
 
-    @Column(name = "first_name", length = 100)
-    private String firstName;
+    @Column(nullable = false, unique = true, updatable = false, insertable = false)
+    private String username;
 
-    @Column(name = "last_name", length = 100)
-    private String lastName;
+    // Profile 字段 - 可读写
+    @Column(length = 64)
+    private String nickname;
 
-    @Column(length = 20)
-    private String phone;
+    @Column(length = 512)
+    private String avatar;
 
-    @Column(name = "avatar_url", length = 500)
-    private String avatarUrl;
+    @Enumerated(EnumType.STRING)
+    @Column(length = 10)
+    private Gender gender;
 
-    @Column(length = 255)
-    private String street;
+    private LocalDate birthday;
 
-    @Column(length = 100)
-    private String city;
+    @Column(length = 256)
+    private String address;
 
-    @Column(length = 100)
-    private String country;
+    @Column(columnDefinition = "jsonb")
+    private String preferences;
 
-    @Column(name = "postal_code", length = 20)
-    private String postalCode;
-
-    @Column(name = "created_at")
-    @CreationTimestamp
-    private Instant createdAt;
+    // 时间戳
+    @Column(name = "created_at", updatable = false)
+    private LocalDateTime createdAt;
 
     @Column(name = "updated_at")
-    @UpdateTimestamp
-    private Instant updatedAt;
+    private LocalDateTime updatedAt;
+
+    @PreUpdate
+    protected void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
+    }
 }
 ```
 
@@ -1030,27 +1478,43 @@ public class UserProfile {
 ### 6.2 职责
 
 ```
-Notification Service (精简版)
-├── 账号修改通知
-│   └── 用户修改账户信息时发送确认邮件
+Notification Service (统一邮件通知服务)
+├── 验证码邮件
+│   ├── 注册邮箱验证码
+│   └── 密码重置验证码
+│
+├── 欢迎邮件
+│   └── 用户完成注册验证后发送
+│
+├── 密码变更通知
+│   └── 用户修改密码后发送确认邮件
+│
+├── 资料修改通知
+│   └── 用户修改个人资料时发送确认邮件
 │
 └── 账号删除通知
     └── 用户删除账户时发送确认邮件
 
-注: 用户注册/登录时的验证码由 Cognito 自动发送，无需本服务处理
+注: 所有邮件通知均通过本服务发送，Cognito 邮箱自动验证已禁用
 ```
 
 ### 6.3 API 设计
 
 ```yaml
-# 发送账号修改通知邮件 (内部 API)
-POST /api/v1/notifications/account-modified
+# =====================================================
+# 所有 API 均为内部调用，需要 X-Internal-Api-Key 认证
+# =====================================================
+
+# 发送验证码邮件 (注册/密码重置)
+POST /api/v1/notifications/verification-code
 Headers:
   X-Internal-Api-Key: {internal_api_key}
 Request:
   {
     "to": "user@example.com",
-    "firstName": "John"
+    "code": "123456",
+    "type": "EMAIL_VERIFICATION",  # 或 "PASSWORD_RESET"
+    "expiresInMinutes": 15
   }
 Response:
   {
@@ -1058,14 +1522,59 @@ Response:
     "messageId": "ses-message-id"
   }
 
-# 发送账号删除通知邮件 (内部 API)
+# 发送欢迎邮件 (注册验证完成后)
+POST /api/v1/notifications/welcome
+Headers:
+  X-Internal-Api-Key: {internal_api_key}
+Request:
+  {
+    "to": "user@example.com",
+    "nickname": "John"
+  }
+Response:
+  {
+    "success": true,
+    "messageId": "ses-message-id"
+  }
+
+# 发送密码变更通知邮件
+POST /api/v1/notifications/password-changed
+Headers:
+  X-Internal-Api-Key: {internal_api_key}
+Request:
+  {
+    "to": "user@example.com",
+    "nickname": "John"
+  }
+Response:
+  {
+    "success": true,
+    "messageId": "ses-message-id"
+  }
+
+# 发送资料修改通知邮件
+POST /api/v1/notifications/profile-updated
+Headers:
+  X-Internal-Api-Key: {internal_api_key}
+Request:
+  {
+    "to": "user@example.com",
+    "nickname": "John"
+  }
+Response:
+  {
+    "success": true,
+    "messageId": "ses-message-id"
+  }
+
+# 发送账号删除通知邮件
 POST /api/v1/notifications/account-deleted
 Headers:
   X-Internal-Api-Key: {internal_api_key}
 Request:
   {
     "to": "user@example.com",
-    "firstName": "John"
+    "nickname": "John"
   }
 Response:
   {
@@ -1078,7 +1587,7 @@ Response:
 
 ```
 notification-service/
-├── src/main/java/com/xxx/notification/
+├── src/main/java/com/authplatform/notificationservice/
 │   ├── NotificationServiceApplication.java
 │   │
 │   ├── config/
@@ -1092,8 +1601,12 @@ notification-service/
 │   │   └── EmailService.java
 │   │
 │   ├── dto/
-│   │   ├── EmailRequest.java
-│   │   └── EmailResponse.java
+│   │   ├── VerificationCodeRequest.java    # 验证码邮件请求
+│   │   ├── WelcomeEmailRequest.java        # 欢迎邮件请求
+│   │   ├── PasswordChangedRequest.java     # 密码变更通知请求
+│   │   ├── ProfileUpdatedRequest.java      # 资料修改通知请求
+│   │   ├── AccountDeletedRequest.java      # 账号删除通知请求
+│   │   └── EmailResponse.java              # 统一响应
 │   │
 │   └── exception/
 │       └── GlobalExceptionHandler.java
@@ -1116,14 +1629,66 @@ public class NotificationController {
 
     private final EmailService emailService;
 
-    @PostMapping("/account-modified")
-    public ResponseEntity<EmailResponse> sendAccountModifiedEmail(@RequestBody EmailRequest request) {
-        return ResponseEntity.ok(emailService.sendAccountModifiedEmail(request.getTo(), request.getFirstName()));
+    /**
+     * 发送验证码邮件 (注册邮箱验证 / 密码重置)
+     */
+    @PostMapping("/verification-code")
+    public ResponseEntity<EmailResponse> sendVerificationCode(
+            @RequestBody VerificationCodeRequest request) {
+        return ResponseEntity.ok(emailService.sendVerificationCodeEmail(
+            request.getTo(),
+            request.getCode(),
+            request.getType(),
+            request.getExpiresInMinutes()
+        ));
     }
 
+    /**
+     * 发送欢迎邮件
+     */
+    @PostMapping("/welcome")
+    public ResponseEntity<EmailResponse> sendWelcomeEmail(
+            @RequestBody WelcomeEmailRequest request) {
+        return ResponseEntity.ok(emailService.sendWelcomeEmail(
+            request.getTo(),
+            request.getNickname()
+        ));
+    }
+
+    /**
+     * 发送密码变更通知
+     */
+    @PostMapping("/password-changed")
+    public ResponseEntity<EmailResponse> sendPasswordChangedEmail(
+            @RequestBody PasswordChangedRequest request) {
+        return ResponseEntity.ok(emailService.sendPasswordChangedEmail(
+            request.getTo(),
+            request.getNickname()
+        ));
+    }
+
+    /**
+     * 发送资料修改通知
+     */
+    @PostMapping("/profile-updated")
+    public ResponseEntity<EmailResponse> sendProfileUpdatedEmail(
+            @RequestBody ProfileUpdatedRequest request) {
+        return ResponseEntity.ok(emailService.sendProfileUpdatedEmail(
+            request.getTo(),
+            request.getNickname()
+        ));
+    }
+
+    /**
+     * 发送账号删除通知
+     */
     @PostMapping("/account-deleted")
-    public ResponseEntity<EmailResponse> sendAccountDeletedEmail(@RequestBody EmailRequest request) {
-        return ResponseEntity.ok(emailService.sendAccountDeletedEmail(request.getTo(), request.getFirstName()));
+    public ResponseEntity<EmailResponse> sendAccountDeletedEmail(
+            @RequestBody AccountDeletedRequest request) {
+        return ResponseEntity.ok(emailService.sendAccountDeletedEmail(
+            request.getTo(),
+            request.getNickname()
+        ));
     }
 }
 ```
@@ -1140,40 +1705,121 @@ public class EmailService {
     @Value("${ses.from-address}")
     private String fromAddress;
 
+    @Value("${app.name:Auth Platform}")
+    private String appName;
+
     /**
-     * 发送账号修改通知邮件
+     * 发送验证码邮件
      */
-    public EmailResponse sendAccountModifiedEmail(String to, String firstName) {
-        String subject = "您的账户信息已更新";
-        String body = String.format("""
-            <html>
-            <body style="font-family: Arial, sans-serif;">
-                <h2>您好，%s</h2>
-                <p>您的账户信息已成功更新。</p>
-                <p>如果这不是您本人的操作，请立即联系我们的客服团队。</p>
-                <p>祝好，<br>XXX 团队</p>
-            </body>
-            </html>
-            """, firstName);
+    public EmailResponse sendVerificationCodeEmail(String to, String code, String type, int expiresInMinutes) {
+        String subject;
+        String body;
+
+        if ("EMAIL_VERIFICATION".equals(type)) {
+            subject = "邮箱验证码";
+            body = String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif;">
+                    <h2>欢迎注册 %s</h2>
+                    <p>您的邮箱验证码是：</p>
+                    <h1 style="color: #4CAF50; letter-spacing: 5px;">%s</h1>
+                    <p>验证码将在 %d 分钟后过期。</p>
+                    <p>如果这不是您本人的操作，请忽略此邮件。</p>
+                    <p>祝好，<br>%s 团队</p>
+                </body>
+                </html>
+                """, appName, code, expiresInMinutes, appName);
+        } else {
+            subject = "密码重置验证码";
+            body = String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif;">
+                    <h2>密码重置请求</h2>
+                    <p>您正在重置 %s 账号密码，验证码是：</p>
+                    <h1 style="color: #FF9800; letter-spacing: 5px;">%s</h1>
+                    <p>验证码将在 %d 分钟后过期。</p>
+                    <p>如果这不是您本人的操作，请立即联系客服。</p>
+                    <p>祝好，<br>%s 团队</p>
+                </body>
+                </html>
+                """, appName, code, expiresInMinutes, appName);
+        }
 
         return sendEmail(to, subject, body);
     }
 
     /**
-     * 发送账号删除通知邮件
+     * 发送欢迎邮件
      */
-    public EmailResponse sendAccountDeletedEmail(String to, String firstName) {
-        String subject = "您的账号已删除";
+    public EmailResponse sendWelcomeEmail(String to, String nickname) {
+        String subject = String.format("欢迎加入 %s", appName);
+        String body = String.format("""
+            <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h2>您好，%s</h2>
+                <p>欢迎加入 %s！您的账号已成功创建。</p>
+                <p>现在您可以登录并开始使用我们的服务。</p>
+                <p>祝好，<br>%s 团队</p>
+            </body>
+            </html>
+            """, nickname, appName, appName);
+
+        return sendEmail(to, subject, body);
+    }
+
+    /**
+     * 发送密码变更通知
+     */
+    public EmailResponse sendPasswordChangedEmail(String to, String nickname) {
+        String subject = "密码已修改";
+        String body = String.format("""
+            <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h2>您好，%s</h2>
+                <p>您的账户密码已成功修改。</p>
+                <p>如果这不是您本人的操作，请立即联系我们的客服团队。</p>
+                <p>祝好，<br>%s 团队</p>
+            </body>
+            </html>
+            """, nickname, appName);
+
+        return sendEmail(to, subject, body);
+    }
+
+    /**
+     * 发送资料修改通知
+     */
+    public EmailResponse sendProfileUpdatedEmail(String to, String nickname) {
+        String subject = "个人资料已更新";
+        String body = String.format("""
+            <html>
+            <body style="font-family: Arial, sans-serif;">
+                <h2>您好，%s</h2>
+                <p>您的个人资料已成功更新。</p>
+                <p>如果这不是您本人的操作，请立即联系我们的客服团队。</p>
+                <p>祝好，<br>%s 团队</p>
+            </body>
+            </html>
+            """, nickname, appName);
+
+        return sendEmail(to, subject, body);
+    }
+
+    /**
+     * 发送账号删除通知
+     */
+    public EmailResponse sendAccountDeletedEmail(String to, String nickname) {
+        String subject = "账号已删除";
         String body = String.format("""
             <html>
             <body style="font-family: Arial, sans-serif;">
                 <h2>您好，%s</h2>
                 <p>您的账号已成功删除。</p>
                 <p>感谢您使用我们的服务。如有任何问题，请联系客服。</p>
-                <p>祝好，<br>XXX 团队</p>
+                <p>祝好，<br>%s 团队</p>
             </body>
             </html>
-            """, firstName);
+            """, nickname, appName);
 
         return sendEmail(to, subject, body);
     }
@@ -1205,11 +1851,43 @@ public class EmailService {
 ```
 
 ```java
-// EmailRequest.java
+// DTO 示例
+
+// VerificationCodeRequest.java
 @Data
-public class EmailRequest {
+public class VerificationCodeRequest {
     private String to;
-    private String firstName;
+    private String code;
+    private String type;  // EMAIL_VERIFICATION or PASSWORD_RESET
+    private int expiresInMinutes;
+}
+
+// WelcomeEmailRequest.java
+@Data
+public class WelcomeEmailRequest {
+    private String to;
+    private String nickname;
+}
+
+// PasswordChangedRequest.java
+@Data
+public class PasswordChangedRequest {
+    private String to;
+    private String nickname;
+}
+
+// ProfileUpdatedRequest.java
+@Data
+public class ProfileUpdatedRequest {
+    private String to;
+    private String nickname;
+}
+
+// AccountDeletedRequest.java
+@Data
+public class AccountDeletedRequest {
+    private String to;
+    private String nickname;
 }
 
 // EmailResponse.java
@@ -1229,14 +1907,30 @@ public class EmailResponse {
 
 | 调用方 | 被调用方 | 方式 | 说明 |
 |-------|---------|------|------|
-| Frontend | User Service | HTTP REST | 通过 ALB 路由 |
-| Frontend | Profile Service | HTTP REST | 通过 ALB 路由 |
-| User Service | Profile Service | HTTP REST | 内部 API |
-| User Service | Notification Service | HTTP REST | 内部 API (账号删除通知) |
-| Profile Service | Notification Service | HTTP REST | 内部 API (账号修改通知) |
-| Lambda Trigger | Profile Service | HTTP REST | 内部 API |
+| Frontend | User Service | HTTP REST | /api/users/* 通过 ALB 路由 |
+| Frontend | Profile Service | HTTP REST | /api/profiles/* 通过 ALB 路由 |
+| User Service | Cognito | AWS SDK | 用户创建、密码管理、邮箱验证状态更新 |
+| User Service | Notification Service | HTTP REST | 内部 API (验证码/欢迎/密码变更/账号删除邮件) |
+| Profile Service | Notification Service | HTTP REST | 内部 API (资料修改通知邮件) |
 
-### 7.2 内部 API 认证
+### 7.2 前端 API 调用映射
+
+| 前端功能 | HTTP 方法 | API URI | 目标服务 | 认证 |
+|----------|----------|---------|----------|------|
+| 用户注册 | POST | /api/users/register | user-service | 无需 |
+| 验证邮箱 | POST | /api/users/verify-email | user-service | 无需 |
+| 重发验证码 | POST | /api/users/resend-verification | user-service | 无需 |
+| 忘记密码 | POST | /api/users/forgot-password | user-service | 无需 |
+| 重置密码 | POST | /api/users/reset-password | user-service | 无需 |
+| 获取用户身份信息 | GET | /api/users/me | user-service | JWT |
+| 修改密码 | POST | /api/users/me/change-password | user-service | JWT |
+| 注销账户 | DELETE | /api/users/me | user-service | JWT |
+| 获取用户资料 | GET | /api/profiles/me | profile-service | JWT |
+| 更新用户资料 | PUT | /api/profiles/me | profile-service | JWT |
+| 上传头像 | POST | /api/profiles/me/avatar | profile-service | JWT |
+| 删除头像 | DELETE | /api/profiles/me/avatar | profile-service | JWT |
+
+### 7.3 内部 API 认证
 
 ```yaml
 # 内部 API 使用 API Key 认证
@@ -1277,48 +1971,127 @@ public class InternalApiKeyFilter extends OncePerRequestFilter {
 }
 ```
 
-### 7.3 服务间调用客户端
+### 7.4 服务间调用客户端
 
 ```java
-// ProfileServiceClient.java (在 User Service 中)
+// NotificationServiceClient.java (在 User Service 中)
 @Component
 @RequiredArgsConstructor
-public class ProfileServiceClient {
+@Slf4j
+public class NotificationServiceClient {
 
     private final RestTemplate restTemplate;
 
-    @Value("${services.profile.url}")
-    private String profileServiceUrl;
+    @Value("${services.notification.url}")
+    private String notificationServiceUrl;
 
     @Value("${internal.api-key}")
     private String apiKey;
 
-    public void createProfile(CreateProfileRequest request) {
+    /**
+     * 发送验证码邮件 (注册或密码重置)
+     */
+    public void sendVerificationCode(String email, String code, String type, int expiresInMinutes) {
+        Map<String, Object> request = Map.of(
+            "to", email,
+            "code", code,
+            "type", type,
+            "expiresInMinutes", expiresInMinutes
+        );
+        post("/api/v1/notifications/verification-code", request);
+    }
+
+    /**
+     * 发送欢迎邮件
+     */
+    public void sendWelcomeEmail(String email, String nickname) {
+        Map<String, String> request = Map.of(
+            "to", email,
+            "nickname", nickname
+        );
+        post("/api/v1/notifications/welcome", request);
+    }
+
+    /**
+     * 发送密码变更通知
+     */
+    public void sendPasswordChangedEmail(String email, String nickname) {
+        Map<String, String> request = Map.of(
+            "to", email,
+            "nickname", nickname
+        );
+        post("/api/v1/notifications/password-changed", request);
+    }
+
+    /**
+     * 发送账号删除通知
+     */
+    public void sendAccountDeletedEmail(String email, String nickname) {
+        Map<String, String> request = Map.of(
+            "to", email,
+            "nickname", nickname
+        );
+        post("/api/v1/notifications/account-deleted", request);
+    }
+
+    private void post(String path, Map<String, ?> request) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Api-Key", apiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);
 
-        HttpEntity<CreateProfileRequest> entity = new HttpEntity<>(request, headers);
+        HttpEntity<Map<String, ?>> entity = new HttpEntity<>(request, headers);
 
-        restTemplate.postForEntity(
-            profileServiceUrl + "/api/v1/profiles",
-            entity,
-            Void.class
-        );
+        try {
+            restTemplate.postForEntity(notificationServiceUrl + path, entity, Void.class);
+            log.info("Notification sent: path={}, to={}", path, request.get("to"));
+        } catch (Exception e) {
+            log.error("Failed to send notification: path={}, error={}", path, e.getMessage());
+            // 不抛出异常，邮件发送失败不应阻断主流程
+        }
     }
+}
+```
 
-    public void deleteProfile(String userId) {
+```java
+// NotificationServiceClient.java (在 Profile Service 中)
+@Component
+@RequiredArgsConstructor
+@Slf4j
+public class NotificationServiceClient {
+
+    private final RestTemplate restTemplate;
+
+    @Value("${services.notification.url}")
+    private String notificationServiceUrl;
+
+    @Value("${internal.api-key}")
+    private String apiKey;
+
+    /**
+     * 发送资料修改通知
+     */
+    public void sendProfileUpdatedEmail(String email, String nickname) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Api-Key", apiKey);
+        headers.setContentType(MediaType.APPLICATION_JSON);
 
-        HttpEntity<Void> entity = new HttpEntity<>(headers);
-
-        restTemplate.exchange(
-            profileServiceUrl + "/api/v1/profiles/" + userId,
-            HttpMethod.DELETE,
-            entity,
-            Void.class
+        Map<String, String> request = Map.of(
+            "to", email,
+            "nickname", nickname
         );
+
+        HttpEntity<Map<String, String>> entity = new HttpEntity<>(request, headers);
+
+        try {
+            restTemplate.postForEntity(
+                notificationServiceUrl + "/api/v1/notifications/profile-updated",
+                entity,
+                Void.class
+            );
+            log.info("Profile update notification sent: to={}", email);
+        } catch (Exception e) {
+            log.error("Failed to send profile update notification: error={}", e.getMessage());
+        }
     }
 }
 ```
@@ -1418,14 +2191,14 @@ spec:
     - host: api.xxx.com
       http:
         paths:
-          - path: /api/v1/users
+          - path: /api/users
             pathType: Prefix
             backend:
               service:
                 name: user-service
                 port:
                   number: 8080
-          - path: /api/v1/profiles
+          - path: /api/profiles
             pathType: Prefix
             backend:
               service:
@@ -1448,35 +2221,111 @@ spec:
 ### 9.1 用户注册流程
 
 ```
-┌────────┐     ┌──────────┐     ┌─────────────┐     ┌─────────────┐
-│  用户   │     │  Frontend │     │User Service │     │   Cognito   │
-└───┬────┘     └─────┬─────┘     └──────┬──────┘     └──────┬──────┘
-    │                │                  │                   │
-    │ 1.填写注册表单   │                  │                   │
-    │───────────────▶│                  │                   │
-    │                │                  │                   │
-    │                │ 2.POST /register │                   │
-    │                │─────────────────▶│                   │
-    │                │                  │                   │
-    │                │                  │ 3.业务验证         │
-    │                │                  │                   │
-    │                │                  │ 4.创建用户         │
-    │                │                  │──────────────────▶│
-    │                │                  │◀──────────────────│
-    │                │                  │   userId          │
-    │                │                  │                   │
-    │                │◀─────────────────│                   │
-    │                │   注册成功        │                   │
-    │                │                  │                   │
-    │◀───────────────│                  │                   │
-    │  显示成功页面    │                  │                   │
-    │                │                  │                   │
-    │                │                  │  5.Cognito 自动发送验证码邮件
-    │◀─────────────────────────────────────────────────────│
-    │  收到验证码邮件  │                  │                   │
+┌────────┐     ┌──────────┐     ┌─────────────┐     ┌─────────────┐     ┌───────────────────┐
+│  用户   │     │  Frontend │     │User Service │     │   Cognito   │     │Notification Service│
+└───┬────┘     └─────┬─────┘     └──────┬──────┘     └──────┬──────┘     └─────────┬─────────┘
+    │                │                  │                   │                      │
+    │ 1.填写注册表单   │                  │                   │                      │
+    │───────────────▶│                  │                   │                      │
+    │                │                  │                   │                      │
+    │                │ 2.POST /register │                   │                      │
+    │                │─────────────────▶│                   │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 3.业务验证         │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 4.创建用户(禁用自动邮箱验证)               │
+    │                │                  │──────────────────▶│                      │
+    │                │                  │◀──────────────────│                      │
+    │                │                  │   userId          │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 5.生成验证码并存储到 verification_codes 表 │
+    │                │                  │                   │                      │
+    │                │                  │ 6.发送验证码邮件   │                      │
+    │                │                  │─────────────────────────────────────────▶│
+    │                │                  │◀─────────────────────────────────────────│
+    │                │                  │   发送成功         │                      │
+    │                │                  │                   │                      │
+    │                │◀─────────────────│                   │                      │
+    │                │ 注册待验证        │                   │                      │
+    │                │                  │                   │                      │
+    │◀───────────────│                  │                   │                      │
+    │  显示验证页面    │                  │                   │                      │
+    │                │                  │                   │                      │
+    │◀────────────────────────────────────────────────────────────────────────────│
+    │  收到验证码邮件  │                  │                   │                      │
+    │                │                  │                   │                      │
+    │ 7.输入验证码     │                  │                   │                      │
+    │───────────────▶│                  │                   │                      │
+    │                │                  │                   │                      │
+    │                │ 8.POST /verify-email                 │                      │
+    │                │─────────────────▶│                   │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 9.验证验证码       │                      │
+    │                │                  │ 10.删除验证码记录  │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 11.更新 email_verified                   │
+    │                │                  │──────────────────▶│                      │
+    │                │                  │                   │                      │
+    │                │                  │ 12.发送欢迎邮件    │                      │
+    │                │                  │─────────────────────────────────────────▶│
+    │                │                  │                   │                      │
+    │                │◀─────────────────│                   │                      │
+    │                │ 验证成功          │                   │                      │
+    │                │                  │                   │                      │
+    │◀───────────────│                  │                   │                      │
+    │  跳转登录页面    │                  │                   │                      │
 ```
 
-### 9.2 用户登录流程
+### 9.2 密码重置流程
+
+```
+┌────────┐     ┌──────────┐     ┌─────────────┐     ┌─────────────┐     ┌───────────────────┐
+│  用户   │     │  Frontend │     │User Service │     │   Cognito   │     │Notification Service│
+└───┬────┘     └─────┬─────┘     └──────┬──────┘     └──────┬──────┘     └─────────┬─────────┘
+    │                │                  │                   │                      │
+    │ 1.点击忘记密码   │                  │                   │                      │
+    │───────────────▶│                  │                   │                      │
+    │                │                  │                   │                      │
+    │                │ 2.POST /forgot-password              │                      │
+    │                │─────────────────▶│                   │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 3.验证邮箱是否存在 │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 4.生成重置验证码并存储                    │
+    │                │                  │                   │                      │
+    │                │                  │ 5.发送重置验证码邮件                      │
+    │                │                  │─────────────────────────────────────────▶│
+    │                │                  │◀─────────────────────────────────────────│
+    │                │                  │                   │                      │
+    │                │◀─────────────────│                   │                      │
+    │                │ 验证码已发送      │                   │                      │
+    │                │                  │                   │                      │
+    │◀───────────────│                  │                   │                      │
+    │  显示重置页面    │                  │                   │                      │
+    │                │                  │                   │                      │
+    │◀────────────────────────────────────────────────────────────────────────────│
+    │  收到重置邮件    │                  │                   │                      │
+    │                │                  │                   │                      │
+    │ 6.输入验证码和新密码                │                   │                      │
+    │───────────────▶│                  │                   │                      │
+    │                │                  │                   │                      │
+    │                │ 7.POST /reset-password               │                      │
+    │                │─────────────────▶│                   │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 8.验证重置验证码   │                      │
+    │                │                  │ 9.删除验证码记录   │                      │
+    │                │                  │                   │                      │
+    │                │                  │ 10.设置新密码      │                      │
+    │                │                  │──────────────────▶│                      │
+    │                │                  │                   │                      │
+    │                │◀─────────────────│                   │                      │
+    │                │ 重置成功          │                   │                      │
+    │                │                  │                   │                      │
+    │◀───────────────│                  │                   │                      │
+    │  跳转登录页面    │                  │                   │                      │
+```
+
+### 9.3 用户登录流程
 
 ```
 ┌────────┐     ┌──────────┐     ┌─────────────┐
@@ -1524,13 +2373,13 @@ common:
 
 # User Service 配置
 user-service:
-  PROFILE_SERVICE_URL: http://profile-service:8080
   NOTIFICATION_SERVICE_URL: http://notification-service:8080
   INTERNAL_API_KEY: ${SECRET}
 
 # Profile Service 配置
 profile-service:
-  S3_BUCKET: auth-platform-avatars
+  S3_AVATAR_BUCKET: auth-platform-avatars
+  CLOUDFRONT_DOMAIN: ${CLOUDFRONT_DOMAIN}
   NOTIFICATION_SERVICE_URL: http://notification-service:8080
   INTERNAL_API_KEY: ${SECRET}
 
@@ -1732,9 +2581,9 @@ fields @timestamp, level, message
 | 服务 | 职责 | 技术栈 | 部署 |
 |------|------|--------|------|
 | Frontend | 用户界面、认证集成 | React + TypeScript + Ant Design + Amplify SDK | S3 + CloudFront |
-| User Service | 账号注册、删除、管理 | Spring Boot + AWS SDK | EKS |
-| Profile Service | 用户资料查看与修改 | Spring Boot + JPA | EKS |
-| Notification Service | 账号修改/删除通知 | Spring Boot + SES | EKS |
+| User Service | 用户注册、邮箱验证、密码重置、身份管理、账户删除 | Spring Boot + AWS SDK | EKS |
+| Profile Service | 用户资料管理、头像上传/删除 | Spring Boot + JPA + S3 | EKS |
+| Notification Service | 统一邮件通知 (验证码/欢迎/密码变更/资料变更/账号删除) | Spring Boot + SES | EKS |
 
 ### 12.2 数据流向
 
@@ -1743,23 +2592,44 @@ fields @timestamp, level, message
               │
               │ /api/*
               ▼
-           ALB ────┬──▶ User Service ──────▶ Cognito
-                   │         │
-                   │         ├──▶ Profile Service ──▶ Aurora
-                   │         │
-                   │         └──▶ Notification Service ──▶ SES
+           ALB ────┬──▶ User Service ──┬──▶ Cognito (用户创建/密码管理)
+                   │                   │
+                   │                   ├──▶ Aurora (users + verification_codes)
+                   │                   │
+                   │                   └──▶ Notification Service ──▶ SES
+                   │                        (验证码/欢迎/密码变更/账号删除邮件)
                    │
-                   ├──▶ Profile Service ──▶ Aurora
+                   ├──▶ Profile Service ──┬──▶ Aurora (用户资料)
+                   │                      │
+                   │                      ├──▶ S3 (头像文件)
+                   │                      │
+                   │                      └──▶ Notification Service ──▶ SES
+                   │                           (资料修改通知)
                    │
-                   └──▶ Notification Service ──▶ SES
+                   └──▶ Notification Service ──▶ SES (所有邮件通知)
 ```
 
-### 12.3 认证数据 vs 业务数据
+### 12.3 数据职责划分
 
-| 数据类型 | 存储位置 | 管理方 |
-|---------|---------|-------|
+| 数据类型 | 存储位置 | 管理服务 |
+|---------|---------|----------|
 | 用户凭证 (密码) | Cognito | Cognito |
-| 用户基本属性 (姓名、邮箱) | Cognito | Cognito |
 | Token/Session | Cognito | Cognito |
-| 用户扩展资料 (地址、电话) | Aurora | Profile Service |
-| 邮件发送记录 | Aurora | Notification Service |
+| 用户身份信息 (username, email, status) | Aurora (users 表) | User Service |
+| 验证码 (注册/密码重置) | Aurora (verification_codes 表) | User Service |
+| 用户资料 (nickname, avatar, gender, birthday, address) | Aurora (users 表) | Profile Service |
+| 头像文件 | S3 | Profile Service |
+| 邮件发送 | SES | Notification Service |
+
+### 12.4 邮件通知职责
+
+| 邮件类型 | 触发场景 | 调用方 |
+|---------|---------|--------|
+| 邮箱验证码 | 用户注册 | User Service |
+| 密码重置验证码 | 忘记密码 | User Service |
+| 欢迎邮件 | 邮箱验证完成 | User Service |
+| 密码变更通知 | 修改密码 | User Service |
+| 资料修改通知 | 更新个人资料 | Profile Service |
+| 账号删除通知 | 注销账户 | User Service |
+
+> **注意**: Cognito 的自动邮箱验证功能已禁用，所有邮件通知统一由 Notification Service 发送。

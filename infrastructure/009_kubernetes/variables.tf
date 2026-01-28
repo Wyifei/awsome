@@ -84,3 +84,77 @@ variable "create_alb_ingress" {
   type        = bool
   default     = false
 }
+
+# ==============================================================================
+# Prometheus (Metrics Collection)
+# ==============================================================================
+
+variable "enable_prometheus" {
+  description = "是否启用 Prometheus 指标收集"
+  type        = bool
+  default     = false
+}
+
+variable "prometheus_remote_write_url" {
+  description = "AWS Managed Prometheus Remote Write URL"
+  type        = string
+  default     = ""
+}
+
+variable "prometheus_remote_write_role_arn" {
+  description = "Prometheus Remote Write IAM Role ARN"
+  type        = string
+  default     = ""
+}
+
+# ==============================================================================
+# ADOT Collector (AWS Distro for OpenTelemetry)
+# ==============================================================================
+
+variable "enable_adot_collector" {
+  description = "是否启用 ADOT Collector (用于抓取 Prometheus 指标)"
+  type        = bool
+  default     = false
+}
+
+variable "adot_collector_role_arn" {
+  description = "ADOT Collector IAM Role ARN (用于 Remote Write 到 AMP)"
+  type        = string
+  default     = ""
+}
+
+# ==============================================================================
+# Grafana (Self-hosted with Cognito OAuth)
+# ==============================================================================
+
+variable "enable_grafana" {
+  description = "是否启用 Grafana"
+  type        = bool
+  default     = false
+}
+
+variable "grafana_role_arn" {
+  description = "Grafana IAM Role ARN (用于查询 AMP)"
+  type        = string
+  default     = ""
+}
+
+variable "grafana_admin_password" {
+  description = "Grafana 管理员密码"
+  type        = string
+  default     = "admin123!"
+  sensitive   = true
+}
+
+variable "grafana_root_url" {
+  description = "Grafana Root URL (用于 OAuth 回调，例如: http://your-alb-dns/grafana/)"
+  type        = string
+  default     = "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+}
+
+variable "prometheus_query_url" {
+  description = "AWS Managed Prometheus Query URL"
+  type        = string
+  default     = ""
+}
+

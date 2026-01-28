@@ -33,7 +33,7 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("ResourceNotFound", 404);
 
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiResponse.error(404, e.getMessage()));
+                .body(ApiResponse.error("PROFILE_NOT_FOUND", e.getMessage()));
     }
 
     @ExceptionHandler(AvatarUploadException.class)
@@ -45,7 +45,7 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("AvatarUploadFailed", 500);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error(500, "Failed to upload avatar"));
+                .body(ApiResponse.error("UPLOAD_FAILED", "头像上传失败"));
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)
@@ -57,7 +57,19 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("FileTooLarge", 413);
 
         return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
-                .body(ApiResponse.error(413, "File size exceeds the maximum allowed limit"));
+                .body(ApiResponse.error("FILE_TOO_LARGE", "文件大小超过限制（最大5MB）"));
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResponse<Void>> handleIllegalArgument(IllegalArgumentException e) {
+        LogEvent.business("INVALID_FILE_TYPE")
+            .with("error_message", e.getMessage())
+            .warn("Invalid file type");
+
+        businessMetrics.incrementError("InvalidFileType", 400);
+
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.error("INVALID_FILE_TYPE", e.getMessage()));
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
@@ -78,7 +90,7 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("ValidationError", 400);
 
         return ResponseEntity.badRequest()
-                .body(ApiResponse.error(400, message));
+                .body(ApiResponse.error("VALIDATION_ERROR", message));
     }
 
     @ExceptionHandler(AccessDeniedException.class)
@@ -90,7 +102,7 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("AccessDenied", 403);
 
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                .body(ApiResponse.error(403, "Access denied"));
+                .body(ApiResponse.error("FORBIDDEN", "访问被拒绝"));
     }
 
     @ExceptionHandler(AuthenticationException.class)
@@ -102,7 +114,7 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("AuthenticationFailed", 401);
 
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-                .body(ApiResponse.error(401, "Authentication required"));
+                .body(ApiResponse.error("UNAUTHORIZED", "认证失败"));
     }
 
     @ExceptionHandler(Exception.class)
@@ -115,6 +127,6 @@ public class GlobalExceptionHandler {
         businessMetrics.incrementError("UnexpectedError", 500);
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(ApiResponse.error(500, "Internal server error"));
+                .body(ApiResponse.error("INTERNAL_ERROR", "服务器内部错误"));
     }
 }

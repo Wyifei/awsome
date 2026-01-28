@@ -5,18 +5,22 @@ export interface User {
   phoneNumber?: string
   emailVerified: boolean
   phoneNumberVerified?: boolean
+  status: string
   createdAt: string
   updatedAt: string
 }
 
 export interface UserProfile {
   userId: string
+  email: string
+  username: string
   nickname?: string
   avatar?: string
-  gender?: 'male' | 'female' | 'other'
+  gender?: 'MALE' | 'FEMALE' | 'OTHER'
   birthday?: string
   address?: string
-  preferences?: Record<string, unknown>
+  createdAt?: string
+  updatedAt?: string
 }
 
 export interface AuthState {
@@ -27,7 +31,14 @@ export interface AuthState {
 }
 
 export interface ApiResponse<T> {
-  code: number
+  success: boolean
+  code: string
   message: string
   data: T
+  timestamp: string
+}
+
+export interface AvatarResponse {
+  success: boolean
+  avatarUrl: string
 }

@@ -31,12 +31,45 @@ async function request<T>(
     }
   })
 
+  const responseData = await response.json().catch(() => ({
+    success: false,
+    code: 'PARSE_ERROR',
+    message: 'Failed to parse response'
+  }))
+
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: 'Request failed' }))
-    throw new Error(error.message || `HTTP error! status: ${response.status}`)
+    throw new Error(responseData.message || `HTTP error! status: ${response.status}`)
   }
 
-  return response.json()
+  return responseData
+}
+
+async function uploadRequest<T>(
+  endpoint: string,
+  formData: FormData
+): Promise<ApiResponse<T>> {
+  const authHeaders = await getAuthHeaders()
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: 'POST',
+    headers: {
+      ...authHeaders
+      // Note: Don't set Content-Type for FormData, browser will set it with boundary
+    },
+    body: formData
+  })
+
+  const responseData = await response.json().catch(() => ({
+    success: false,
+    code: 'PARSE_ERROR',
+    message: 'Failed to parse response'
+  }))
+
+  if (!response.ok) {
+    throw new Error(responseData.message || `HTTP error! status: ${response.status}`)
+  }
+
+  return responseData
 }
 
 export const api = {
@@ -54,5 +87,7 @@ export const api = {
       body: data ? JSON.stringify(data) : undefined
     }),
 
-  delete: <T>(endpoint: string) => request<T>(endpoint, { method: 'DELETE' })
+  delete: <T>(endpoint: string) => request<T>(endpoint, { method: 'DELETE' }),
+
+  upload: <T>(endpoint: string, formData: FormData) => uploadRequest<T>(endpoint, formData)
 }

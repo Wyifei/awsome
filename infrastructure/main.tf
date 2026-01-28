@@ -7,9 +7,10 @@
 #   003_iam        - KMS 密钥、Secrets Manager
 #   004_ecr        - ECR 镜像仓库
 #   005_cognito    - Cognito User Pool (使用默认域名)
+#   006_monitoring - AWS Managed Prometheus & Grafana
 #   007_eks        - EKS 集群及节点组
 #   008_rds        - Aurora PostgreSQL 集群
-#   009_kubernetes - AWS Load Balancer Controller, NGINX Ingress, ALB
+#   009_kubernetes - AWS Load Balancer Controller, NGINX Ingress, ALB, Prometheus
 #   010_s3         - S3 存储桶
 #   011_cloudfront - CloudFront CDN (S3 + ALB origins)
 # ==============================================================================
@@ -107,6 +108,21 @@ module "cognito" {
 }
 
 # ==============================================================================
+# 006. Monitoring (AWS Managed Prometheus & Grafana)
+# ==============================================================================
+
+module "monitoring" {
+  source = "./006_monitoring"
+  count  = var.enable_monitoring ? 1 : 0
+
+  project_name      = var.project_name
+  environment       = var.environment
+  oidc_provider_arn = module.eks.oidc_provider_arn
+
+  depends_on = [module.eks]
+}
+
+# ==============================================================================
 # 007. EKS 集群
 # ==============================================================================
 
@@ -115,6 +131,7 @@ module "eks" {
 
   project_name       = var.project_name
   environment        = var.environment
+  aws_region         = var.aws_region
   cluster_version    = var.eks_cluster_version
   vpc_id             = module.vpc.vpc_id
   private_subnet_ids = module.vpc.private_subnet_ids
@@ -127,6 +144,9 @@ module "eks" {
 
   kms_key_arn           = module.iam.eks_kms_key_arn
   eks_security_group_id = module.security.eks_worker_security_group_id
+
+  # ADOT Collector IAM Role (使用通配符 ARN 避免循环依赖)
+  prometheus_workspace_arn = ""
 
   depends_on = [module.vpc, module.security, module.iam]
 }
@@ -155,6 +175,23 @@ module "rds" {
 }
 
 # ==============================================================================
+# Aurora Security Group Rule for EKS Node Security Group
+# ==============================================================================
+# EKS 模块会创建自己的节点安全组，需要额外添加规则允许访问 Aurora
+
+resource "aws_security_group_rule" "aurora_from_eks_nodes" {
+  type                     = "ingress"
+  from_port                = 5432
+  to_port                  = 5432
+  protocol                 = "tcp"
+  source_security_group_id = module.eks.node_security_group_id
+  security_group_id        = module.security.aurora_security_group_id
+  description              = "PostgreSQL from EKS managed node group"
+
+  depends_on = [module.eks, module.security]
+}
+
+# ==============================================================================
 # 009. Kubernetes Resources (Load Balancer Controller & Ingress & ALB)
 # ==============================================================================
 
@@ -177,7 +214,25 @@ module "kubernetes" {
   nginx_ingress_replica_count = var.nginx_ingress_replica_count
   create_alb_ingress          = true
 
-  depends_on = [module.eks]
+  # Prometheus 配置 (指标收集并发送到 AWS Managed Prometheus)
+  # 注意: 如果使用 ADOT Collector，可以禁用 Prometheus Helm chart
+  enable_prometheus                = var.enable_monitoring && !var.use_adot_collector
+  prometheus_remote_write_url      = var.enable_monitoring ? module.monitoring[0].prometheus_remote_write_url : ""
+  prometheus_remote_write_role_arn = var.enable_monitoring ? module.monitoring[0].prometheus_remote_write_role_arn : ""
+
+  # ADOT Collector 配置 (替代 Prometheus Helm chart)
+  enable_adot_collector   = var.enable_monitoring && var.use_adot_collector
+  adot_collector_role_arn = module.eks.adot_collector_role_arn
+
+  # Grafana 配置 (使用用户名密码登录)
+  # Grafana 通过 nginx ingress 的 /grafana 路径访问
+  enable_grafana         = var.enable_monitoring
+  grafana_role_arn       = var.enable_monitoring ? module.monitoring[0].grafana_role_arn : ""
+  grafana_admin_password = var.grafana_admin_password
+  grafana_root_url       = var.grafana_url != "" ? "${var.grafana_url}/grafana/" : "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
+  prometheus_query_url   = var.enable_monitoring ? module.monitoring[0].prometheus_query_url : ""
+
+  depends_on = [module.eks, module.monitoring, module.cognito]
 }
 
 # ==============================================================================

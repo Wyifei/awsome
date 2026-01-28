@@ -8,7 +8,7 @@ spring:
     name: user-service
 
   datasource:
-    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:authplatform}
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:auth_platform}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
@@ -37,6 +37,19 @@ spring:
         jwt:
           issuer-uri: https://cognito-idp.${AWS_REGION:ap-northeast-1}.amazonaws.com/${COGNITO_USER_POOL_ID}
           jwk-set-uri: https://cognito-idp.${AWS_REGION:ap-northeast-1}.amazonaws.com/${COGNITO_USER_POOL_ID}/.well-known/jwks.json
+
+# Cognito configuration
+cognito:
+  user-pool-id: ${COGNITO_USER_POOL_ID}
+
+# Internal services
+services:
+  notification:
+    url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8080}
+
+# Internal API key
+internal:
+  api-key: ${INTERNAL_API_KEY:}
 
 management:
   endpoints:
@@ -69,11 +82,7 @@ management:
       percentiles-histogram:
         http.server.requests: true
         auth.external.call.duration: true
-      percentiles:
-        http.server.requests: 0.5, 0.95, 0.99
-        auth.external.call.duration: 0.5, 0.95, 0.99
 
-# 日志配置 (详细配置在 logback-spring.xml)
 logging:
   level:
     root: INFO
@@ -82,5 +91,4 @@ logging:
     org.springframework.web: INFO
     org.hibernate.SQL: ${SQL_LOG_LEVEL:INFO}
   pattern:
-    # 控制台日志模式 (仅开发环境使用)
     console: "%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%thread] [%X{trace_id:-}] %cyan(%logger{36}) - %msg%n"

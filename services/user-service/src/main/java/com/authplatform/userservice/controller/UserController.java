@@ -1,10 +1,9 @@
 package com.authplatform.userservice.controller;
 
 import com.authplatform.userservice.dto.ApiResponse;
+import com.authplatform.userservice.dto.ChangePasswordRequest;
 import com.authplatform.userservice.dto.ClientInfo;
-import com.authplatform.userservice.dto.UpdateProfileRequest;
 import com.authplatform.userservice.dto.UserDto;
-import com.authplatform.userservice.dto.UserProfileDto;
 import com.authplatform.userservice.metrics.BusinessMetrics;
 import com.authplatform.userservice.metrics.ClientInfoResolver;
 import com.authplatform.userservice.service.UserService;
@@ -25,7 +24,7 @@ public class UserController {
     private final ClientInfoResolver clientInfoResolver;
 
     /**
-     * 获取当前用户信息
+     * 获取当前用户身份信息
      * 会自动从 Cognito Token 同步用户数据到本地数据库
      */
     @GetMapping("/me")
@@ -45,25 +44,16 @@ public class UserController {
     }
 
     /**
-     * 获取当前用户资料
+     * 修改密码
      */
-    @GetMapping("/me/profile")
-    public ApiResponse<UserProfileDto> getProfile(@AuthenticationPrincipal Jwt jwt) {
-        String userId = jwt.getSubject();
-        UserProfileDto profile = userService.getProfile(userId);
-        return ApiResponse.success(profile);
-    }
-
-    /**
-     * 更新当前用户资料
-     */
-    @PutMapping("/me/profile")
-    public ApiResponse<UserProfileDto> updateProfile(
+    @PostMapping("/me/change-password")
+    public ResponseEntity<ApiResponse<Void>> changePassword(
             @AuthenticationPrincipal Jwt jwt,
-            @Valid @RequestBody UpdateProfileRequest request) {
+            @Valid @RequestBody ChangePasswordRequest request) {
         String userId = jwt.getSubject();
-        UserProfileDto profile = userService.updateProfile(userId, request);
-        return ApiResponse.success(profile);
+        String accessToken = jwt.getTokenValue();
+        userService.changePassword(userId, accessToken, request.getOldPassword(), request.getNewPassword());
+        return ResponseEntity.ok(ApiResponse.success("PASSWORD_CHANGED", "密码修改成功", null));
     }
 
     /**
@@ -73,6 +63,6 @@ public class UserController {
     public ResponseEntity<ApiResponse<Void>> deleteCurrentUser(@AuthenticationPrincipal Jwt jwt) {
         String userId = jwt.getSubject();
         userService.deleteUser(userId, BusinessMetrics.DELETE_REASON_USER_REQUEST);
-        return ResponseEntity.ok(ApiResponse.success(null));
+        return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
     }
 }

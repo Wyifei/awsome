@@ -59,6 +59,9 @@ module "eks" {
       max_size     = var.node_max_size
       desired_size = var.node_desired_size
 
+      # 关联 Worker 安全组到节点（用于访问 Aurora 等资源）
+      vpc_security_group_ids = [var.eks_security_group_id]
+
       labels = {
         role = "worker"
       }
@@ -68,8 +71,12 @@ module "eks" {
       iam_role_name            = "${local.name_prefix}-ng-role"
 
       # 节点 IAM 策略
+      # EKS module v20.0+ 可能不会自动附加核心策略，显式添加以确保节点能正常工作
       iam_role_additional_policies = {
-        ssm = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ssm    = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        worker = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+        ecr    = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+        cni    = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
       }
 
       tags = {
@@ -79,6 +86,7 @@ module "eks" {
   }
 
   # EKS Add-ons
+  # 注意: ADOT addon 需要 cert-manager，使用自定义 ADOT Collector 部署代替
   cluster_addons = {
     coredns = {
       most_recent = true
@@ -96,6 +104,8 @@ module "eks" {
       most_recent              = true
       service_account_role_arn = module.ebs_csi_irsa_role.iam_role_arn
     }
+    # ADOT addon 已移除 - 使用 009_kubernetes 模块中的自定义 ADOT Collector 部署
+    # 自定义部署不需要 cert-manager 且配置更灵活
   }
 
   # OIDC Provider (用于 IRSA)
@@ -126,6 +136,70 @@ module "ebs_csi_irsa_role" {
 
   tags = {
     Name = "${local.name_prefix}-ebs-csi-driver-role"
+  }
+}
+
+# ==============================================================================
+# ADOT Collector IAM Role (IRSA) for AWS Managed Prometheus
+# ==============================================================================
+
+module "adot_irsa_role" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-role-for-service-accounts-eks"
+  version = "~> 5.0"
+
+  role_name = "${local.name_prefix}-adot-collector-role"
+
+  oidc_providers = {
+    main = {
+      provider_arn = module.eks.oidc_provider_arn
+      namespace_service_accounts = [
+        "monitoring:adot-collector"
+      ]
+    }
+  }
+
+  role_policy_arns = {
+    adot_policy = aws_iam_policy.adot_collector.arn
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-adot-collector-role"
+  }
+}
+
+# ADOT Collector IAM Policy for AMP Remote Write
+resource "aws_iam_policy" "adot_collector" {
+  name        = "${local.name_prefix}-adot-collector-policy"
+  description = "IAM policy for ADOT Collector to write metrics to AWS Managed Prometheus"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "PrometheusRemoteWrite"
+        Effect = "Allow"
+        Action = [
+          "aps:RemoteWrite",
+          "aps:GetSeries",
+          "aps:GetLabels",
+          "aps:GetMetricMetadata"
+        ]
+        Resource = var.prometheus_workspace_arn != "" ? var.prometheus_workspace_arn : "arn:aws:aps:${var.aws_region}:${data.aws_caller_identity.current.account_id}:workspace/*"
+      },
+      {
+        Sid    = "PrometheusListWorkspaces"
+        Effect = "Allow"
+        Action = [
+          "aps:ListWorkspaces",
+          "aps:DescribeWorkspace"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = {
+    Name = "${local.name_prefix}-adot-collector-policy"
   }
 }
 

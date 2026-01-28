@@ -186,3 +186,32 @@ variable "nginx_ingress_replica_count" {
   type        = number
   default     = 2
 }
+
+# ==============================================================================
+# Monitoring 变量
+# ==============================================================================
+
+variable "enable_monitoring" {
+  description = "是否启用监控 (AWS Managed Prometheus & Grafana)"
+  type        = bool
+  default     = false
+}
+
+variable "use_adot_collector" {
+  description = "是否使用 ADOT Collector 替代 Prometheus Helm chart 抓取指标"
+  type        = bool
+  default     = true
+}
+
+variable "grafana_url" {
+  description = "ALB 基础 URL (不含 /grafana 路径)，例如: http://k8s-xxx.elb.amazonaws.com"
+  type        = string
+  default     = ""
+}
+
+variable "grafana_admin_password" {
+  description = "Grafana 管理员密码"
+  type        = string
+  default     = "admin123!"
+  sensitive   = true
+}

@@ -9,7 +9,8 @@ resources:
   - secret.yaml
   - deployment.yaml
   - service.yaml
-  - servicemonitor.yaml
+  # servicemonitor.yaml removed - using AWS Managed Prometheus with ADOT Collector
+  # Pods have prometheus.io/* annotations for scraping
 
 labels:
   - pairs:

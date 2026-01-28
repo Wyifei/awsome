@@ -1,5 +1,6 @@
 package com.authplatform.profileservice.service;
 
+import com.authplatform.profileservice.client.NotificationServiceClient;
 import com.authplatform.profileservice.dto.*;
 import com.authplatform.profileservice.entity.UserProfile;
 import com.authplatform.profileservice.exception.ResourceNotFoundException;
@@ -23,6 +24,7 @@ public class ProfileService {
     private final UserProfileRepository profileRepository;
     private final AvatarService avatarService;
     private final BusinessMetrics businessMetrics;
+    private final NotificationServiceClient notificationClient;
 
     /**
      * Get user profile by user ID
@@ -81,6 +83,13 @@ public class ProfileService {
 
         if (!updatedFields.isEmpty()) {
             businessMetrics.incrementProfileUpdated(updatedFields.toArray(new String[0]));
+
+            // Send profile updated notification
+            notificationClient.sendProfileUpdatedEmail(
+                    profile.getEmail(),
+                    profile.getNickname(),
+                    updatedFields
+            );
         }
 
         return mapToResponse(profile);

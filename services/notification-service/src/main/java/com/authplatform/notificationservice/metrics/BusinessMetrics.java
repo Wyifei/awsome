@@ -41,10 +41,12 @@ public class BusinessMetrics {
     private final ConcurrentHashMap<String, Counter> counterCache = new ConcurrentHashMap<>();
 
     // Email types
-    public static final String EMAIL_TYPE_ACCOUNT_MODIFIED = "account_modified";
-    public static final String EMAIL_TYPE_ACCOUNT_DELETED = "account_deleted";
+    public static final String EMAIL_TYPE_VERIFICATION_CODE = "verification_code";
+    public static final String EMAIL_TYPE_PASSWORD_RESET_CODE = "password_reset_code";
     public static final String EMAIL_TYPE_WELCOME = "welcome";
-    public static final String EMAIL_TYPE_PASSWORD_RESET = "password_reset";
+    public static final String EMAIL_TYPE_PASSWORD_CHANGED = "password_changed";
+    public static final String EMAIL_TYPE_PROFILE_UPDATED = "profile_updated";
+    public static final String EMAIL_TYPE_ACCOUNT_DELETED = "account_deleted";
 
     @PostConstruct
     public void init() {
