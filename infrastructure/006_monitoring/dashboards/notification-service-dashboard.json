@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "User Service Dashboard - Business and Performance Metrics",
+  "description": "Notification Service Dashboard - Email and Performance Metrics",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -62,7 +62,7 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
+        "w": 6,
         "x": 0,
         "y": 1
       },
@@ -86,186 +86,12 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(auth_user_created_total{namespace=\"$namespace\"}[24h])))",
-          "legendFormat": "Users Created (24h)",
+          "expr": "round(sum(increase(notification_emails_sent_total{namespace=\"$namespace\"}[24h])))",
+          "legendFormat": "Emails Sent (24h)",
           "refId": "A"
         }
       ],
-      "title": "Users Created (24h)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 1
-      },
-      "id": 3,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "round(sum(increase(auth_email_verified_total{namespace=\"$namespace\"}[24h])))",
-          "legendFormat": "Email Verified (24h)",
-          "refId": "A"
-        }
-      ],
-      "title": "Email Verified (24h)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 8,
-        "y": 1
-      },
-      "id": 4,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "round(sum(increase(auth_password_changed_total{namespace=\"$namespace\"}[24h])))",
-          "legendFormat": "Password Changed (24h)",
-          "refId": "A"
-        }
-      ],
-      "title": "Password Changed (24h)",
-      "type": "stat"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 12,
-        "y": 1
-      },
-      "id": 5,
-      "options": {
-        "colorMode": "value",
-        "graphMode": "area",
-        "justifyMode": "auto",
-        "orientation": "auto",
-        "reduceOptions": {
-          "calcs": ["lastNotNull"],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto"
-      },
-      "pluginVersion": "10.0.0",
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "round(sum(increase(auth_password_reset_total{namespace=\"$namespace\"}[24h])))",
-          "legendFormat": "Password Reset (24h)",
-          "refId": "A"
-        }
-      ],
-      "title": "Password Reset (24h)",
+      "title": "Emails Sent (24h)",
       "type": "stat"
     },
     {
@@ -294,11 +120,11 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 16,
+        "w": 6,
+        "x": 6,
         "y": 1
       },
-      "id": 6,
+      "id": 3,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -318,12 +144,78 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(auth_user_deleted_total{namespace=\"$namespace\"}[24h])))",
-          "legendFormat": "Users Deleted (24h)",
+          "expr": "round(sum(increase(notification_emails_failed_total{namespace=\"$namespace\"}[24h])))",
+          "legendFormat": "Emails Failed (24h)",
           "refId": "A"
         }
       ],
-      "title": "Users Deleted (24h)",
+      "title": "Emails Failed (24h)",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.95
+              },
+              {
+                "color": "red",
+                "value": 0.99
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 1
+      },
+      "id": 4,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "pluginVersion": "10.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(increase(notification_emails_sent_total{namespace=\"$namespace\"}[24h])) / (sum(increase(notification_emails_sent_total{namespace=\"$namespace\"}[24h])) + sum(increase(notification_emails_failed_total{namespace=\"$namespace\"}[24h])))",
+          "legendFormat": "Success Rate (24h)",
+          "refId": "A"
+        }
+      ],
+      "title": "Email Success Rate (24h)",
       "type": "stat"
     },
     {
@@ -360,11 +252,11 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 4,
-        "x": 20,
+        "w": 6,
+        "x": 18,
         "y": 1
       },
-      "id": 7,
+      "id": 5,
       "options": {
         "colorMode": "value",
         "graphMode": "area",
@@ -384,7 +276,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "round(sum(increase(auth_errors_total{namespace=\"$namespace\"}[24h])))",
+          "expr": "round(sum(increase(notification_errors_total{namespace=\"$namespace\"}[24h])))",
           "legendFormat": "Errors (24h)",
           "refId": "A"
         }
@@ -400,485 +292,10 @@
         "x": 0,
         "y": 5
       },
-      "id": 8,
+      "id": 6,
       "panels": [],
-      "title": "Business Metrics - User Operations",
+      "title": "Business Metrics - Email Operations",
       "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 6
-      },
-      "id": 9,
-      "options": {
-        "legend": {
-          "calcs": ["sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_user_created_total{namespace=\"$namespace\"}[5m])) by (channel) * 60",
-          "legendFormat": "{{channel}}",
-          "refId": "A"
-        }
-      ],
-      "title": "User Registration Rate (per minute) by Channel",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 6
-      },
-      "id": 10,
-      "options": {
-        "legend": {
-          "calcs": ["sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_user_created_total{namespace=\"$namespace\"}[5m])) by (platform) * 60",
-          "legendFormat": "{{platform}}",
-          "refId": "A"
-        }
-      ],
-      "title": "User Registration Rate (per minute) by Platform",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "id": 11,
-      "options": {
-        "legend": {
-          "calcs": ["sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_user_deleted_total{namespace=\"$namespace\"}[5m])) by (reason) * 60",
-          "legendFormat": "{{reason}}",
-          "refId": "A"
-        }
-      ],
-      "title": "User Deletion Rate (per minute) by Reason",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 14
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": ["sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_email_verified_total{namespace=\"$namespace\"}[5m])) * 60",
-          "legendFormat": "Email Verified",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_password_changed_total{namespace=\"$namespace\"}[5m])) * 60",
-          "legendFormat": "Password Changed",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_password_reset_total{namespace=\"$namespace\"}[5m])) * 60",
-          "legendFormat": "Password Reset",
-          "refId": "C"
-        }
-      ],
-      "title": "Authentication Operations (per minute)",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "id": 13,
-      "panels": [],
-      "title": "Business Metrics - Profile Operations",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 23
-      },
-      "id": 14,
-      "options": {
-        "legend": {
-          "calcs": ["sum"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_profile_fetched_total{namespace=\"$namespace\"}[5m])) * 60",
-          "legendFormat": "Profile Fetched",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_user_synced_total{namespace=\"$namespace\"}[5m])) * 60",
-          "legendFormat": "User Synced",
-          "refId": "B"
-        }
-      ],
-      "title": "Profile & Sync Operations (per minute)",
-      "type": "timeseries"
     },
     {
       "datasource": {
@@ -937,10 +354,10 @@
       "gridPos": {
         "h": 8,
         "w": 12,
-        "x": 12,
-        "y": 23
+        "x": 0,
+        "y": 6
       },
-      "id": 15,
+      "id": 7,
       "options": {
         "legend": {
           "calcs": ["sum"],
@@ -959,12 +376,186 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(auth_profile_updated_total{namespace=\"$namespace\"}[5m])) by (field) * 60",
-          "legendFormat": "{{field}}",
+          "expr": "sum(rate(notification_emails_sent_total{namespace=\"$namespace\"}[5m])) by (email_type) * 60",
+          "legendFormat": "{{email_type}}",
           "refId": "A"
         }
       ],
-      "title": "Profile Updates (per minute) by Field",
+      "title": "Emails Sent Rate (per minute) by Type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 6
+      },
+      "id": 8,
+      "options": {
+        "legend": {
+          "calcs": ["sum"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(notification_emails_failed_total{namespace=\"$namespace\"}[5m])) by (email_type) * 60",
+          "legendFormat": "{{email_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Emails Failed Rate (per minute) by Type",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 14
+      },
+      "id": 9,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(notification_emails_sent_total{namespace=\"$namespace\"}[5m])) by (email_type) / (sum(rate(notification_emails_sent_total{namespace=\"$namespace\"}[5m])) by (email_type) + sum(rate(notification_emails_failed_total{namespace=\"$namespace\"}[5m])) by (email_type))",
+          "legendFormat": "{{email_type}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Email Success Rate by Type",
       "type": "timeseries"
     },
     {
@@ -973,9 +564,9 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 22
       },
-      "id": 16,
+      "id": 10,
       "panels": [],
       "title": "Business Metrics - Errors",
       "type": "row"
@@ -1038,9 +629,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 23
       },
-      "id": 17,
+      "id": 11,
       "options": {
         "legend": {
           "calcs": ["sum"],
@@ -1059,7 +650,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(auth_errors_total{namespace=\"$namespace\"}[5m])) by (error_type) * 60",
+          "expr": "sum(rate(notification_errors_total{namespace=\"$namespace\"}[5m])) by (error_type) * 60",
           "legendFormat": "{{error_type}}",
           "refId": "A"
         }
@@ -1125,9 +716,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 23
       },
-      "id": 18,
+      "id": 12,
       "options": {
         "legend": {
           "calcs": ["sum"],
@@ -1146,7 +737,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(auth_errors_total{namespace=\"$namespace\"}[5m])) by (status_code) * 60",
+          "expr": "sum(rate(notification_errors_total{namespace=\"$namespace\"}[5m])) by (status_code) * 60",
           "legendFormat": "HTTP {{status_code}}",
           "refId": "A"
         }
@@ -1160,9 +751,214 @@
         "h": 1,
         "w": 24,
         "x": 0,
+        "y": 31
+      },
+      "id": 13,
+      "panels": [],
+      "title": "Performance Metrics - SES",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "max"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.50, sum(rate(notification_ses_call_duration_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le, operation))",
+          "legendFormat": "p50 - {{operation}}",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.95, sum(rate(notification_ses_call_duration_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le, operation))",
+          "legendFormat": "p95 - {{operation}}",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "histogram_quantile(0.99, sum(rate(notification_ses_call_duration_seconds_bucket{namespace=\"$namespace\"}[5m])) by (le, operation))",
+          "legendFormat": "p99 - {{operation}}",
+          "refId": "C"
+        }
+      ],
+      "title": "SES Call Latency (p50, p95, p99)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "grafana-amazonprometheus-datasource",
+        "uid": "${datasource}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "percentunit"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": ["mean", "lastNotNull"],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-amazonprometheus-datasource",
+            "uid": "${datasource}"
+          },
+          "expr": "sum(rate(notification_ses_call_duration_seconds_count{namespace=\"$namespace\", success=\"true\"}[5m])) by (operation) / sum(rate(notification_ses_call_duration_seconds_count{namespace=\"$namespace\"}[5m])) by (operation)",
+          "legendFormat": "{{operation}}",
+          "refId": "A"
+        }
+      ],
+      "title": "SES Call Success Rate by Operation",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
         "y": 40
       },
-      "id": 19,
+      "id": 16,
       "panels": [],
       "title": "Performance Metrics - HTTP",
       "type": "row"
@@ -1227,7 +1023,7 @@
         "x": 0,
         "y": 41
       },
-      "id": 20,
+      "id": 17,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -1246,7 +1042,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"user-service\"}[5m]))",
+          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"notification-service\"}[5m]))",
           "legendFormat": "Total Requests",
           "refId": "A"
         },
@@ -1255,7 +1051,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"user-service\", status=~\"2..\"}[5m]))",
+          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"notification-service\", status=~\"2..\"}[5m]))",
           "legendFormat": "2xx Success",
           "refId": "B"
         },
@@ -1264,7 +1060,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"user-service\", status=~\"4..\"}[5m]))",
+          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"notification-service\", status=~\"4..\"}[5m]))",
           "legendFormat": "4xx Client Error",
           "refId": "C"
         },
@@ -1273,7 +1069,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"user-service\", status=~\"5..\"}[5m]))",
+          "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"$namespace\", application=\"notification-service\", status=~\"5..\"}[5m]))",
           "legendFormat": "5xx Server Error",
           "refId": "D"
         }
@@ -1349,7 +1145,7 @@
         "x": 12,
         "y": 41
       },
-      "id": 21,
+      "id": 18,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -1368,7 +1164,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"user-service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"notification-service\"}[5m])) by (le))",
           "legendFormat": "p50",
           "refId": "A"
         },
@@ -1377,7 +1173,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"user-service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"notification-service\"}[5m])) by (le))",
           "legendFormat": "p95",
           "refId": "B"
         },
@@ -1386,7 +1182,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"user-service\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"notification-service\"}[5m])) by (le))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -1454,7 +1250,7 @@
         "x": 0,
         "y": 49
       },
-      "id": 22,
+      "id": 19,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -1473,7 +1269,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"user-service\", uri!~\"/actuator.*\"}[5m])) by (le, uri, method))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"$namespace\", application=\"notification-service\", uri!~\"/actuator.*\"}[5m])) by (le, uri, method))",
           "legendFormat": "{{method}} {{uri}}",
           "refId": "A"
         }
@@ -1489,194 +1285,7 @@
         "x": 0,
         "y": 57
       },
-      "id": 23,
-      "panels": [],
-      "title": "Performance Metrics - External Services",
-      "type": "row"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "s"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 58
-      },
-      "id": 24,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "max"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "histogram_quantile(0.95, sum(rate(auth_external_call_duration_seconds_bucket{namespace=\"$namespace\", service=\"cognito\"}[5m])) by (le, operation))",
-          "legendFormat": "cognito:{{operation}}",
-          "refId": "A"
-        }
-      ],
-      "title": "Cognito API Latency (p95) by Operation",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "grafana-amazonprometheus-datasource",
-        "uid": "${datasource}"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "smooth",
-            "lineWidth": 2,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          },
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 58
-      },
-      "id": 25,
-      "options": {
-        "legend": {
-          "calcs": ["mean", "lastNotNull"],
-          "displayMode": "table",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "grafana-amazonprometheus-datasource",
-            "uid": "${datasource}"
-          },
-          "expr": "sum(rate(auth_external_call_duration_seconds_count{namespace=\"$namespace\", success=\"true\"}[5m])) by (service) / sum(rate(auth_external_call_duration_seconds_count{namespace=\"$namespace\"}[5m])) by (service)",
-          "legendFormat": "{{service}}",
-          "refId": "A"
-        }
-      ],
-      "title": "External Service Success Rate",
-      "type": "timeseries"
-    },
-    {
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 66
-      },
-      "id": 26,
+      "id": 20,
       "panels": [],
       "title": "Performance Metrics - JVM",
       "type": "row"
@@ -1739,9 +1348,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 67
+        "y": 58
       },
-      "id": 27,
+      "id": 21,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -1760,7 +1369,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "jvm_memory_used_bytes{namespace=\"$namespace\", application=\"user-service\", area=\"heap\"}",
+          "expr": "jvm_memory_used_bytes{namespace=\"$namespace\", application=\"notification-service\", area=\"heap\"}",
           "legendFormat": "{{id}} (used)",
           "refId": "A"
         },
@@ -1769,7 +1378,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "jvm_memory_max_bytes{namespace=\"$namespace\", application=\"user-service\", area=\"heap\"}",
+          "expr": "jvm_memory_max_bytes{namespace=\"$namespace\", application=\"notification-service\", area=\"heap\"}",
           "legendFormat": "{{id}} (max)",
           "refId": "B"
         }
@@ -1835,9 +1444,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 67
+        "y": 58
       },
-      "id": 28,
+      "id": 22,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -1856,7 +1465,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "rate(jvm_gc_pause_seconds_sum{namespace=\"$namespace\", application=\"user-service\"}[5m])",
+          "expr": "rate(jvm_gc_pause_seconds_sum{namespace=\"$namespace\", application=\"notification-service\"}[5m])",
           "legendFormat": "{{action}} - {{cause}}",
           "refId": "A"
         }
@@ -1922,9 +1531,9 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 75
+        "y": 66
       },
-      "id": 29,
+      "id": 23,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -1943,7 +1552,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "jvm_threads_live_threads{namespace=\"$namespace\", application=\"user-service\"}",
+          "expr": "jvm_threads_live_threads{namespace=\"$namespace\", application=\"notification-service\"}",
           "legendFormat": "Live Threads",
           "refId": "A"
         },
@@ -1952,7 +1561,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "jvm_threads_daemon_threads{namespace=\"$namespace\", application=\"user-service\"}",
+          "expr": "jvm_threads_daemon_threads{namespace=\"$namespace\", application=\"notification-service\"}",
           "legendFormat": "Daemon Threads",
           "refId": "B"
         },
@@ -1961,7 +1570,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "jvm_threads_peak_threads{namespace=\"$namespace\", application=\"user-service\"}",
+          "expr": "jvm_threads_peak_threads{namespace=\"$namespace\", application=\"notification-service\"}",
           "legendFormat": "Peak Threads",
           "refId": "C"
         }
@@ -2027,9 +1636,9 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 75
+        "y": 66
       },
-      "id": 30,
+      "id": 24,
       "options": {
         "legend": {
           "calcs": ["mean", "max"],
@@ -2048,7 +1657,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "process_cpu_usage{namespace=\"$namespace\", application=\"user-service\"}",
+          "expr": "process_cpu_usage{namespace=\"$namespace\", application=\"notification-service\"}",
           "legendFormat": "Process CPU",
           "refId": "A"
         },
@@ -2057,7 +1666,7 @@
             "type": "grafana-amazonprometheus-datasource",
             "uid": "${datasource}"
           },
-          "expr": "system_cpu_usage{namespace=\"$namespace\", application=\"user-service\"}",
+          "expr": "system_cpu_usage{namespace=\"$namespace\", application=\"notification-service\"}",
           "legendFormat": "System CPU",
           "refId": "B"
         }
@@ -2069,7 +1678,7 @@
   "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["user-service", "auth-platform", "spring-boot"],
+  "tags": ["notification-service", "auth-platform", "spring-boot"],
   "templating": {
     "list": [
       {
@@ -2100,14 +1709,14 @@
           "type": "grafana-amazonprometheus-datasource",
           "uid": "${datasource}"
         },
-        "definition": "label_values(auth_user_created_total, namespace)",
+        "definition": "label_values(notification_emails_sent_total, namespace)",
         "hide": 0,
         "includeAll": false,
         "multi": false,
         "name": "namespace",
         "options": [],
         "query": {
-          "query": "label_values(auth_user_created_total, namespace)",
+          "query": "label_values(notification_emails_sent_total, namespace)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,
@@ -2124,8 +1733,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "User Service Dashboard",
-  "uid": "user-service-dashboard",
+  "title": "Notification Service Dashboard",
+  "uid": "notification-service-dashboard",
   "version": 1,
   "weekStart": ""
 }

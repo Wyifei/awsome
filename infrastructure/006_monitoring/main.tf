@@ -100,6 +100,7 @@ resource "aws_iam_role" "grafana" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
+      # IRSA: 允许 EKS Pod 通过 Web Identity Token 获取角色
       {
         Effect = "Allow"
         Principal = {
@@ -112,6 +113,14 @@ resource "aws_iam_role" "grafana" {
             "${replace(var.oidc_provider_arn, "/^arn:aws:iam::[0-9]+:oidc-provider\\//", "")}:aud" = "sts.amazonaws.com"
           }
         }
+      },
+      # 允许角色自己 AssumeRole (grafana-amazonprometheus-datasource 插件需要)
+      {
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/${local.name_prefix}-grafana-role"
+        }
+        Action = "sts:AssumeRole"
       }
     ]
   })
