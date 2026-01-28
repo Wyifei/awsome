@@ -16,7 +16,7 @@ export interface UserProfile {
   username: string
   nickname?: string
   avatar?: string
-  gender?: 'MALE' | 'FEMALE' | 'OTHER'
+  gender?: 'male' | 'female' | 'other'  // API returns lowercase
   birthday?: string
   address?: string
   createdAt?: string

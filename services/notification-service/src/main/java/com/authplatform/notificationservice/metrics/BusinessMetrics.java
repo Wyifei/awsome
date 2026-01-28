@@ -43,6 +43,7 @@ public class BusinessMetrics {
     // Email types
     public static final String EMAIL_TYPE_VERIFICATION_CODE = "verification_code";
     public static final String EMAIL_TYPE_PASSWORD_RESET_CODE = "password_reset_code";
+    public static final String EMAIL_TYPE_ACCOUNT_DELETION_CODE = "account_deletion_code";
     public static final String EMAIL_TYPE_WELCOME = "welcome";
     public static final String EMAIL_TYPE_PASSWORD_CHANGED = "password_changed";
     public static final String EMAIL_TYPE_PROFILE_UPDATED = "profile_updated";

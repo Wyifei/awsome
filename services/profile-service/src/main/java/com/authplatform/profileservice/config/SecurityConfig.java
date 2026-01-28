@@ -19,8 +19,10 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 // Actuator endpoints
                 .requestMatchers("/actuator/**").permitAll()
-                // User profile APIs require authentication
-                .requestMatchers("/api/v1/profiles/me/**").authenticated()
+                // Avatar image endpoint is public (no authentication required)
+                .requestMatchers("/profiles/*/avatar/image").permitAll()
+                // All other profile APIs require authentication
+                .requestMatchers("/profiles/**").authenticated()
                 .anyRequest().authenticated()
             )
             .oauth2ResourceServer(oauth2 -> oauth2

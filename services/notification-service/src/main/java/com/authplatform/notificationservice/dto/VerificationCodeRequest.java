@@ -23,7 +23,7 @@ public class VerificationCodeRequest {
     private String code;
 
     @NotBlank(message = "Type is required")
-    @Pattern(regexp = "EMAIL_VERIFICATION|PASSWORD_RESET", message = "Type must be EMAIL_VERIFICATION or PASSWORD_RESET")
+    @Pattern(regexp = "EMAIL_VERIFICATION|PASSWORD_RESET|ACCOUNT_DELETION", message = "Type must be EMAIL_VERIFICATION, PASSWORD_RESET, or ACCOUNT_DELETION")
     private String type;
 
     @Positive(message = "Expiry minutes must be positive")

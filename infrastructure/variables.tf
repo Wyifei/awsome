@@ -215,3 +215,13 @@ variable "grafana_admin_password" {
   default     = "admin123!"
   sensitive   = true
 }
+
+# ==============================================================================
+# Database Client
+# ==============================================================================
+
+variable "enable_db_client" {
+  description = "是否启用数据库客户端 Pod (用于调试)"
+  type        = bool
+  default     = false
+}

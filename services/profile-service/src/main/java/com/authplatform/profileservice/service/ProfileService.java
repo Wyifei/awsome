@@ -96,30 +96,46 @@ public class ProfileService {
     }
 
     /**
-     * Upload avatar
+     * Upload avatar - stores in database
      */
     @Transactional
     public String uploadAvatar(String userId, MultipartFile file) {
         UserProfile profile = profileRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
-        // Delete old avatar if exists
-        if (profile.getAvatar() != null) {
-            avatarService.deleteAvatar(profile.getAvatar());
-        }
+        // Process and validate avatar
+        byte[] avatarData = avatarService.processAvatar(file);
+        String contentType = file.getContentType();
 
-        // Upload new avatar
-        String avatarUrl = avatarService.uploadAvatar(userId, file);
-
-        // Update profile
+        // Store in database
+        profile.setAvatarData(avatarData);
+        profile.setAvatarContentType(contentType);
+        // Set avatar URL to point to our avatar endpoint
+        String avatarUrl = "/api/profiles/" + userId + "/avatar/image";
         profile.setAvatar(avatarUrl);
         profileRepository.save(profile);
 
         LogEvent.audit("AVATAR_UPLOADED")
             .with("target_user_id", userId)
-            .info("Avatar uploaded");
+            .with("file_size", avatarData.length)
+            .info("Avatar uploaded to database");
 
         return avatarUrl;
+    }
+
+    /**
+     * Get avatar data for serving
+     */
+    @Transactional(readOnly = true)
+    public AvatarData getAvatarData(String userId) {
+        UserProfile profile = profileRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+
+        if (profile.getAvatarData() == null) {
+            return null;
+        }
+
+        return new AvatarData(profile.getAvatarData(), profile.getAvatarContentType());
     }
 
     /**
@@ -130,8 +146,9 @@ public class ProfileService {
         UserProfile profile = profileRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
-        if (profile.getAvatar() != null) {
-            avatarService.deleteAvatar(profile.getAvatar());
+        if (profile.getAvatarData() != null || profile.getAvatar() != null) {
+            profile.setAvatarData(null);
+            profile.setAvatarContentType(null);
             profile.setAvatar(null);
             profileRepository.save(profile);
 
@@ -140,6 +157,11 @@ public class ProfileService {
                 .info("Avatar deleted");
         }
     }
+
+    /**
+     * Avatar data record
+     */
+    public record AvatarData(byte[] data, String contentType) {}
 
     private ProfileResponse mapToResponse(UserProfile profile) {
         return ProfileResponse.builder()

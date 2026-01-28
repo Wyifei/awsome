@@ -30,7 +30,7 @@ public class EmailService {
     private String companyName;
 
     /**
-     * Send verification code email (for registration or password reset)
+     * Send verification code email (for registration, password reset, or account deletion)
      */
     public EmailResponse sendVerificationCodeEmail(String to, String code, String type, int expiresInMinutes) {
         String subject;
@@ -41,6 +41,10 @@ public class EmailService {
             subject = "您的邮箱验证码";
             body = buildEmailVerificationCodeBody(code, expiresInMinutes);
             emailType = BusinessMetrics.EMAIL_TYPE_VERIFICATION_CODE;
+        } else if ("ACCOUNT_DELETION".equals(type)) {
+            subject = "您的账号注销验证码";
+            body = buildAccountDeletionCodeBody(code, expiresInMinutes);
+            emailType = BusinessMetrics.EMAIL_TYPE_ACCOUNT_DELETION_CODE;
         } else {
             subject = "您的密码重置验证码";
             body = buildPasswordResetCodeBody(code, expiresInMinutes);
@@ -196,6 +200,39 @@ public class EmailService {
                         </div>
                         <p style="color: #666666; line-height: 1.6;">验证码将在 <strong>%d 分钟</strong>后过期。</p>
                         <p style="color: #e74c3c; line-height: 1.6;">如果这不是您本人的操作，请立即联系客服。</p>
+                        <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
+                        <p style="color: #999999; font-size: 14px;">
+                            此邮件由系统自动发送，请勿直接回复。<br>
+                            %s 团队
+                        </p>
+                    </div>
+                </div>
+            </body>
+            </html>
+            """, companyName, code, expiresInMinutes, companyName);
+    }
+
+    private String buildAccountDeletionCodeBody(String code, int expiresInMinutes) {
+        return String.format("""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            </head>
+            <body style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; padding: 0; background-color: #f5f5f5;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                    <div style="background-color: #ffffff; border-radius: 8px; padding: 40px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+                        <h2 style="color: #e74c3c; margin-bottom: 20px;">账号注销请求</h2>
+                        <p style="color: #666666; line-height: 1.6;">您正在申请注销 %s 账号，验证码是：</p>
+                        <div style="background-color: #ffebee; padding: 20px; border-radius: 8px; text-align: center; margin: 20px 0;">
+                            <span style="font-size: 32px; font-weight: bold; color: #e74c3c; letter-spacing: 8px;">%s</span>
+                        </div>
+                        <p style="color: #666666; line-height: 1.6;">验证码将在 <strong>%d 分钟</strong>后过期。</p>
+                        <div style="background-color: #fff3e0; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #FF9800;">
+                            <p style="color: #e65100; margin: 0; line-height: 1.6;"><strong>警告：</strong>账号注销后，您的所有数据将被永久删除，无法恢复。</p>
+                        </div>
+                        <p style="color: #e74c3c; line-height: 1.6;">如果这不是您本人的操作，请立即修改密码并联系客服。</p>
                         <hr style="border: none; border-top: 1px solid #eeeeee; margin: 30px 0;">
                         <p style="color: #999999; font-size: 14px;">
                             此邮件由系统自动发送，请勿直接回复。<br>

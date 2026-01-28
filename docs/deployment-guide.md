@@ -128,7 +128,7 @@ export DB_USERNAME="postgres"
 # 需要手动设置的值
 export DB_PASSWORD="<从 Secrets Manager 获取>"
 export INTERNAL_API_KEY="$(openssl rand -hex 32)"  # 自动生成安全 API Key
-export SES_FROM_EMAIL="noreply@your-domain.com"
+export SES_FROM_ADDRESS="noreply@your-domain.com"
 
 # 验证变量
 echo "Aurora Endpoint: $AURORA_CLUSTER_ENDPOINT"
@@ -161,7 +161,7 @@ export CLOUDFRONT_DOMAIN="${CLOUDFRONT_DOMAIN}"
 # Secrets (请替换为实际值)
 export DB_PASSWORD="<your-db-password>"
 export INTERNAL_API_KEY="<your-internal-api-key>"
-export SES_FROM_EMAIL="${SES_FROM_EMAIL:-noreply@example.com}"
+export SES_FROM_ADDRESS="${SES_FROM_ADDRESS:-noreply@example.com}"
 EOF
 
 # 加载环境变量
@@ -389,7 +389,7 @@ IMAGE_TAG="v1.0.0"
 
 # 使用 envsubst 进行变量替换 (支持密码中的特殊字符)
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
 
 # 部署所有服务
 for SERVICE in user-service profile-service notification-service; do
@@ -413,7 +413,7 @@ kubectl rollout status deployment/notification-service -n auth-platform
 source ~/.auth-platform-env
 
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
 
 # 部署 user-service
 kustomize build services/user-service/kustomize/overlays/production | \
@@ -449,7 +449,7 @@ cd -
 source ~/.auth-platform-env
 
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
 
 # 部署所有服务到 dev
 for SERVICE in user-service profile-service notification-service; do
@@ -567,11 +567,15 @@ kubectl create secret generic profile-service-secret -n auth-platform \
   --from-literal=S3_AVATAR_BUCKET='auth-platform-production-avatars-xxxxxx' \
   --from-literal=CLOUDFRONT_DOMAIN='xxxxxx.cloudfront.net'
 
+# 获取 SES 发件人邮箱 (从 terraform.tfvars)
+SES_FROM_ADDRESS=$(grep -E "^ses_email_address\s*=" ../infrastructure/terraform.tfvars 2>/dev/null | cut -d'=' -f2 | tr -d ' "'"'" | head -1)
+echo "SES From Address: $SES_FROM_ADDRESS"
+
 # 创建 notification-service Secret
 kubectl delete secret notification-service-secret -n auth-platform 2>/dev/null || true
 kubectl create secret generic notification-service-secret -n auth-platform \
   --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY" \
-  --from-literal=SES_FROM_EMAIL='noreply@example.com' \
+  --from-literal=SES_FROM_ADDRESS="$SES_FROM_ADDRESS" \
   --from-literal=SES_FROM_NAME='Auth Platform'
 
 # 查看 Secret
@@ -790,7 +794,34 @@ Property 'spring.profiles.active' imported from location 'class path resource [a
 
 **解决方案**: 从 `application-production.yml` 中删除 `spring.profiles.active` 配置，该值应通过环境变量 `SPRING_PROFILES_ACTIVE` 设置。
 
-#### 5. 数据库连接问题
+#### 5. SES 邮件发送失败
+
+**错误信息**: `SesException: Local address contains control or whitespace`
+
+**原因**: `SES_FROM_ADDRESS` 配置值包含无效字符（空格、等号或其他控制字符）。通常是因为从 terraform.tfvars 解析邮箱地址时，误将整行内容（如 `ses_email_address = xxx@example.com`）作为值。
+
+**解决方案**:
+
+```bash
+# 检查当前配置值
+kubectl get secret notification-service-secret -n auth-platform \
+  -o jsonpath='{.data.SES_FROM_ADDRESS}' | base64 -d && echo ""
+
+# 如果值不正确，修复 Secret
+kubectl patch secret notification-service-secret -n auth-platform \
+  --type='json' \
+  -p='[{"op": "replace", "path": "/data/SES_FROM_ADDRESS", "value": "'$(echo -n "your-email@example.com" | base64)'"}]'
+
+# 重启 notification-service 使配置生效
+kubectl rollout restart deployment/notification-service -n auth-platform
+```
+
+**预防**: 确保 `infrastructure/terraform.tfvars` 中的邮箱配置格式正确：
+```hcl
+ses_email_address = "noreply@your-domain.com"
+```
+
+#### 6. 数据库连接问题
 
 ```bash
 # 检查 Pod 环境变量
@@ -908,7 +939,7 @@ set -e
 source ~/.auth-platform-env
 
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
 
 echo "Building and pushing images..."
 ./scripts/build.sh -d -p -e production -r $AWS_ACCOUNT_ID -t $(git rev-parse --short HEAD) all
@@ -946,4 +977,4 @@ chmod +x deploy-all.sh
 | `S3_AVATARS_BUCKET` | `terraform output s3_avatars_bucket` | 头像存储桶名称 |
 | `CLOUDFRONT_DOMAIN` | `terraform output cloudfront_domain_name` | CloudFront 域名 |
 | `INTERNAL_API_KEY` | 手动生成 | 服务间通信 API Key |
-| `SES_FROM_EMAIL` | terraform.tfvars | SES 发件人邮箱 |
+| `SES_FROM_ADDRESS` | terraform.tfvars | SES 发件人邮箱（必须是有效的邮箱格式） |

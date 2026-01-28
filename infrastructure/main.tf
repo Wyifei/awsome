@@ -50,6 +50,7 @@ module "security" {
   project_name = var.project_name
   environment  = var.environment
   vpc_id       = module.vpc.vpc_id
+  vpc_cidr     = var.vpc_cidr
 }
 
 # ==============================================================================
@@ -232,7 +233,12 @@ module "kubernetes" {
   grafana_root_url       = var.grafana_url != "" ? "${var.grafana_url}/grafana/" : "%(protocol)s://%(domain)s:%(http_port)s/grafana/"
   prometheus_query_url   = var.enable_monitoring ? module.monitoring[0].prometheus_query_url : ""
 
-  depends_on = [module.eks, module.monitoring, module.cognito]
+  # PostgreSQL 客户端 (用于数据库调试)
+  enable_db_client = var.enable_db_client
+  aurora_endpoint  = module.rds.cluster_endpoint
+  aurora_port      = 5432
+
+  depends_on = [module.eks, module.monitoring, module.cognito, module.rds]
 }
 
 # ==============================================================================

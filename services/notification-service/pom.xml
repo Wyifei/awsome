@@ -45,6 +45,13 @@
             <version>${aws.sdk.version}</version>
         </dependency>
 
+        <!-- AWS STS for IRSA (Web Identity Token) authentication -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+
         <!-- Lombok -->
         <dependency>
             <groupId>org.projectlombok</groupId>

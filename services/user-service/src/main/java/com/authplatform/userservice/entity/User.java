@@ -7,6 +7,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -63,6 +65,7 @@ public class User {
     private String address;
 
     @Column(name = "preferences", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
     private String preferences;
 
     // ==================== Timestamps ====================

@@ -47,10 +47,6 @@ services:
   notification:
     url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8080}
 
-# Internal API key for service-to-service communication
-internal:
-  api-key: ${INTERNAL_API_KEY:}
-
 # AWS Configuration
 aws:
   region: ${AWS_REGION:ap-northeast-1}

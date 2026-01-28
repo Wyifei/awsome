@@ -1,5 +1,6 @@
 package com.authplatform.userservice.service;
 
+import com.authplatform.userservice.exception.EmailAlreadyExistsException;
 import com.authplatform.userservice.logging.LogEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -63,7 +64,7 @@ public class CognitoService {
             LogEvent.business("COGNITO_USER_EXISTS")
                     .with("email", maskEmail(email))
                     .warn("User already exists in Cognito");
-            throw new RuntimeException("邮箱已被注册", e);
+            throw new EmailAlreadyExistsException("邮箱已被注册", e);
 
         } catch (CognitoIdentityProviderException e) {
             LogEvent.integration("COGNITO_CREATE_USER_FAILED")

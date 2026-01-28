@@ -89,6 +89,13 @@
             <version>2.25.0</version>
         </dependency>
 
+        <!-- AWS STS for IRSA (Web Identity Token) authentication -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>sts</artifactId>
+            <version>2.25.0</version>
+        </dependency>
+
         <!-- MapStruct -->
         <dependency>
             <groupId>org.mapstruct</groupId>

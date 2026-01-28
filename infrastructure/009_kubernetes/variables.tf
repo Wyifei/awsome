@@ -158,3 +158,25 @@ variable "prometheus_query_url" {
   default     = ""
 }
 
+# ==============================================================================
+# Aurora PostgreSQL (用于数据库调试)
+# ==============================================================================
+
+variable "enable_db_client" {
+  description = "是否启用数据库客户端 Pod"
+  type        = bool
+  default     = false
+}
+
+variable "aurora_endpoint" {
+  description = "Aurora PostgreSQL 集群端点"
+  type        = string
+  default     = ""
+}
+
+variable "aurora_port" {
+  description = "Aurora PostgreSQL 端口"
+  type        = number
+  default     = 5432
+}
+

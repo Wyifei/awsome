@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Card, Form, Input, Button, Avatar, Upload, message, Tabs, Descriptions, Select, DatePicker } from 'antd'
 import { UserOutlined, UploadOutlined } from '@ant-design/icons'
-import { useAuth } from '../hooks/useAuth'
+import { useAuth } from '../contexts/AuthContext'
 import { profileService } from '../services/profileService'
 import type { UserProfile } from '../types'
 import type { UploadProps } from 'antd/es/upload/interface'
@@ -34,9 +34,10 @@ export default function ProfilePage() {
   const onFinish = async (values: Record<string, unknown>) => {
     setLoading(true)
     try {
+      const genderValue = values.gender as string | undefined
       const updateData = {
         nickname: values.nickname as string | undefined,
-        gender: values.gender as 'MALE' | 'FEMALE' | 'OTHER' | undefined,
+        gender: genderValue?.toLowerCase() as 'male' | 'female' | 'other' | undefined,
         birthday: values.birthday ? (values.birthday as dayjs.Dayjs).format('YYYY-MM-DD') : undefined,
         address: values.address as string | undefined
       }
@@ -76,19 +77,32 @@ export default function ProfilePage() {
     }
   }
 
+  const formatGender = (gender: string | undefined) => {
+    switch (gender?.toUpperCase()) {
+      case 'MALE': return '男'
+      case 'FEMALE': return '女'
+      case 'OTHER': return '其他'
+      default: return '未设置'
+    }
+  }
+
   const tabItems = [
     {
       key: 'info',
       label: '基本信息',
       children: (
         <Descriptions column={1} bordered>
-          <Descriptions.Item label="用户名">{user?.username}</Descriptions.Item>
+          <Descriptions.Item label="显示名称">{profile?.nickname || user?.email}</Descriptions.Item>
           <Descriptions.Item label="邮箱">{user?.email}</Descriptions.Item>
           <Descriptions.Item label="邮箱验证">
             {user?.emailVerified ? '已验证' : '未验证'}
           </Descriptions.Item>
           <Descriptions.Item label="手机号">{user?.phoneNumber || '未绑定'}</Descriptions.Item>
           <Descriptions.Item label="账号状态">{user?.status || '-'}</Descriptions.Item>
+          <Descriptions.Item label="昵称">{profile?.nickname || '未设置'}</Descriptions.Item>
+          <Descriptions.Item label="性别">{formatGender(profile?.gender)}</Descriptions.Item>
+          <Descriptions.Item label="生日">{profile?.birthday || '未设置'}</Descriptions.Item>
+          <Descriptions.Item label="地址">{profile?.address || '未设置'}</Descriptions.Item>
         </Descriptions>
       )
     },

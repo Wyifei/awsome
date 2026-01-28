@@ -13,7 +13,9 @@ import org.springframework.web.bind.annotation.*;
 /**
  * Notification API Controller
  *
- * All endpoints are internal APIs protected by X-Internal-Api-Key header.
+ * Internal APIs for sending notifications. These endpoints are called by other
+ * microservices (user-service, profile-service) within the cluster.
+ * Note: context-path is /api, so full path is /api/v1/notifications/*
  *
  * Endpoints:
  * - POST /api/v1/notifications/verification-code - Send verification code email
@@ -23,7 +25,7 @@ import org.springframework.web.bind.annotation.*;
  * - POST /api/v1/notifications/account-deleted - Send account deleted notification
  */
 @RestController
-@RequestMapping("/api/v1/notifications")
+@RequestMapping("/v1/notifications")
 @RequiredArgsConstructor
 public class NotificationController {
 

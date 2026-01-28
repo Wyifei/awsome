@@ -4,6 +4,7 @@ import com.authplatform.userservice.client.NotificationServiceClient;
 import com.authplatform.userservice.dto.ClientInfo;
 import com.authplatform.userservice.dto.UserDto;
 import com.authplatform.userservice.entity.User;
+import com.authplatform.userservice.entity.VerificationCode.VerificationType;
 import com.authplatform.userservice.exception.ResourceNotFoundException;
 import com.authplatform.userservice.logging.LogEvent;
 import com.authplatform.userservice.metrics.BusinessMetrics;
@@ -22,6 +23,7 @@ public class UserService {
     private final BusinessMetrics businessMetrics;
     private final CognitoService cognitoService;
     private final NotificationServiceClient notificationClient;
+    private final VerificationCodeService verificationCodeService;
 
     public UserDto getUserById(String userId) {
         log.debug("Fetching user by ID: {}", userId);
@@ -136,6 +138,59 @@ public class UserService {
 
         // Send account deleted notification
         notificationClient.sendAccountDeletedEmail(email, nickname);
+    }
+
+    /**
+     * Send account deletion verification code
+     */
+    @Transactional
+    public void sendDeleteAccountCode(String userId, String email) {
+        // Verify user exists
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+
+        // Verify email matches
+        if (!user.getEmail().equalsIgnoreCase(email)) {
+            throw new IllegalArgumentException("邮箱不匹配");
+        }
+
+        // Generate and send verification code
+        String code = verificationCodeService.generateCode(email, VerificationType.ACCOUNT_DELETION);
+        notificationClient.sendVerificationCode(
+                email,
+                code,
+                "ACCOUNT_DELETION",
+                verificationCodeService.getExpiryMinutes()
+        );
+
+        LogEvent.audit("DELETE_ACCOUNT_CODE_SENT")
+                .with("user_id", userId)
+                .with("email", maskEmail(email))
+                .info("Account deletion verification code sent");
+    }
+
+    /**
+     * Confirm account deletion with verification code
+     */
+    @Transactional
+    public void confirmDeleteAccount(String userId, String email, String code) {
+        // Verify user exists
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+
+        // Verify email matches
+        if (!user.getEmail().equalsIgnoreCase(email)) {
+            throw new IllegalArgumentException("邮箱不匹配");
+        }
+
+        // Verify the code
+        verificationCodeService.verifyCode(email, code, VerificationType.ACCOUNT_DELETION);
+
+        // Delete verification code
+        verificationCodeService.deleteCode(email, VerificationType.ACCOUNT_DELETION);
+
+        // Delete user (this will handle Cognito and DB deletion)
+        deleteUser(userId, BusinessMetrics.DELETE_REASON_USER_REQUEST);
     }
 
     private UserDto toUserDto(User user) {

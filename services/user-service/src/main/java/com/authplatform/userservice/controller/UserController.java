@@ -3,6 +3,8 @@ package com.authplatform.userservice.controller;
 import com.authplatform.userservice.dto.ApiResponse;
 import com.authplatform.userservice.dto.ChangePasswordRequest;
 import com.authplatform.userservice.dto.ClientInfo;
+import com.authplatform.userservice.dto.DeleteAccountConfirmRequest;
+import com.authplatform.userservice.dto.DeleteAccountSendCodeRequest;
 import com.authplatform.userservice.dto.UserDto;
 import com.authplatform.userservice.metrics.BusinessMetrics;
 import com.authplatform.userservice.metrics.ClientInfoResolver;
@@ -63,6 +65,30 @@ public class UserController {
     public ResponseEntity<ApiResponse<Void>> deleteCurrentUser(@AuthenticationPrincipal Jwt jwt) {
         String userId = jwt.getSubject();
         userService.deleteUser(userId, BusinessMetrics.DELETE_REASON_USER_REQUEST);
+        return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
+    }
+
+    /**
+     * 发送账号注销验证码
+     */
+    @PostMapping("/delete-account/send-code")
+    public ResponseEntity<ApiResponse<Void>> sendDeleteAccountCode(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody DeleteAccountSendCodeRequest request) {
+        String userId = jwt.getSubject();
+        userService.sendDeleteAccountCode(userId, request.getEmail());
+        return ResponseEntity.ok(ApiResponse.success("DELETE_CODE_SENT", "验证码已发送到您的邮箱", null));
+    }
+
+    /**
+     * 确认注销账号
+     */
+    @PostMapping("/delete-account/confirm")
+    public ResponseEntity<ApiResponse<Void>> confirmDeleteAccount(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody DeleteAccountConfirmRequest request) {
+        String userId = jwt.getSubject();
+        userService.confirmDeleteAccount(userId, request.getEmail(), request.getCode());
         return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
     }
 }

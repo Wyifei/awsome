@@ -20,9 +20,6 @@ public class NotificationServiceClient {
     @Value("${services.notification.url:http://notification-service:8080}")
     private String notificationServiceUrl;
 
-    @Value("${internal.api-key:}")
-    private String apiKey;
-
     public NotificationServiceClient() {
         this.restTemplate = new RestTemplate();
     }
@@ -76,9 +73,6 @@ public class NotificationServiceClient {
     private void post(String path, Map<String, ?> request, String emailType) {
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        if (apiKey != null && !apiKey.isEmpty()) {
-            headers.set("X-Internal-Api-Key", apiKey);
-        }
 
         HttpEntity<Map<String, ?>> entity = new HttpEntity<>(request, headers);
 

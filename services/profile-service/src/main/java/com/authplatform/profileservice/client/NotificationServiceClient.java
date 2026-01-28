@@ -19,14 +19,11 @@ public class NotificationServiceClient {
 
     private final RestTemplate restTemplate;
     private final String notificationServiceUrl;
-    private final String internalApiKey;
 
     public NotificationServiceClient(
-            @Value("${services.notification.url}") String notificationServiceUrl,
-            @Value("${internal.api-key:}") String internalApiKey) {
+            @Value("${services.notification.url}") String notificationServiceUrl) {
         this.restTemplate = new RestTemplate();
         this.notificationServiceUrl = notificationServiceUrl;
-        this.internalApiKey = internalApiKey;
     }
 
     /**
@@ -38,13 +35,10 @@ public class NotificationServiceClient {
      */
     public void sendProfileUpdatedEmail(String email, String nickname, List<String> fields) {
         try {
-            String url = notificationServiceUrl + "/api/notifications/profile-updated";
+            String url = notificationServiceUrl + "/api/v1/notifications/profile-updated";
 
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            if (internalApiKey != null && !internalApiKey.isEmpty()) {
-                headers.set("X-Internal-Api-Key", internalApiKey);
-            }
 
             Map<String, Object> body = new HashMap<>();
             body.put("to", email);

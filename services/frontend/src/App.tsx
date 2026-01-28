@@ -1,10 +1,11 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
-import { useAuth } from './hooks/useAuth'
+import { useAuth } from './contexts/AuthContext'
 import MainLayout from './components/MainLayout'
 import LoginPage from './pages/LoginPage'
 import RegisterPage from './pages/RegisterPage'
 import DashboardPage from './pages/DashboardPage'
 import ProfilePage from './pages/ProfilePage'
+import DeleteAccountPage from './pages/DeleteAccountPage'
 import LoadingSpinner from './components/LoadingSpinner'
 
 function App() {
@@ -22,6 +23,7 @@ function App() {
         <Route index element={<Navigate to="/dashboard" />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="delete-account" element={<DeleteAccountPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>

@@ -6,7 +6,6 @@ namespace: auth-platform
 resources:
   - ../../base
   - ingress.yaml
-  - hpa.yaml
   - pdb.yaml
 
 labels:
@@ -16,7 +15,7 @@ labels:
 
 replicas:
   - name: profile-service
-    count: 2
+    count: 1
 
 images:
   - name: profile-service

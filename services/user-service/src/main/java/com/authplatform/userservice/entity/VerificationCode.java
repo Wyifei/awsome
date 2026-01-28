@@ -40,7 +40,8 @@ public class VerificationCode {
 
     public enum VerificationType {
         EMAIL_VERIFICATION,
-        PASSWORD_RESET
+        PASSWORD_RESET,
+        ACCOUNT_DELETION
     }
 
     public boolean isExpired() {

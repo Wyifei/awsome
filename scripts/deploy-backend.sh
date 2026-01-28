@@ -83,8 +83,7 @@ DB_PASSWORD=""
 COGNITO_USER_POOL_ID=""
 S3_AVATARS_BUCKET=""
 CLOUDFRONT_DOMAIN=""
-INTERNAL_API_KEY=""
-SES_FROM_EMAIL=""
+SES_FROM_ADDRESS=""
 
 # ==============================================================================
 # Helper Functions
@@ -242,12 +241,20 @@ fetch_terraform_outputs() {
         S3_AVATARS_BUCKET=$(echo "$tf_outputs" | jq -r '.s3_avatars_bucket.value // empty' 2>/dev/null)
         CLOUDFRONT_DOMAIN=$(echo "$tf_outputs" | jq -r '.cloudfront_domain_name.value // empty' 2>/dev/null)
 
-        # Try to get from terraform.tfvars
-        if [ -f "terraform.tfvars" ]; then
+        # Try to get SES email from terraform.tfvars (only if not already set via env var)
+        if [ -z "$SES_FROM_ADDRESS" ] && [ -f "terraform.tfvars" ]; then
             local ses_email
-            ses_email=$(grep -E "^ses_from_email\s*=" terraform.tfvars 2>/dev/null | sed 's/.*=\s*"\(.*\)"/\1/' | tr -d '"')
-            if [ -n "$ses_email" ]; then
-                SES_FROM_EMAIL="$ses_email"
+            # Support both ses_email_address and ses_from_email variable names
+            # Extract value after '=' sign, remove quotes and whitespace
+            ses_email=$(grep -E "^ses_email_address\s*=" terraform.tfvars 2>/dev/null | cut -d'=' -f2 | tr -d ' "'"'" | head -1)
+            if [ -z "$ses_email" ]; then
+                ses_email=$(grep -E "^ses_from_email\s*=" terraform.tfvars 2>/dev/null | cut -d'=' -f2 | tr -d ' "'"'" | head -1)
+            fi
+            # Validate email format (basic check)
+            if [[ "$ses_email" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; then
+                SES_FROM_ADDRESS="$ses_email"
+            elif [ -n "$ses_email" ]; then
+                print_warning "Invalid SES email format in terraform.tfvars: $ses_email"
             fi
         fi
 
@@ -255,7 +262,7 @@ fetch_terraform_outputs() {
         print_success "Cognito User Pool ID: $COGNITO_USER_POOL_ID"
         print_success "S3 Avatars Bucket: $S3_AVATARS_BUCKET"
         print_success "CloudFront Domain: $CLOUDFRONT_DOMAIN"
-        [ -n "$SES_FROM_EMAIL" ] && print_success "SES From Email: $SES_FROM_EMAIL"
+        [ -n "$SES_FROM_ADDRESS" ] && print_success "SES From Email: $SES_FROM_ADDRESS"
     else
         print_warning "Could not fetch terraform outputs"
         cd "$PROJECT_ROOT"
@@ -308,17 +315,6 @@ fetch_database_credentials() {
     print_success "Database password: [RETRIEVED]"
 }
 
-generate_internal_api_key() {
-    print_step "Generating Internal API Key"
-
-    if [ -z "$INTERNAL_API_KEY" ]; then
-        INTERNAL_API_KEY=$(openssl rand -hex 32)
-        print_success "Generated new Internal API Key"
-    else
-        print_info "Using existing Internal API Key"
-    fi
-}
-
 validate_environment_variables() {
     print_step "Validating environment variables"
 
@@ -331,7 +327,6 @@ validate_environment_variables() {
     [ -z "$COGNITO_USER_POOL_ID" ] && missing+=("COGNITO_USER_POOL_ID")
     [ -z "$S3_AVATARS_BUCKET" ] && missing+=("S3_AVATARS_BUCKET")
     [ -z "$CLOUDFRONT_DOMAIN" ] && missing+=("CLOUDFRONT_DOMAIN")
-    [ -z "$INTERNAL_API_KEY" ] && missing+=("INTERNAL_API_KEY")
 
     if [ ${#missing[@]} -gt 0 ]; then
         print_error "Missing required environment variables:"
@@ -343,7 +338,7 @@ validate_environment_variables() {
     fi
 
     # Set defaults for optional variables
-    SES_FROM_EMAIL="${SES_FROM_EMAIL:-noreply@example.com}"
+    SES_FROM_ADDRESS="${SES_FROM_ADDRESS:-noreply@example.com}"
 
     print_success "All required environment variables are set"
 }
@@ -405,8 +400,7 @@ create_kubernetes_secrets() {
         --from-literal=DB_HOST="$AURORA_CLUSTER_ENDPOINT" \
         --from-literal=DB_USERNAME="$DB_USERNAME" \
         --from-literal=DB_PASSWORD="$DB_PASSWORD" \
-        --from-literal=COGNITO_USER_POOL_ID="$COGNITO_USER_POOL_ID" \
-        --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY"
+        --from-literal=COGNITO_USER_POOL_ID="$COGNITO_USER_POOL_ID"
     print_success "Created user-service-secret"
 
     # profile-service Secret
@@ -418,16 +412,14 @@ create_kubernetes_secrets() {
         --from-literal=DB_PASSWORD="$DB_PASSWORD" \
         --from-literal=COGNITO_USER_POOL_ID="$COGNITO_USER_POOL_ID" \
         --from-literal=S3_AVATAR_BUCKET="$S3_AVATARS_BUCKET" \
-        --from-literal=CLOUDFRONT_DOMAIN="$CLOUDFRONT_DOMAIN" \
-        --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY"
+        --from-literal=CLOUDFRONT_DOMAIN="$CLOUDFRONT_DOMAIN"
     print_success "Created profile-service-secret"
 
     # notification-service Secret
     print_info "Creating notification-service-secret..."
     kubectl delete secret notification-service-secret -n "$NAMESPACE" 2>/dev/null || true
     kubectl create secret generic notification-service-secret -n "$NAMESPACE" \
-        --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY" \
-        --from-literal=SES_FROM_EMAIL="$SES_FROM_EMAIL" \
+        --from-literal=SES_FROM_ADDRESS="$SES_FROM_ADDRESS" \
         --from-literal=SES_FROM_NAME="Auth Platform"
     print_success "Created notification-service-secret"
 
@@ -483,11 +475,10 @@ deploy_service() {
     export COGNITO_USER_POOL_ID
     export S3_AVATARS_BUCKET
     export CLOUDFRONT_DOMAIN
-    export INTERNAL_API_KEY
-    export SES_FROM_EMAIL
+    export SES_FROM_ADDRESS
 
     # Define envsubst variables
-    local envsubst_vars='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_EMAIL}'
+    local envsubst_vars='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${SES_FROM_ADDRESS}'
 
     if [ "$DRY_RUN" = true ]; then
         print_info "[DRY RUN] Would deploy:"
@@ -677,7 +668,6 @@ check_prerequisites
 setup_aws_credentials
 fetch_terraform_outputs || print_warning "Terraform outputs not available, using environment variables"
 fetch_database_credentials
-generate_internal_api_key
 validate_environment_variables
 
 # Configure kubectl

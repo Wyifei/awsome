@@ -7,6 +7,8 @@ import lombok.AllArgsConstructor;
 import lombok.Builder;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -44,6 +46,13 @@ public class UserProfile {
     @Column(name = "avatar", length = 512)
     private String avatar;
 
+    @Column(name = "avatar_data")
+    @Basic(fetch = FetchType.LAZY)
+    private byte[] avatarData;
+
+    @Column(name = "avatar_content_type", length = 100)
+    private String avatarContentType;
+
     @Column(name = "gender", length = 10)
     @Enumerated(EnumType.STRING)
     private Gender gender;
@@ -55,6 +64,7 @@ public class UserProfile {
     private String address;
 
     @Column(name = "preferences", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
     private String preferences;
 
     // ==================== Timestamps ====================

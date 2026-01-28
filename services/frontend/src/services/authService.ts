@@ -3,6 +3,8 @@
  * 注册和验证通过 User Service，登录仍通过 Cognito (Amplify)
  */
 
+import { fetchAuthSession } from 'aws-amplify/auth'
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 interface RegisterRequest {
@@ -40,6 +42,35 @@ async function request<T>(
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...options.headers
+    }
+  })
+
+  const responseData = await response.json().catch(() => ({
+    success: false,
+    code: 'PARSE_ERROR',
+    message: '解析响应失败'
+  }))
+
+  if (!response.ok) {
+    throw new Error(responseData.message || `请求失败: ${response.status}`)
+  }
+
+  return responseData
+}
+
+async function authenticatedRequest<T>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<ApiResponse<T>> {
+  const session = await fetchAuthSession()
+  const token = session.tokens?.idToken?.toString()
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers
     }
   })
@@ -114,6 +145,28 @@ export const authService = {
     return request('/users/reset-password', {
       method: 'POST',
       body: JSON.stringify(data)
+    })
+  },
+
+  /**
+   * 发送注销账号验证码
+   * 调用 User Service /api/users/delete-account/send-code
+   */
+  sendDeleteAccountCode: async (email: string): Promise<ApiResponse> => {
+    return authenticatedRequest('/users/delete-account/send-code', {
+      method: 'POST',
+      body: JSON.stringify({ email })
+    })
+  },
+
+  /**
+   * 确认注销账号
+   * 调用 User Service /api/users/delete-account/confirm
+   */
+  deleteAccount: async (email: string, code: string): Promise<ApiResponse> => {
+    return authenticatedRequest('/users/delete-account/confirm', {
+      method: 'POST',
+      body: JSON.stringify({ email, code })
     })
   }
 }

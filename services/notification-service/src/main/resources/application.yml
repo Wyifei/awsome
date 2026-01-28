@@ -20,10 +20,6 @@ ses:
 app:
   company-name: ${COMPANY_NAME:Auth Platform}
 
-# Internal API Configuration
-internal:
-  api-key: ${INTERNAL_API_KEY:}
-
 # Actuator and Metrics
 management:
   endpoints:

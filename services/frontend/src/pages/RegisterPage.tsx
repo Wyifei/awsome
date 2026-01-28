@@ -1,10 +1,22 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Form, Input, Button, Card, Typography, message, Modal } from 'antd'
+import { Form, Input, Button, Typography, message, Modal } from 'antd'
 import { LockOutlined, MailOutlined } from '@ant-design/icons'
-import { useAuth } from '../hooks/useAuth'
+import { useAuth } from '../contexts/AuthContext'
 
 const { Title, Text } = Typography
+
+// Electric Bolt SVG Icon for brand identity
+const ElectricBoltIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      d="M13 2L3 14H12L11 22L21 10H12L13 2Z"
+      fill="currentColor"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+)
 
 interface RegisterForm {
   email: string
@@ -24,7 +36,6 @@ export default function RegisterPage() {
   const onFinish = async (values: RegisterForm) => {
     setLoading(true)
     try {
-      // 注册时 username 参数已不使用，使用 email 作为用户名
       await register(values.email, values.email, values.password)
       setVerifyEmail(values.email)
       setVerifyModalVisible(true)
@@ -67,23 +78,30 @@ export default function RegisterPage() {
   }
 
   return (
-    <div style={{
-      minHeight: '100vh',
-      display: 'flex',
-      justifyContent: 'center',
-      alignItems: 'center',
-      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
-    }}>
-      <Card style={{ width: 400, borderRadius: 8 }}>
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <Title level={2} style={{ marginBottom: 8 }}>用户注册</Title>
-          <Text type="secondary">创建您的账号</Text>
+    <div className="auth-page-container">
+      <div className="glass-card" style={{ width: 420, padding: '40px 40px 32px' }}>
+        {/* Brand Logo */}
+        <div style={{ textAlign: 'center', marginBottom: 32 }}>
+          <div className="brand-logo">
+            <div className="brand-icon">
+              <ElectricBoltIcon />
+            </div>
+          </div>
+          <Title level={2} className="auth-title" style={{ marginTop: 16 }}>
+            创建账号
+          </Title>
+          <Text className="auth-subtitle">
+            加入 E-Mobility 企业平台
+          </Text>
         </div>
+
+        {/* Register Form */}
         <Form
           name="register"
           onFinish={onFinish}
           autoComplete="off"
           size="large"
+          className="auth-form"
         >
           <Form.Item
             name="email"
@@ -92,7 +110,10 @@ export default function RegisterPage() {
               { type: 'email', message: '请输入有效的邮箱地址' }
             ]}
           >
-            <Input prefix={<MailOutlined />} placeholder="邮箱" />
+            <Input
+              prefix={<MailOutlined />}
+              placeholder="工作邮箱"
+            />
           </Form.Item>
           <Form.Item
             name="password"
@@ -105,7 +126,10 @@ export default function RegisterPage() {
               }
             ]}
           >
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+            <Input.Password
+              prefix={<LockOutlined />}
+              placeholder="设置密码"
+            />
           </Form.Item>
           <Form.Item
             name="confirmPassword"
@@ -122,20 +146,58 @@ export default function RegisterPage() {
               })
             ]}
           >
-            <Input.Password prefix={<LockOutlined />} placeholder="确认密码" />
+            <Input.Password
+              prefix={<LockOutlined />}
+              placeholder="确认密码"
+            />
           </Form.Item>
-          <Form.Item>
+
+          {/* Password Requirements Hint */}
+          <div style={{
+            background: '#f9fafb',
+            borderRadius: 8,
+            padding: '12px 16px',
+            marginBottom: 20,
+            border: '1px solid #e5e7eb'
+          }}>
+            <Text style={{ fontSize: 12, color: '#6b7280' }}>
+              密码要求：至少8位，包含大写字母、小写字母和数字
+            </Text>
+          </div>
+
+          <Form.Item style={{ marginBottom: 16 }}>
             <Button type="primary" htmlType="submit" loading={loading} block>
               注册
             </Button>
           </Form.Item>
         </Form>
-        <div style={{ textAlign: 'center' }}>
-          <Text>已有账号？</Text>
-          <Link to="/login">立即登录</Link>
-        </div>
-      </Card>
 
+        {/* Divider */}
+        <div className="auth-divider">
+          <span>已有账号？</span>
+        </div>
+
+        {/* Login Link */}
+        <div style={{ textAlign: 'center' }}>
+          <Link to="/login" className="auth-link" style={{ fontSize: 15 }}>
+            立即登录
+          </Link>
+        </div>
+
+        {/* Footer */}
+        <div style={{
+          textAlign: 'center',
+          marginTop: 32,
+          paddingTop: 24,
+          borderTop: '1px solid #e5e7eb'
+        }}>
+          <Text style={{ color: '#9ca3af', fontSize: 12 }}>
+            注册即表示同意我们的服务条款和隐私政策
+          </Text>
+        </div>
+      </div>
+
+      {/* Email Verification Modal */}
       <Modal
         title="邮箱验证"
         open={verifyModalVisible}
@@ -144,26 +206,31 @@ export default function RegisterPage() {
         confirmLoading={loading}
         okText="验证"
         cancelText="取消"
+        centered
       >
-        <p style={{ marginBottom: 16 }}>
-          验证码已发送到 <strong>{verifyEmail}</strong>，请输入验证码完成注册：
-        </p>
-        <Input
-          placeholder="请输入6位验证码"
-          value={verifyCode}
-          onChange={(e) => setVerifyCode(e.target.value)}
-          maxLength={6}
-          style={{ marginBottom: 12 }}
-        />
-        <div style={{ textAlign: 'right' }}>
-          <Button
-            type="link"
-            onClick={handleResendCode}
-            loading={resendLoading}
-            style={{ padding: 0 }}
-          >
-            重新发送验证码
-          </Button>
+        <div style={{ padding: '8px 0' }}>
+          <Text style={{ color: '#6b7280', display: 'block', marginBottom: 16 }}>
+            验证码已发送到 <strong style={{ color: '#111827' }}>{verifyEmail}</strong>，
+            请输入验证码完成注册：
+          </Text>
+          <Input
+            placeholder="请输入6位验证码"
+            value={verifyCode}
+            onChange={(e) => setVerifyCode(e.target.value)}
+            maxLength={6}
+            size="large"
+            style={{ marginBottom: 12, borderRadius: 8 }}
+          />
+          <div style={{ textAlign: 'right' }}>
+            <Button
+              type="link"
+              onClick={handleResendCode}
+              loading={resendLoading}
+              style={{ padding: 0, fontSize: 14 }}
+            >
+              重新发送验证码
+            </Button>
+          </div>
         </div>
       </Modal>
     </div>

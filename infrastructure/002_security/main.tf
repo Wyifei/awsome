@@ -172,6 +172,15 @@ resource "aws_security_group" "aurora" {
     security_groups = [aws_security_group.eks_worker.id]
   }
 
+  # PostgreSQL from VPC (CloudShell VPC 环境、Bastion、调试等)
+  ingress {
+    description = "PostgreSQL from VPC"
+    from_port   = 5432
+    to_port     = 5432
+    protocol    = "tcp"
+    cidr_blocks = [var.vpc_cidr]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0

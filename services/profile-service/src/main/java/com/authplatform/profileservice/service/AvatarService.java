@@ -3,37 +3,23 @@ package com.authplatform.profileservice.service;
 import com.authplatform.profileservice.exception.AvatarUploadException;
 import com.authplatform.profileservice.logging.LogEvent;
 import com.authplatform.profileservice.metrics.BusinessMetrics;
-import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
-import software.amazon.awssdk.core.sync.RequestBody;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.IOException;
 import java.util.Set;
-import java.util.UUID;
 
+/**
+ * Avatar Service - handles avatar storage in database
+ */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AvatarService {
 
-    private final S3Client s3Client;
     private final BusinessMetrics businessMetrics;
-
-    @Value("${aws.s3.avatar-bucket}")
-    private String avatarBucket;
-
-    @Value("${aws.s3.avatar-prefix:avatars/}")
-    private String avatarPrefix;
-
-    @Value("${aws.cloudfront.domain:}")
-    private String cloudfrontDomain;
 
     private static final Set<String> ALLOWED_CONTENT_TYPES = Set.of(
         "image/jpeg",
@@ -45,93 +31,41 @@ public class AvatarService {
     private static final long MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
 
     /**
-     * Upload avatar to S3
+     * Validate and extract avatar data from uploaded file
      *
-     * @param userId User ID
-     * @param file   Avatar file
-     * @return Avatar URL
+     * @param file Avatar file
+     * @return Avatar data as byte array
      */
-    public String uploadAvatar(String userId, MultipartFile file) {
+    public byte[] processAvatar(MultipartFile file) {
         validateFile(file);
 
-        String contentType = file.getContentType();
-        String extension = getExtension(contentType);
-        String key = avatarPrefix + userId + "/" + UUID.randomUUID() + extension;
-
-        Timer.Sample sample = businessMetrics.startExternalCall();
-        boolean success = false;
-
         try {
-            PutObjectRequest putRequest = PutObjectRequest.builder()
-                    .bucket(avatarBucket)
-                    .key(key)
-                    .contentType(contentType)
-                    .build();
+            byte[] data = file.getBytes();
 
-            s3Client.putObject(putRequest, RequestBody.fromInputStream(file.getInputStream(), file.getSize()));
-            success = true;
-
-            String avatarUrl = buildAvatarUrl(key);
-
-            LogEvent.audit("AVATAR_UPLOADED")
-                .with("target_user_id", userId)
-                .with("avatar_key", key)
+            LogEvent.audit("AVATAR_PROCESSED")
                 .with("file_size", file.getSize())
-                .info("Avatar uploaded successfully");
+                .with("content_type", file.getContentType())
+                .info("Avatar processed successfully");
 
             businessMetrics.incrementAvatarUploaded();
 
-            return avatarUrl;
+            return data;
 
         } catch (IOException e) {
-            LogEvent.integration("S3_UPLOAD_FAILED")
-                .with("target_user_id", userId)
+            LogEvent.integration("AVATAR_PROCESS_FAILED")
                 .with("error_message", e.getMessage())
-                .error("Failed to upload avatar to S3", e);
+                .error("Failed to process avatar", e);
 
-            throw new AvatarUploadException("Failed to upload avatar", e);
-        } finally {
-            businessMetrics.recordExternalCall(sample, "s3", "putObject", success);
+            throw new AvatarUploadException("Failed to process avatar", e);
         }
     }
 
     /**
-     * Delete avatar from S3
+     * Validate uploaded file
      *
-     * @param avatarUrl Avatar URL to delete
+     * @param file File to validate
      */
-    public void deleteAvatar(String avatarUrl) {
-        if (avatarUrl == null || avatarUrl.isBlank()) {
-            return;
-        }
-
-        String key = extractKeyFromUrl(avatarUrl);
-        if (key == null) {
-            return;
-        }
-
-        Timer.Sample sample = businessMetrics.startExternalCall();
-        boolean success = false;
-
-        try {
-            DeleteObjectRequest deleteRequest = DeleteObjectRequest.builder()
-                    .bucket(avatarBucket)
-                    .key(key)
-                    .build();
-
-            s3Client.deleteObject(deleteRequest);
-            success = true;
-
-            log.debug("Avatar deleted: {}", key);
-
-        } catch (Exception e) {
-            log.warn("Failed to delete avatar: {}", key, e);
-        } finally {
-            businessMetrics.recordExternalCall(sample, "s3", "deleteObject", success);
-        }
-    }
-
-    private void validateFile(MultipartFile file) {
+    public void validateFile(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new AvatarUploadException("File is empty");
         }
@@ -146,30 +80,13 @@ public class AvatarService {
         }
     }
 
-    private String getExtension(String contentType) {
-        return switch (contentType) {
-            case "image/jpeg" -> ".jpg";
-            case "image/png" -> ".png";
-            case "image/gif" -> ".gif";
-            case "image/webp" -> ".webp";
-            default -> ".jpg";
-        };
-    }
-
-    private String buildAvatarUrl(String key) {
-        if (cloudfrontDomain != null && !cloudfrontDomain.isBlank()) {
-            return "https://" + cloudfrontDomain + "/" + key;
-        }
-        return "https://" + avatarBucket + ".s3.amazonaws.com/" + key;
-    }
-
-    private String extractKeyFromUrl(String url) {
-        if (url.contains(cloudfrontDomain)) {
-            return url.substring(url.indexOf(cloudfrontDomain) + cloudfrontDomain.length() + 1);
-        }
-        if (url.contains(".s3.amazonaws.com/")) {
-            return url.substring(url.indexOf(".s3.amazonaws.com/") + 18);
-        }
-        return null;
+    /**
+     * Check if content type is valid
+     *
+     * @param contentType Content type to check
+     * @return true if valid
+     */
+    public boolean isValidContentType(String contentType) {
+        return contentType != null && ALLOWED_CONTENT_TYPES.contains(contentType);
     }
 }
