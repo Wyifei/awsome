@@ -6,10 +6,11 @@
 
 - [概述](#概述)
 - [前置条件](#前置条件)
+- [部署脚本概览](#部署脚本概览)
+- [后端服务部署](#后端服务部署)
+- [前端部署](#前端部署)
 - [环境变量设置](#环境变量设置)
-- [构建流程](#构建流程)
-- [Docker 镜像](#docker-镜像)
-- [Kubernetes 部署](#kubernetes-部署)
+- [Kubernetes 部署详解](#kubernetes-部署详解)
 - [环境配置](#环境配置)
 - [CI/CD 集成](#cicd-集成)
 - [故障排除](#故障排除)
@@ -65,6 +66,12 @@ aws --version
 
 # kustomize (可选，kubectl 已内置)
 kustomize version
+
+# jq (JSON 解析)
+jq --version
+
+# envsubst (变量替换)
+envsubst --version
 ```
 
 ### AWS 配置
@@ -76,6 +83,182 @@ aws configure
 # 验证身份并获取 Account ID
 aws sts get-caller-identity
 ```
+
+## 部署脚本概览
+
+项目在 `scripts/` 目录下提供了以下部署脚本：
+
+| 脚本 | 用途 | 说明 |
+|------|------|------|
+| `build-backend.sh` | 构建后端服务 | Maven 构建、Docker 镜像构建和推送到 ECR |
+| `deploy-backend.sh` | 部署后端服务 | 从 Terraform 获取配置、创建 Secrets、部署到 EKS |
+| `deploy-frontend.sh` | 部署前端 | 生成环境变量、构建 React 应用、部署到 S3 + CloudFront |
+| `generate-frontend-env.sh` | 生成前端环境变量 | 单独生成 `.env.production` 文件（已集成到 deploy-frontend.sh） |
+
+### 快速部署命令
+
+```bash
+# 后端：构建并推送镜像
+./scripts/build-backend.sh -d -p --skip-tests -r $(aws sts get-caller-identity --query Account --output text) all
+
+# 后端：部署到 EKS（包含构建）
+./scripts/deploy-backend.sh -b --skip-tests all
+
+# 后端：仅部署（不构建）
+./scripts/deploy-backend.sh all
+
+# 前端：构建并部署
+./scripts/deploy-frontend.sh
+```
+
+## 后端服务部署
+
+### 使用 build-backend.sh 构建
+
+`build-backend.sh` 用于构建后端微服务的 JAR 包和 Docker 镜像。
+
+#### 完整参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-h, --help` | 显示帮助信息 | - |
+| `-c, --clean` | 构建前执行 clean | false |
+| `-s, --skip-tests` | 跳过单元测试 | false |
+| `-d, --docker` | 构建 Docker 镜像 | false |
+| `-p, --push` | 推送镜像到 ECR (需要 -d) | false |
+| `-e, --env ENV` | 环境 (dev/production) | production |
+| `-t, --tag TAG` | Docker 镜像标签 | latest |
+| `-r, --registry ID` | AWS Account ID | - |
+
+#### 常用命令
+
+```bash
+# 仅构建 JAR
+./scripts/build-backend.sh all
+
+# 构建并创建 Docker 镜像（本地）
+./scripts/build-backend.sh -d all
+
+# 构建并推送到 ECR
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+./scripts/build-backend.sh -d -p --skip-tests -r $AWS_ACCOUNT_ID all
+
+# 构建单个服务
+./scripts/build-backend.sh -d -p --skip-tests -r $AWS_ACCOUNT_ID user-service
+
+# 使用 Git commit hash 作为标签
+./scripts/build-backend.sh -d -p -r $AWS_ACCOUNT_ID -t $(git rev-parse --short HEAD) all
+```
+
+### 使用 deploy-backend.sh 部署
+
+`deploy-backend.sh` 用于部署后端服务到 EKS，支持自动获取 Terraform 配置和创建 Kubernetes Secrets。
+
+#### 完整参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-h, --help` | 显示帮助信息 | - |
+| `-b, --build` | 部署前构建并推送镜像 | false |
+| `-t, --tag TAG` | Docker 镜像标签 | latest |
+| `-e, --env ENV` | 环境 (dev/production) | production |
+| `-s, --skip-secrets` | 跳过创建 Secrets | false |
+| `-c, --create-secrets` | 仅创建 Secrets | false |
+| `-n, --dry-run` | 预览模式 | false |
+| `--skip-tests` | 构建时跳过测试 (需要 -b) | false |
+| `--region REGION` | AWS 区域 | ap-northeast-1 |
+
+#### 常用命令
+
+```bash
+# 部署所有服务（使用已有镜像）
+./scripts/deploy-backend.sh all
+
+# 构建并部署所有服务
+./scripts/deploy-backend.sh -b --skip-tests all
+
+# 部署单个服务
+./scripts/deploy-backend.sh user-service
+
+# 仅创建/更新 Secrets
+./scripts/deploy-backend.sh -c
+
+# 预览部署（不实际执行）
+./scripts/deploy-backend.sh -n all
+
+# 跳过 Secrets 创建（使用已有 Secrets）
+./scripts/deploy-backend.sh -s all
+```
+
+#### 部署流程
+
+`deploy-backend.sh` 会自动执行以下步骤：
+
+1. **获取 AWS 配置** - 从 AWS CLI 获取 Account ID、Region 等
+2. **获取 Terraform 输出** - 自动从 `infrastructure/` 目录获取：
+   - Aurora 数据库端点
+   - Cognito User Pool ID
+   - S3 头像存储桶
+   - CloudFront 域名
+   - IRSA 角色 ARN
+   - SES 发件人邮箱
+3. **获取数据库密码** - 从 Secrets Manager (RDS 管理的 Secret) 获取
+4. **创建 Kubernetes Secrets** - 为每个服务创建配置 Secret
+5. **构建镜像** (可选) - 如果指定了 `-b` 参数
+6. **部署到 EKS** - 使用 Kustomize 部署服务
+
+## 前端部署
+
+### 使用 deploy-frontend.sh 部署
+
+`deploy-frontend.sh` 用于构建 React 前端应用并部署到 S3 + CloudFront。
+
+#### 完整参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `-h, --help` | 显示帮助信息 | - |
+| `-s, --skip-build` | 跳过构建，直接上传 dist | false |
+| `-n, --no-invalidate` | 跳过 CloudFront 缓存失效 | false |
+| `-d, --dry-run` | 预览模式 | false |
+
+#### 常用命令
+
+```bash
+# 完整部署（构建 + 上传 + 缓存失效）
+./scripts/deploy-frontend.sh
+
+# 仅上传已构建的文件
+./scripts/deploy-frontend.sh --skip-build
+
+# 预览部署操作
+./scripts/deploy-frontend.sh --dry-run
+```
+
+#### 部署流程
+
+`deploy-frontend.sh` 会自动执行以下步骤：
+
+1. **获取基础设施信息** - 从 Terraform 输出获取 S3 Bucket、CloudFront Distribution、Cognito 配置
+2. **生成环境变量** - 自动生成 `.env.production` 文件（包含 Cognito 和 API 配置）
+3. **安装依赖** - `npm install`
+4. **构建应用** - `npm run build`
+5. **上传到 S3** - 使用 `aws s3 sync` 同步 `dist/` 目录
+6. **清除 CDN 缓存** - 创建 CloudFront 缓存失效
+
+### 单独生成环境变量（可选）
+
+如果只需要生成环境变量文件而不部署：
+
+```bash
+./scripts/generate-frontend-env.sh
+```
+
+生成的 `.env.production` 文件包含：
+- `VITE_COGNITO_USER_POOL_ID` - Cognito 用户池 ID
+- `VITE_COGNITO_CLIENT_ID` - Cognito 客户端 ID
+- `VITE_COGNITO_DOMAIN` - Cognito 域名
+- `VITE_API_BASE_URL` - API 基础 URL（通过 CloudFront 代理）
 
 ## 环境变量设置
 
@@ -127,7 +310,6 @@ export DB_USERNAME="postgres"
 
 # 需要手动设置的值
 export DB_PASSWORD="<从 Secrets Manager 获取>"
-export INTERNAL_API_KEY="$(openssl rand -hex 32)"  # 自动生成安全 API Key
 export SES_FROM_ADDRESS="noreply@your-domain.com"
 
 # 验证变量
@@ -137,7 +319,11 @@ echo "S3 Avatars Bucket: $S3_AVATARS_BUCKET"
 echo "CloudFront Domain: $CLOUDFRONT_DOMAIN"
 ```
 
-### 步骤 3: 保存环境变量文件
+### 步骤 3: 保存环境变量文件（可选）
+
+> **推荐**: 使用 `deploy-backend.sh` 脚本会自动获取所有配置，无需手动设置环境变量。
+
+如需手动设置环境变量：
 
 ```bash
 cat > ~/.auth-platform-env << EOF
@@ -160,7 +346,6 @@ export CLOUDFRONT_DOMAIN="${CLOUDFRONT_DOMAIN}"
 
 # Secrets (请替换为实际值)
 export DB_PASSWORD="<your-db-password>"
-export INTERNAL_API_KEY="<your-internal-api-key>"
 export SES_FROM_ADDRESS="${SES_FROM_ADDRESS:-noreply@example.com}"
 EOF
 
@@ -210,70 +395,11 @@ echo "DB_PASSWORD: $DB_PASSWORD"
 > 在创建 Kubernetes Secret 时，建议使用 `kubectl create secret` 命令而不是通过 kustomize 的 envsubst 替换，
 > 以避免 shell 转义问题。
 
-## 构建流程
+## 手动构建
 
-### 使用构建脚本
-
-项目提供了统一的构建脚本 `scripts/build.sh`。
-
-#### 基本用法
+如果需要手动构建（不使用脚本）：
 
 ```bash
-# 加载环境变量
-source ~/.auth-platform-env
-
-# 构建所有服务
-./scripts/build.sh
-
-# 构建指定服务
-./scripts/build.sh user-service
-
-# 清理后构建，跳过测试
-./scripts/build.sh -c -s all
-```
-
-#### 完整参数
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| `-h, --help` | 显示帮助信息 | - |
-| `-c, --clean` | 构建前执行 clean | false |
-| `-s, --skip-tests` | 跳过单元测试 | false |
-| `-d, --docker` | 构建 Docker 镜像 | false |
-| `-p, --push` | 推送镜像到 ECR | false |
-| `-e, --env` | 环境 (dev/production) | production |
-| `-t, --tag` | Docker 镜像标签 | latest |
-| `-r, --registry` | AWS Account ID (仅数字，如 123456789012) | - |
-| `--region` | AWS 区域 | ap-northeast-1 |
-
-#### 常用命令
-
-```bash
-# 加载环境变量
-source ~/.auth-platform-env
-
-# 仅构建 JAR
-./scripts/build.sh -c all
-
-# 构建并创建 Docker 镜像 (本地)
-./scripts/build.sh -d -t v1.0.0 all
-
-# 构建并推送到 ECR (Production)
-./scripts/build.sh -d -p -e production -r $AWS_ACCOUNT_ID -t v1.0.0 all
-
-# 构建并推送到 ECR (Dev)
-./scripts/build.sh -d -p -e dev -r $AWS_ACCOUNT_ID -t dev-latest all
-
-# 使用 Git commit hash 作为标签
-./scripts/build.sh -d -p -e production -r $AWS_ACCOUNT_ID -t $(git rev-parse --short HEAD) all
-```
-
-### 手动构建
-
-```bash
-# 加载环境变量
-source ~/.auth-platform-env
-
 # 进入服务目录
 cd services/user-service
 
@@ -281,7 +407,7 @@ cd services/user-service
 mvn clean package -DskipTests
 
 # 构建 Docker 镜像
-docker build -t user-service:v1.0.0 .
+docker build -t user-service:latest .
 ```
 
 ## Docker 镜像
@@ -338,7 +464,7 @@ aws ecr describe-images \
   --output table
 ```
 
-## Kubernetes 部署
+## Kubernetes 部署详解
 
 ### 配置 kubectl
 
@@ -389,7 +515,7 @@ IMAGE_TAG="v1.0.0"
 
 # 使用 envsubst 进行变量替换 (支持密码中的特殊字符)
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${SES_FROM_ADDRESS}'
 
 # 部署所有服务
 for SERVICE in user-service profile-service notification-service; do
@@ -413,7 +539,7 @@ kubectl rollout status deployment/notification-service -n auth-platform
 source ~/.auth-platform-env
 
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${SES_FROM_ADDRESS}'
 
 # 部署 user-service
 kustomize build services/user-service/kustomize/overlays/production | \
@@ -449,7 +575,7 @@ cd -
 source ~/.auth-platform-env
 
 # 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
+export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${SES_FROM_ADDRESS}'
 
 # 部署所有服务到 dev
 for SERVICE in user-service profile-service notification-service; do
@@ -532,7 +658,20 @@ pkill -f "port-forward.*user-service"
 > **重要**: 由于数据库密码可能包含特殊字符，**强烈建议**使用 `kubectl create secret` 命令直接创建 Secrets，
 > 而不是通过 kustomize 的变量替换 (envsubst)。
 
-#### 推荐方式：直接创建 Secrets
+#### 推荐方式：使用 deploy-backend.sh 自动创建 Secrets
+
+推荐使用 `deploy-backend.sh` 脚本自动创建 Secrets：
+
+```bash
+# 仅创建/更新 Secrets
+./scripts/deploy-backend.sh -c
+```
+
+脚本会自动从 Terraform 输出和 Secrets Manager 获取所有必要的配置值。
+
+#### 手动创建 Secrets
+
+如需手动创建 Secrets：
 
 ```bash
 # 首先从 RDS 管理的 Secret 获取凭证
@@ -546,16 +685,13 @@ DB_PASSWORD=$(aws secretsmanager get-secret-value \
   --region ap-northeast-1 \
   --query SecretString --output text | jq -r '.password')
 
-INTERNAL_API_KEY=$(openssl rand -hex 32)
-
 # 创建 user-service Secret
 kubectl delete secret user-service-secret -n auth-platform 2>/dev/null || true
 kubectl create secret generic user-service-secret -n auth-platform \
   --from-literal=DB_HOST='auth-platform-production-aurora.cluster-xxxxxx.ap-northeast-1.rds.amazonaws.com' \
   --from-literal=DB_USERNAME='postgres' \
   --from-literal=DB_PASSWORD="$DB_PASSWORD" \
-  --from-literal=COGNITO_USER_POOL_ID='ap-northeast-1_xxxxxxxx' \
-  --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY"
+  --from-literal=COGNITO_USER_POOL_ID='ap-northeast-1_xxxxxxxx'
 
 # 创建 profile-service Secret
 kubectl delete secret profile-service-secret -n auth-platform 2>/dev/null || true
@@ -574,7 +710,6 @@ echo "SES From Address: $SES_FROM_ADDRESS"
 # 创建 notification-service Secret
 kubectl delete secret notification-service-secret -n auth-platform 2>/dev/null || true
 kubectl create secret generic notification-service-secret -n auth-platform \
-  --from-literal=INTERNAL_API_KEY="$INTERNAL_API_KEY" \
   --from-literal=SES_FROM_ADDRESS="$SES_FROM_ADDRESS" \
   --from-literal=SES_FROM_NAME='Auth Platform'
 
@@ -929,39 +1064,30 @@ terraform output cognito_user_pool_client_id
 
 ### 快速参考
 
+#### 一键部署所有后端服务
+
 ```bash
-# 一键部署脚本
-cat > deploy-all.sh << 'EOF'
-#!/bin/bash
-set -e
+# 使用 deploy-backend.sh 构建并部署所有服务
+./scripts/deploy-backend.sh -b --skip-tests all
+```
 
-# 加载环境变量
-source ~/.auth-platform-env
+#### 一键部署前端
 
-# 定义需要替换的变量列表
-export ENVSUBST_VARS='${AWS_ACCOUNT_ID} ${APP_SERVICE_ROLE_ARN} ${AURORA_CLUSTER_ENDPOINT} ${DB_PASSWORD} ${COGNITO_USER_POOL_ID} ${S3_AVATARS_BUCKET} ${CLOUDFRONT_DOMAIN} ${INTERNAL_API_KEY} ${SES_FROM_ADDRESS}'
+```bash
+./scripts/deploy-frontend.sh
+```
 
-echo "Building and pushing images..."
-./scripts/build.sh -d -p -e production -r $AWS_ACCOUNT_ID -t $(git rev-parse --short HEAD) all
+#### 完整部署流程
 
-echo "Deploying to EKS..."
-for SERVICE in user-service profile-service notification-service; do
-  echo "  - Deploying $SERVICE..."
-  kustomize build services/${SERVICE}/kustomize/overlays/production | \
-    envsubst "$ENVSUBST_VARS" | \
-    kubectl apply -f -
-done
+```bash
+# 1. 部署后端（构建镜像 + 创建 Secrets + 部署到 EKS）
+./scripts/deploy-backend.sh -b --skip-tests all
 
-echo "Waiting for rollout..."
-for SERVICE in user-service profile-service notification-service; do
-  kubectl rollout status deployment/${SERVICE} -n auth-platform --timeout=300s
-done
+# 2. 部署前端（构建 + 上传 S3 + 清除 CDN 缓存）
+./scripts/deploy-frontend.sh
 
-echo "Deployment complete!"
+# 3. 验证部署
 kubectl get pods -n auth-platform
-EOF
-
-chmod +x deploy-all.sh
 ```
 
 ### 环境变量完整列表
@@ -976,5 +1102,6 @@ chmod +x deploy-all.sh
 | `COGNITO_USER_POOL_ID` | `terraform output cognito_user_pool_id` | Cognito User Pool ID |
 | `S3_AVATARS_BUCKET` | `terraform output s3_avatars_bucket` | 头像存储桶名称 |
 | `CLOUDFRONT_DOMAIN` | `terraform output cloudfront_domain_name` | CloudFront 域名 |
-| `INTERNAL_API_KEY` | 手动生成 | 服务间通信 API Key |
 | `SES_FROM_ADDRESS` | terraform.tfvars | SES 发件人邮箱（必须是有效的邮箱格式） |
+
+> **注意**: 头像现在存储在 PostgreSQL 数据库中，不再使用 S3。`S3_AVATARS_BUCKET` 配置已废弃。

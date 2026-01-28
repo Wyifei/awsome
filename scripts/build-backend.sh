@@ -7,7 +7,7 @@
 # It supports building individual services or all services at once.
 #
 # Usage:
-#   ./scripts/build.sh [OPTIONS] [SERVICE...]
+#   ./scripts/build-backend.sh [OPTIONS] [SERVICE...]
 #
 # Options:
 #   -h, --help          Show this help message
@@ -23,11 +23,11 @@
 #   user-service, profile-service, notification-service, all (default)
 #
 # Examples:
-#   ./scripts/build.sh                              # Build all services
-#   ./scripts/build.sh user-service                 # Build only user-service
-#   ./scripts/build.sh -c -s all                    # Clean build all, skip tests
-#   ./scripts/build.sh -d -t v1.0.0 all             # Build all with Docker images
-#   ./scripts/build.sh -d -p -r $AWS_ACCOUNT_ID all # Build and push to ECR
+#   ./scripts/build-backend.sh                              # Build all services
+#   ./scripts/build-backend.sh user-service                 # Build only user-service
+#   ./scripts/build-backend.sh -c -s all                    # Clean build all, skip tests
+#   ./scripts/build-backend.sh -d -t v1.0.0 all             # Build all with Docker images
+#   ./scripts/build-backend.sh -d -p -r $AWS_ACCOUNT_ID all # Build and push to ECR
 # ==============================================================================
 
 set -e

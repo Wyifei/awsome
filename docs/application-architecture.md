@@ -381,7 +381,8 @@ User Service
 │   └── 管理 status (ACTIVE/INACTIVE/SUSPENDED)
 │
 ├── 账户删除
-│   ├── 用户自助注销
+│   ├── 发送账号注销验证码
+│   ├── 验证注销验证码后删除账户
 │   └── 调用 Notification Service 发送删除通知邮件
 │
 └── 密码修改
@@ -551,6 +552,41 @@ Response:
     "data": null,
     "timestamp": "2024-01-28T10:30:00Z"
   }
+
+# 发送账号注销验证码
+POST /api/users/delete-account/send-code
+Headers:
+  Authorization: Bearer {access_token}
+Request:
+  {
+    "email": "user@example.com"
+  }
+Response:
+  {
+    "success": true,
+    "code": "DELETE_CODE_SENT",
+    "message": "验证码已发送到您的邮箱",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
+  }
+
+# 确认注销账号
+POST /api/users/delete-account/confirm
+Headers:
+  Authorization: Bearer {access_token}
+Request:
+  {
+    "email": "user@example.com",
+    "code": "123456"
+  }
+Response:
+  {
+    "success": true,
+    "code": "ACCOUNT_DELETED",
+    "message": "账户已成功删除",
+    "data": null,
+    "timestamp": "2024-01-28T10:30:00Z"
+  }
 ```
 
 ### 4.4 统一响应格式
@@ -587,6 +623,7 @@ Response:
 | RESET_CODE_SENT | 200 | 密码重置验证码已发送 |
 | PASSWORD_RESET | 200 | 密码重置成功 |
 | PASSWORD_CHANGED | 200 | 密码已修改 |
+| DELETE_CODE_SENT | 200 | 账号注销验证码已发送 |
 | ACCOUNT_DELETED | 200 | 账户已删除 |
 | USER_NOT_FOUND | 404 | 用户不存在 |
 | EMAIL_ALREADY_EXISTS | 409 | 邮箱已被注册 |
@@ -614,6 +651,7 @@ user-service/
 │   │   └── AuthController.java         # 注册/验证 API (/api/users/register等)
 │   │
 │   ├── service/
+│   │   ├── AuthService.java            # 注册/验证业务逻辑
 │   │   ├── UserService.java            # 用户业务逻辑
 │   │   ├── VerificationCodeService.java # 验证码管理
 │   │   └── CognitoService.java         # Cognito 操作封装
@@ -636,6 +674,8 @@ user-service/
 │   │   ├── ForgotPasswordRequest.java  # 忘记密码请求
 │   │   ├── ResetPasswordRequest.java   # 重置密码请求
 │   │   ├── ChangePasswordRequest.java  # 修改密码请求
+│   │   ├── DeleteAccountSendCodeRequest.java  # 发送注销验证码请求
+│   │   ├── DeleteAccountConfirmRequest.java   # 确认注销账号请求
 │   │   └── ApiResponse.java            # 统一响应格式
 │   │
 │   ├── exception/
@@ -667,12 +707,11 @@ user-service/
 ```java
 // AuthController.java - 注册/验证相关 API (无需认证)
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/users")
 @RequiredArgsConstructor
-@Slf4j
 public class AuthController {
 
-    private final UserService userService;
+    private final AuthService authService;
 
     /**
      * 用户注册
@@ -680,10 +719,16 @@ public class AuthController {
     @PostMapping("/register")
     public ResponseEntity<ApiResponse<Map<String, String>>> register(
             @Valid @RequestBody RegisterRequest request) {
-        String userId = userService.register(request.getEmail(), request.getPassword(), request.getNickname());
-        return ResponseEntity.ok(ApiResponse.success("REGISTRATION_PENDING",
-            "注册成功，请查收验证码邮件",
-            Map.of("userId", userId, "email", request.getEmail())));
+        Map<String, String> result = authService.register(
+                request.getEmail(),
+                request.getPassword(),
+                request.getNickname()
+        );
+        return ResponseEntity.ok(ApiResponse.success(
+                "REGISTRATION_PENDING",
+                "注册成功，请查收验证码邮件",
+                result
+        ));
     }
 
     /**
@@ -692,7 +737,7 @@ public class AuthController {
     @PostMapping("/verify-email")
     public ResponseEntity<ApiResponse<Void>> verifyEmail(
             @Valid @RequestBody VerifyEmailRequest request) {
-        userService.verifyEmail(request.getEmail(), request.getCode());
+        authService.verifyEmail(request.getEmail(), request.getCode());
         return ResponseEntity.ok(ApiResponse.success("EMAIL_VERIFIED", "邮箱验证成功", null));
     }
 
@@ -702,7 +747,7 @@ public class AuthController {
     @PostMapping("/resend-verification")
     public ResponseEntity<ApiResponse<Void>> resendVerification(
             @RequestBody Map<String, String> request) {
-        userService.resendVerificationCode(request.get("email"));
+        authService.resendVerificationCode(request.get("email"));
         return ResponseEntity.ok(ApiResponse.success("VERIFICATION_SENT", "验证码已发送", null));
     }
 
@@ -712,7 +757,7 @@ public class AuthController {
     @PostMapping("/forgot-password")
     public ResponseEntity<ApiResponse<Void>> forgotPassword(
             @Valid @RequestBody ForgotPasswordRequest request) {
-        userService.forgotPassword(request.getEmail());
+        authService.forgotPassword(request.getEmail());
         return ResponseEntity.ok(ApiResponse.success("RESET_CODE_SENT", "密码重置验证码已发送", null));
     }
 
@@ -722,7 +767,11 @@ public class AuthController {
     @PostMapping("/reset-password")
     public ResponseEntity<ApiResponse<Void>> resetPassword(
             @Valid @RequestBody ResetPasswordRequest request) {
-        userService.resetPassword(request.getEmail(), request.getCode(), request.getNewPassword());
+        authService.resetPassword(
+                request.getEmail(),
+                request.getCode(),
+                request.getNewPassword()
+        );
         return ResponseEntity.ok(ApiResponse.success("PASSWORD_RESET", "密码重置成功", null));
     }
 }
@@ -731,7 +780,7 @@ public class AuthController {
 ```java
 // UserController.java - 已认证用户 API
 @RestController
-@RequestMapping("/api/users")
+@RequestMapping("/users")
 @RequiredArgsConstructor
 public class UserController {
 
@@ -741,22 +790,13 @@ public class UserController {
      * 获取当前用户身份信息
      */
     @GetMapping("/me")
-    public ResponseEntity<ApiResponse<UserDto>> getCurrentUser(
-            @AuthenticationPrincipal Jwt jwt) {
+    public ApiResponse<UserDto> getCurrentUser(@AuthenticationPrincipal Jwt jwt) {
         String userId = jwt.getSubject();
-        UserDto user = userService.getUser(userId);
-        return ResponseEntity.ok(ApiResponse.success(user));
-    }
-
-    /**
-     * 删除当前用户账户
-     */
-    @DeleteMapping("/me")
-    public ResponseEntity<ApiResponse<Void>> deleteCurrentUser(
-            @AuthenticationPrincipal Jwt jwt) {
-        String userId = jwt.getSubject();
-        userService.deleteUser(userId);
-        return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
+        String username = jwt.getClaimAsString("cognito:username");
+        String email = jwt.getClaimAsString("email");
+        Boolean emailVerified = jwt.getClaimAsBoolean("email_verified");
+        UserDto user = userService.createOrUpdateUser(userId, username, email, emailVerified, null);
+        return ApiResponse.success(user);
     }
 
     /**
@@ -770,6 +810,40 @@ public class UserController {
         String accessToken = jwt.getTokenValue();
         userService.changePassword(userId, accessToken, request.getOldPassword(), request.getNewPassword());
         return ResponseEntity.ok(ApiResponse.success("PASSWORD_CHANGED", "密码修改成功", null));
+    }
+
+    /**
+     * 删除当前用户账户 (直接删除)
+     */
+    @DeleteMapping("/me")
+    public ResponseEntity<ApiResponse<Void>> deleteCurrentUser(@AuthenticationPrincipal Jwt jwt) {
+        String userId = jwt.getSubject();
+        userService.deleteUser(userId, "USER_REQUEST");
+        return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
+    }
+
+    /**
+     * 发送账号注销验证码
+     */
+    @PostMapping("/delete-account/send-code")
+    public ResponseEntity<ApiResponse<Void>> sendDeleteAccountCode(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody DeleteAccountSendCodeRequest request) {
+        String userId = jwt.getSubject();
+        userService.sendDeleteAccountCode(userId, request.getEmail());
+        return ResponseEntity.ok(ApiResponse.success("DELETE_CODE_SENT", "验证码已发送到您的邮箱", null));
+    }
+
+    /**
+     * 确认注销账号
+     */
+    @PostMapping("/delete-account/confirm")
+    public ResponseEntity<ApiResponse<Void>> confirmDeleteAccount(
+            @AuthenticationPrincipal Jwt jwt,
+            @Valid @RequestBody DeleteAccountConfirmRequest request) {
+        String userId = jwt.getSubject();
+        userService.confirmDeleteAccount(userId, request.getEmail(), request.getCode());
+        return ResponseEntity.ok(ApiResponse.success("ACCOUNT_DELETED", "账户已成功删除", null));
     }
 }
 ```
@@ -1003,7 +1077,7 @@ public class VerificationCodeService {
 |------|-----|
 | 服务名称 | profile-service |
 | 部署位置 | EKS |
-| 技术栈 | Spring Boot 3.2 + Spring Data JPA + AWS S3 SDK |
+| 技术栈 | Spring Boot 3.2 + Spring Data JPA |
 | 端口 | 8080 |
 | API 前缀 | /api/profiles |
 
@@ -1015,11 +1089,13 @@ public class VerificationCodeService {
 Profile Service
 ├── 资料管理
 │   ├── 获取当前用户资料
-│   └── 更新用户资料 (nickname, gender, birthday, address)
+│   ├── 更新用户资料 (nickname, gender, birthday, address)
+│   └── 调用 Notification Service 发送资料修改通知邮件
 │
 ├── 头像管理
 │   ├── 上传头像文件 (验证类型、大小)
-│   ├── 存储到 S3
+│   ├── 存储到数据库 (avatar_data BYTEA 字段)
+│   ├── 获取头像图片 (公开 API，无需认证)
 │   └── 删除头像
 │
 └── 偏好设置（预留）
@@ -1028,7 +1104,9 @@ Profile Service
 
 **管理的数据字段**：
 - nickname
-- avatar (S3 URL)
+- avatar (头像 API URL)
+- avatar_data (头像二进制数据)
+- avatar_content_type (头像 MIME 类型)
 - gender
 - birthday
 - address
@@ -1108,7 +1186,8 @@ Response:
     "code": "AVATAR_UPLOADED",
     "message": "头像上传成功",
     "data": {
-      "avatarUrl": "https://cdn.xxx.com/avatars/user-id/uuid.jpg"
+      "success": true,
+      "avatarUrl": "/api/profiles/{userId}/avatar/image"
     },
     "timestamp": "2024-01-28T10:30:00Z"
   }
@@ -1125,6 +1204,15 @@ Response:
     "data": null,
     "timestamp": "2024-01-28T10:30:00Z"
   }
+
+# 获取头像图片 (公开 API，无需认证)
+GET /api/profiles/{userId}/avatar/image
+Response:
+  Content-Type: image/jpeg|image/png|image/gif|image/webp
+  Cache-Control: max-age=3600, public
+  Body: (binary image data)
+
+# 头像不存在时返回 404
 ```
 
 ### 5.4 统一响应格式
@@ -1170,11 +1258,13 @@ CREATE TABLE users (
     phone_number            VARCHAR(20),
     email_verified          BOOLEAN DEFAULT FALSE,
     phone_number_verified   BOOLEAN DEFAULT FALSE,
-    status                  VARCHAR(20) DEFAULT 'ACTIVE',
+    status                  VARCHAR(20) DEFAULT 'ACTIVE',  -- PENDING_VERIFICATION/ACTIVE/INACTIVE/SUSPENDED
 
     -- Profile 字段 (profile-service 管理)
     nickname                VARCHAR(64),
-    avatar                  VARCHAR(512),             -- S3 URL
+    avatar                  VARCHAR(512),             -- 头像 API URL
+    avatar_data             BYTEA,                    -- 头像二进制数据
+    avatar_content_type     VARCHAR(100),             -- 头像 MIME 类型
     gender                  VARCHAR(10),              -- MALE/FEMALE/OTHER
     birthday                DATE,
     address                 VARCHAR(256),
@@ -1193,7 +1283,7 @@ CREATE TABLE verification_codes (
     id              BIGSERIAL PRIMARY KEY,
     email           VARCHAR(255) NOT NULL,
     code            VARCHAR(6) NOT NULL,
-    type            VARCHAR(20) NOT NULL,        -- EMAIL_VERIFICATION / PASSWORD_RESET
+    type            VARCHAR(20) NOT NULL,        -- EMAIL_VERIFICATION / PASSWORD_RESET / ACCOUNT_DELETION
     expires_at      TIMESTAMP NOT NULL,
     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -1218,15 +1308,17 @@ profile-service/
 │   ├── ProfileServiceApplication.java
 │   │
 │   ├── config/
-│   │   ├── SecurityConfig.java         # OAuth2 JWT 安全配置
-│   │   └── S3Config.java               # AWS S3 客户端配置
+│   │   └── SecurityConfig.java         # OAuth2 JWT 安全配置
 │   │
 │   ├── controller/
 │   │   └── ProfileController.java      # 用户资料 API (/api/profiles)
 │   │
+│   ├── client/
+│   │   └── NotificationServiceClient.java # Notification Service 调用
+│   │
 │   ├── service/
 │   │   ├── ProfileService.java         # 资料管理业务逻辑
-│   │   └── AvatarService.java          # S3 头像上传/删除
+│   │   └── AvatarService.java          # 头像处理/验证
 │   │
 │   ├── repository/
 │   │   └── UserProfileRepository.java
@@ -1265,7 +1357,7 @@ profile-service/
 ```java
 // ProfileController.java
 @RestController
-@RequestMapping("/api/v1/profiles")
+@RequestMapping("/profiles")
 @RequiredArgsConstructor
 public class ProfileController {
 
@@ -1275,47 +1367,72 @@ public class ProfileController {
      * 获取当前用户资料
      */
     @GetMapping("/me")
-    public ResponseEntity<ApiResponse<ProfileResponse>> getProfile(
-            @AuthenticationPrincipal Jwt jwt) {
+    public ApiResponse<ProfileResponse> getCurrentProfile(@AuthenticationPrincipal Jwt jwt) {
         String userId = jwt.getSubject();
         ProfileResponse profile = profileService.getProfile(userId);
-        return ResponseEntity.ok(ApiResponse.success(profile));
+        return ApiResponse.success(profile);
     }
 
     /**
      * 更新用户资料
      */
     @PutMapping("/me")
-    public ResponseEntity<ApiResponse<ProfileResponse>> updateProfile(
+    public ApiResponse<ProfileResponse> updateProfile(
             @AuthenticationPrincipal Jwt jwt,
             @Valid @RequestBody UpdateProfileRequest request) {
         String userId = jwt.getSubject();
         ProfileResponse profile = profileService.updateProfile(userId, request);
-        return ResponseEntity.ok(ApiResponse.success("PROFILE_UPDATED", "资料更新成功", profile));
+        return ApiResponse.success("PROFILE_UPDATED", "资料更新成功", profile);
     }
 
     /**
-     * 上传头像
+     * 上传头像 (存储到数据库)
      */
     @PostMapping(value = "/me/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ResponseEntity<ApiResponse<AvatarResponse>> uploadAvatar(
+    public ApiResponse<AvatarResponse> uploadAvatar(
             @AuthenticationPrincipal Jwt jwt,
             @RequestParam("file") MultipartFile file) {
         String userId = jwt.getSubject();
         String avatarUrl = profileService.uploadAvatar(userId, file);
-        return ResponseEntity.ok(ApiResponse.success("AVATAR_UPLOADED", "头像上传成功",
-            new AvatarResponse(true, avatarUrl)));
+        AvatarResponse response = AvatarResponse.builder()
+                .success(true)
+                .avatarUrl(avatarUrl)
+                .build();
+        return ApiResponse.success("AVATAR_UPLOADED", "头像上传成功", response);
     }
 
     /**
      * 删除头像
      */
     @DeleteMapping("/me/avatar")
-    public ResponseEntity<ApiResponse<Void>> deleteAvatar(
-            @AuthenticationPrincipal Jwt jwt) {
+    public ApiResponse<Void> deleteAvatar(@AuthenticationPrincipal Jwt jwt) {
         String userId = jwt.getSubject();
         profileService.deleteAvatar(userId);
-        return ResponseEntity.ok(ApiResponse.success("AVATAR_DELETED", "头像删除成功", null));
+        return ApiResponse.success("AVATAR_DELETED", "头像删除成功", null);
+    }
+
+    /**
+     * 获取头像图片 (公开 API，无需认证)
+     * 配置为 SecurityConfig 中的 permitAll
+     */
+    @GetMapping(value = "/{userId}/avatar/image",
+            produces = {MediaType.IMAGE_JPEG_VALUE, MediaType.IMAGE_PNG_VALUE,
+                       MediaType.IMAGE_GIF_VALUE, "image/webp"})
+    public ResponseEntity<byte[]> getAvatarImage(@PathVariable String userId) {
+        ProfileService.AvatarData avatarData = profileService.getAvatarData(userId);
+
+        if (avatarData == null || avatarData.data() == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        MediaType mediaType = MediaType.parseMediaType(
+            avatarData.contentType() != null ? avatarData.contentType() : MediaType.IMAGE_JPEG_VALUE
+        );
+
+        return ResponseEntity.ok()
+                .contentType(mediaType)
+                .cacheControl(CacheControl.maxAge(1, TimeUnit.HOURS).cachePublic())
+                .body(avatarData.data());
     }
 }
 ```
@@ -1324,25 +1441,26 @@ public class ProfileController {
 // ProfileService.java
 @Service
 @RequiredArgsConstructor
-@Transactional
 @Slf4j
 public class ProfileService {
 
     private final UserProfileRepository profileRepository;
     private final AvatarService avatarService;
-    private final BusinessMetrics metrics;
+    private final BusinessMetrics businessMetrics;
+    private final NotificationServiceClient notificationClient;
 
     public ProfileResponse getProfile(String userId) {
         UserProfile profile = profileRepository.findById(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
+            .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
-        metrics.incrementProfileFetched();
-        return toProfileResponse(profile);
+        businessMetrics.incrementProfileFetched();
+        return mapToResponse(profile);
     }
 
+    @Transactional
     public ProfileResponse updateProfile(String userId, UpdateProfileRequest request) {
         UserProfile profile = profileRepository.findById(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
+            .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
         List<String> updatedFields = new ArrayList<>();
 
@@ -1351,7 +1469,7 @@ public class ProfileService {
             updatedFields.add("nickname");
         }
         if (request.getGender() != null) {
-            profile.setGender(Gender.valueOf(request.getGender()));
+            profile.setGender(UserProfile.Gender.valueOf(request.getGender().toUpperCase()));
             updatedFields.add("gender");
         }
         if (request.getBirthday() != null) {
@@ -1363,47 +1481,73 @@ public class ProfileService {
             updatedFields.add("address");
         }
 
-        profileRepository.save(profile);
+        profile = profileRepository.save(profile);
 
-        // 记录指标
-        updatedFields.forEach(metrics::incrementProfileUpdated);
-
-        log.info("Profile updated: userId={}, fields={}", userId, updatedFields);
-        return toProfileResponse(profile);
-    }
-
-    public String uploadAvatar(String userId, MultipartFile file) {
-        UserProfile profile = profileRepository.findById(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
-
-        // 删除旧头像
-        if (profile.getAvatar() != null) {
-            avatarService.deleteAvatar(profile.getAvatar());
+        if (!updatedFields.isEmpty()) {
+            businessMetrics.incrementProfileUpdated(updatedFields.toArray(new String[0]));
+            // 发送资料更新通知邮件
+            notificationClient.sendProfileUpdatedEmail(profile.getEmail(), profile.getNickname(), updatedFields);
         }
 
-        // 上传新头像到 S3
-        String avatarUrl = avatarService.uploadAvatar(userId, file);
+        log.info("Profile updated: userId={}, fields={}", userId, updatedFields);
+        return mapToResponse(profile);
+    }
 
+    /**
+     * 上传头像 - 存储到数据库
+     */
+    @Transactional
+    public String uploadAvatar(String userId, MultipartFile file) {
+        UserProfile profile = profileRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+
+        // 处理并验证头像
+        byte[] avatarData = avatarService.processAvatar(file);
+        String contentType = file.getContentType();
+
+        // 存储到数据库
+        profile.setAvatarData(avatarData);
+        profile.setAvatarContentType(contentType);
+        String avatarUrl = "/api/profiles/" + userId + "/avatar/image";
         profile.setAvatar(avatarUrl);
         profileRepository.save(profile);
 
-        metrics.incrementAvatarUploaded();
-        log.info("Avatar uploaded: userId={}, url={}", userId, avatarUrl);
-
+        log.info("Avatar uploaded to database: userId={}, size={}", userId, avatarData.length);
         return avatarUrl;
     }
 
+    /**
+     * 获取头像数据（用于服务端返回）
+     */
+    @Transactional(readOnly = true)
+    public AvatarData getAvatarData(String userId) {
+        UserProfile profile = profileRepository.findById(userId)
+            .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
+
+        if (profile.getAvatarData() == null) {
+            return null;
+        }
+        return new AvatarData(profile.getAvatarData(), profile.getAvatarContentType());
+    }
+
+    @Transactional
     public void deleteAvatar(String userId) {
         UserProfile profile = profileRepository.findById(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("Profile not found: " + userId));
+            .orElseThrow(() -> new ResourceNotFoundException("User not found: " + userId));
 
-        if (profile.getAvatar() != null) {
-            avatarService.deleteAvatar(profile.getAvatar());
+        if (profile.getAvatarData() != null || profile.getAvatar() != null) {
+            profile.setAvatarData(null);
+            profile.setAvatarContentType(null);
             profile.setAvatar(null);
             profileRepository.save(profile);
             log.info("Avatar deleted: userId={}", userId);
         }
     }
+
+    /**
+     * 头像数据记录类
+     */
+    public record AvatarData(byte[] data, String contentType) {}
 }
 ```
 
@@ -1421,19 +1565,26 @@ public class UserProfile {
     @Column(length = 36)
     private String id;
 
-    // Identity 字段 - 只读
+    // Identity 字段 - 只读 (由 user-service 管理)
     @Column(nullable = false, unique = true, updatable = false, insertable = false)
     private String email;
 
     @Column(nullable = false, unique = true, updatable = false, insertable = false)
     private String username;
 
-    // Profile 字段 - 可读写
+    // Profile 字段 - 可读写 (由 profile-service 管理)
     @Column(length = 64)
     private String nickname;
 
     @Column(length = 512)
-    private String avatar;
+    private String avatar;                    // 头像 API URL
+
+    @Basic(fetch = FetchType.LAZY)
+    @Column(name = "avatar_data")
+    private byte[] avatarData;                // 头像二进制数据
+
+    @Column(name = "avatar_content_type", length = 100)
+    private String avatarContentType;         // 头像 MIME 类型
 
     @Enumerated(EnumType.STRING)
     @Column(length = 10)
@@ -1448,15 +1599,18 @@ public class UserProfile {
     private String preferences;
 
     // 时间戳
+    @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
+    @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    @PreUpdate
-    protected void onUpdate() {
-        this.updatedAt = LocalDateTime.now();
+    public enum Gender {
+        MALE,
+        FEMALE,
+        OTHER
     }
 }
 ```
@@ -1481,7 +1635,8 @@ public class UserProfile {
 Notification Service (统一邮件通知服务)
 ├── 验证码邮件
 │   ├── 注册邮箱验证码
-│   └── 密码重置验证码
+│   ├── 密码重置验证码
+│   └── 账号注销验证码
 │
 ├── 欢迎邮件
 │   └── 用户完成注册验证后发送
@@ -1505,7 +1660,7 @@ Notification Service (统一邮件通知服务)
 # 所有 API 均为内部调用，需要 X-Internal-Api-Key 认证
 # =====================================================
 
-# 发送验证码邮件 (注册/密码重置)
+# 发送验证码邮件 (注册/密码重置/账号注销)
 POST /api/v1/notifications/verification-code
 Headers:
   X-Internal-Api-Key: {internal_api_key}
@@ -1513,7 +1668,7 @@ Request:
   {
     "to": "user@example.com",
     "code": "123456",
-    "type": "EMAIL_VERIFICATION",  # 或 "PASSWORD_RESET"
+    "type": "EMAIL_VERIFICATION",  # 或 "PASSWORD_RESET" 或 "ACCOUNT_DELETION"
     "expiresInMinutes": 15
   }
 Response:
@@ -1709,7 +1864,7 @@ public class EmailService {
     private String appName;
 
     /**
-     * 发送验证码邮件
+     * 发送验证码邮件 (注册/密码重置/账号注销)
      */
     public EmailResponse sendVerificationCodeEmail(String to, String code, String type, int expiresInMinutes) {
         String subject;
@@ -1725,6 +1880,21 @@ public class EmailService {
                     <h1 style="color: #4CAF50; letter-spacing: 5px;">%s</h1>
                     <p>验证码将在 %d 分钟后过期。</p>
                     <p>如果这不是您本人的操作，请忽略此邮件。</p>
+                    <p>祝好，<br>%s 团队</p>
+                </body>
+                </html>
+                """, appName, code, expiresInMinutes, appName);
+        } else if ("ACCOUNT_DELETION".equals(type)) {
+            subject = "账号注销验证码";
+            body = String.format("""
+                <html>
+                <body style="font-family: Arial, sans-serif;">
+                    <h2 style="color: #e74c3c;">账号注销请求</h2>
+                    <p>您正在申请注销 %s 账号，验证码是：</p>
+                    <h1 style="color: #e74c3c; letter-spacing: 5px;">%s</h1>
+                    <p>验证码将在 %d 分钟后过期。</p>
+                    <p style="color: #e65100;"><strong>警告：</strong>账号注销后，您的所有数据将被永久删除，无法恢复。</p>
+                    <p style="color: #e74c3c;">如果这不是您本人的操作，请立即修改密码并联系客服。</p>
                     <p>祝好，<br>%s 团队</p>
                 </body>
                 </html>
@@ -1858,7 +2028,7 @@ public class EmailService {
 public class VerificationCodeRequest {
     private String to;
     private String code;
-    private String type;  // EMAIL_VERIFICATION or PASSWORD_RESET
+    private String type;  // EMAIL_VERIFICATION, PASSWORD_RESET, or ACCOUNT_DELETION
     private int expiresInMinutes;
 }
 
@@ -1924,11 +2094,14 @@ public class EmailResponse {
 | 重置密码 | POST | /api/users/reset-password | user-service | 无需 |
 | 获取用户身份信息 | GET | /api/users/me | user-service | JWT |
 | 修改密码 | POST | /api/users/me/change-password | user-service | JWT |
-| 注销账户 | DELETE | /api/users/me | user-service | JWT |
+| 发送注销验证码 | POST | /api/users/delete-account/send-code | user-service | JWT |
+| 确认注销账户 | POST | /api/users/delete-account/confirm | user-service | JWT |
+| 注销账户 (直接) | DELETE | /api/users/me | user-service | JWT |
 | 获取用户资料 | GET | /api/profiles/me | profile-service | JWT |
 | 更新用户资料 | PUT | /api/profiles/me | profile-service | JWT |
 | 上传头像 | POST | /api/profiles/me/avatar | profile-service | JWT |
 | 删除头像 | DELETE | /api/profiles/me/avatar | profile-service | JWT |
+| 获取头像图片 | GET | /api/profiles/{userId}/avatar/image | profile-service | 无需 |
 
 ### 7.3 内部 API 认证
 
@@ -2378,8 +2551,6 @@ user-service:
 
 # Profile Service 配置
 profile-service:
-  S3_AVATAR_BUCKET: auth-platform-avatars
-  CLOUDFRONT_DOMAIN: ${CLOUDFRONT_DOMAIN}
   NOTIFICATION_SERVICE_URL: http://notification-service:8080
   INTERNAL_API_KEY: ${SECRET}
 

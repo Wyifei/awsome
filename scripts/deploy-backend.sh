@@ -446,14 +446,14 @@ build_and_push_images() {
         services_arg="${SERVICES_TO_DEPLOY[*]}"
     fi
 
-    print_info "Running: ./scripts/build.sh $build_args $services_arg"
+    print_info "Running: ./scripts/build-backend.sh $build_args $services_arg"
 
     if [ "$DRY_RUN" = true ]; then
-        print_info "[DRY RUN] Would run: ./scripts/build.sh $build_args $services_arg"
+        print_info "[DRY RUN] Would run: ./scripts/build-backend.sh $build_args $services_arg"
         return 0
     fi
 
-    "$SCRIPT_DIR/build.sh" $build_args $services_arg
+    "$SCRIPT_DIR/build-backend.sh" $build_args $services_arg
 }
 
 deploy_service() {

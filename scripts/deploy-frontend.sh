@@ -148,7 +148,46 @@ echo "  - Distribution: ${DISTRIBUTION_ID}"
 echo ""
 
 # ------------------------------------------------------------------------------
-# 3. 构建前端
+# 3. 生成环境变量文件
+# ------------------------------------------------------------------------------
+
+log_info "生成前端环境变量..."
+
+# 获取 Cognito 配置
+COGNITO_USER_POOL_ID=$(terraform output -raw cognito_user_pool_id 2>/dev/null || echo "")
+COGNITO_CLIENT_ID=$(terraform output -raw cognito_user_pool_client_id 2>/dev/null || echo "")
+COGNITO_DOMAIN=$(terraform output -raw cognito_domain 2>/dev/null || echo "")
+
+if [ -z "$COGNITO_USER_POOL_ID" ] || [ -z "$COGNITO_CLIENT_ID" ]; then
+    log_error "无法获取 Cognito 配置，请确认基础设施已部署"
+    exit 1
+fi
+
+# 生成 .env.production 文件
+ENV_FILE="${FRONTEND_DIR}/.env.production"
+
+if [ "$DRY_RUN" = true ]; then
+    log_info "[DRY-RUN] 将生成 ${ENV_FILE}"
+else
+    cat > "$ENV_FILE" << EOF
+# ==============================================================================
+# 生产环境配置 (自动生成)
+# 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+# ==============================================================================
+
+# Cognito Configuration
+VITE_COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID}
+VITE_COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID}
+VITE_COGNITO_DOMAIN=${COGNITO_DOMAIN}
+
+# API Configuration (通过 CloudFront 代理)
+VITE_API_BASE_URL=https://${CF_DOMAIN}/api
+EOF
+    log_success "环境变量文件已生成"
+fi
+
+# ------------------------------------------------------------------------------
+# 4. 构建前端
 # ------------------------------------------------------------------------------
 
 if [ "$SKIP_BUILD" = false ]; then
@@ -187,7 +226,7 @@ if [ ! -d "dist" ]; then
 fi
 
 # ------------------------------------------------------------------------------
-# 4. 上传到 S3
+# 5. 上传到 S3
 # ------------------------------------------------------------------------------
 
 log_info "上传文件到 S3..."
@@ -219,7 +258,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 5. 清除 CloudFront 缓存
+# 6. 清除 CloudFront 缓存
 # ------------------------------------------------------------------------------
 
 if [ "$NO_INVALIDATE" = false ] && [ -n "$DISTRIBUTION_ID" ]; then
@@ -243,7 +282,7 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# 6. 完成
+# 7. 完成
 # ------------------------------------------------------------------------------
 
 echo ""
