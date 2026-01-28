@@ -1,0 +1,25 @@
+# ==============================================================================
+# 本地开发环境配置
+# 使用方法: mvn spring-boot:run -Dspring.profiles.active=local
+# ==============================================================================
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/authplatform
+    username: postgres
+    password: postgres
+
+  jpa:
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+# 本地开发使用人类可读的日志格式
+logging:
+  level:
+    root: INFO
+    com.authplatform: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql: TRACE

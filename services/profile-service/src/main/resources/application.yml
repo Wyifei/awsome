@@ -1,0 +1,93 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: profile-service
+
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:auth_platform}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate  # Schema is managed by user-service
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+  # Flyway disabled - schema is managed by user-service
+  flyway:
+    enabled: false
+
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: https://cognito-idp.${AWS_REGION:ap-northeast-1}.amazonaws.com/${COGNITO_USER_POOL_ID}
+          jwk-set-uri: https://cognito-idp.${AWS_REGION:ap-northeast-1}.amazonaws.com/${COGNITO_USER_POOL_ID}/.well-known/jwks.json
+
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+
+# AWS Configuration
+aws:
+  region: ${AWS_REGION:ap-northeast-1}
+  s3:
+    avatar-bucket: ${S3_AVATAR_BUCKET:auth-platform-avatars}
+    avatar-prefix: avatars/
+  cloudfront:
+    domain: ${CLOUDFRONT_DOMAIN:}
+
+# Actuator and Metrics
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,loggers
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    loggers:
+      enabled: true
+    prometheus:
+      enabled: true
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${ENVIRONMENT:local}
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.authplatform: ${LOG_LEVEL:INFO}
+    org.springframework.security: INFO
+    org.springframework.web: INFO
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:INFO}

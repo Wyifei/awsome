@@ -1,0 +1,24 @@
+# ==============================================================================
+# 生产环境配置
+# 所有敏感配置通过环境变量注入
+# ==============================================================================
+
+spring:
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+
+# 生产环境使用 JSON 格式日志
+logging:
+  level:
+    root: INFO
+    com.authplatform: ${LOG_LEVEL:INFO}
+    org.springframework: WARN
+    org.hibernate: WARN
+    com.zaxxer.hikari: INFO

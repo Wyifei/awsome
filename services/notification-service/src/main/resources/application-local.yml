@@ -1,0 +1,15 @@
+# Local development configuration
+spring:
+  profiles:
+    active: local
+
+# SES Configuration (use AWS sandbox or mock)
+ses:
+  from-address: test@example.com
+  from-name: Auth Platform (Dev)
+
+# Logging
+logging:
+  level:
+    com.authplatform: DEBUG
+    software.amazon.awssdk: DEBUG

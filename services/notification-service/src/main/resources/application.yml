@@ -1,0 +1,69 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: notification-service
+
+# AWS Configuration
+aws:
+  region: ${AWS_REGION:ap-northeast-1}
+
+# SES Configuration
+ses:
+  from-address: ${SES_FROM_ADDRESS:noreply@example.com}
+  from-name: ${SES_FROM_NAME:Auth Platform}
+
+# App Configuration
+app:
+  company-name: ${COMPANY_NAME:Auth Platform}
+
+# Internal API Configuration
+internal:
+  api-key: ${INTERNAL_API_KEY:}
+
+# Actuator and Metrics
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus,loggers
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+    loggers:
+      enabled: true
+    prometheus:
+      enabled: true
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      environment: ${ENVIRONMENT:local}
+    export:
+      prometheus:
+        enabled: true
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+        notification.ses.call.duration: true
+      percentiles:
+        http.server.requests: 0.5, 0.95, 0.99
+        notification.ses.call.duration: 0.5, 0.95, 0.99
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.authplatform: ${LOG_LEVEL:INFO}
+    org.springframework.web: INFO
+    software.amazon.awssdk: INFO

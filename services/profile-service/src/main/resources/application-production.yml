@@ -1,0 +1,18 @@
+# Production configuration
+spring:
+  profiles:
+    active: production
+
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.authplatform: INFO
+    org.springframework: WARN
+    org.hibernate: WARN

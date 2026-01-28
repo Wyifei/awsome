@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-service-config
+data:
+  # Spring profiles
+  SPRING_PROFILES_ACTIVE: "production"
+
+  # Database (Aurora PostgreSQL)
+  # Endpoint format: auth-platform-production-aurora.cluster-xxx.ap-northeast-1.rds.amazonaws.com
+  DB_PORT: "5432"
+  DB_NAME: "auth_platform"
+
+  # AWS
+  AWS_REGION: "ap-northeast-1"
+
+  # Logging
+  LOG_LEVEL: "INFO"
+  SQL_LOG_LEVEL: "WARN"
+
+  # Actuator
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,prometheus,metrics"
+  MANAGEMENT_ENDPOINT_HEALTH_PROBES_ENABLED: "true"
+
+  # Environment
+  ENVIRONMENT: "production"
+
+  # Service URLs (internal communication)
+  PROFILE_SERVICE_URL: "http://profile-service.auth-platform.svc.cluster.local:8080"
+  NOTIFICATION_SERVICE_URL: "http://notification-service.auth-platform.svc.cluster.local:8080"

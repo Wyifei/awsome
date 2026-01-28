@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: profile-service-config
+data:
+  SPRING_PROFILES_ACTIVE: "dev"
+  NOTIFICATION_SERVICE_URL: "http://dev-notification-service:8080"

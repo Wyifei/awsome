@@ -1,0 +1,12 @@
+# Production configuration
+spring:
+  profiles:
+    active: production
+
+# Logging
+logging:
+  level:
+    root: INFO
+    com.authplatform: INFO
+    org.springframework: WARN
+    software.amazon.awssdk: WARN

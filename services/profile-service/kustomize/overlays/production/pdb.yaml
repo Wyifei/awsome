@@ -1,0 +1,10 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: profile-service-pdb
+  namespace: auth-platform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: profile-service

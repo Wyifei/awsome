@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="true" scanPeriod="30 seconds">
+
+    <!-- Properties -->
+    <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="profile-service"/>
+    <springProperty scope="context" name="APP_ENV" source="spring.profiles.active" defaultValue="default"/>
+
+    <property name="LOG_LEVEL" value="${LOG_LEVEL:-INFO}"/>
+    <property name="POD_NAME" value="${HOSTNAME:-unknown}"/>
+    <property name="POD_NAMESPACE" value="${POD_NAMESPACE:-default}"/>
+    <property name="NODE_NAME" value="${NODE_NAME:-unknown}"/>
+
+    <!-- JSON Console Appender (Production) -->
+    <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <timestampPattern>yyyy-MM-dd'T'HH:mm:ss.SSSXXX</timestampPattern>
+
+            <fieldNames>
+                <timestamp>timestamp</timestamp>
+                <version>[ignore]</version>
+                <message>message</message>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <level>level</level>
+                <levelValue>[ignore]</levelValue>
+                <stackTrace>stack_trace</stackTrace>
+            </fieldNames>
+
+            <customFields>
+                {"service":"${APP_NAME}","environment":"${APP_ENV}","pod_name":"${POD_NAME}","pod_namespace":"${POD_NAMESPACE}","node_name":"${NODE_NAME}"}
+            </customFields>
+
+            <includeMdcKeyName>trace_id</includeMdcKeyName>
+            <includeMdcKeyName>span_id</includeMdcKeyName>
+            <includeMdcKeyName>user_id</includeMdcKeyName>
+            <includeMdcKeyName>request_id</includeMdcKeyName>
+            <includeMdcKeyName>client_ip</includeMdcKeyName>
+            <includeMdcKeyName>request_method</includeMdcKeyName>
+            <includeMdcKeyName>request_uri</includeMdcKeyName>
+            <includeMdcKeyName>response_status</includeMdcKeyName>
+            <includeMdcKeyName>response_time_ms</includeMdcKeyName>
+            <includeMdcKeyName>event_type</includeMdcKeyName>
+            <includeMdcKeyName>event_name</includeMdcKeyName>
+            <includeMdcKeyName>target_user_id</includeMdcKeyName>
+            <includeMdcKeyName>updated_fields</includeMdcKeyName>
+
+            <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                <maxLength>2048</maxLength>
+                <shortenedClassNameLength>20</shortenedClassNameLength>
+                <rootCauseFirst>true</rootCauseFirst>
+                <inlineHash>true</inlineHash>
+            </throwableConverter>
+        </encoder>
+    </appender>
+
+    <!-- Readable Console Appender (Development) -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %highlight(%-5level) [%thread] [%X{trace_id:-}] [%X{user_id:-}] %cyan(%logger{36}) - %msg%n</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- Async Appender -->
+    <appender name="ASYNC_JSON" class="ch.qos.logback.classic.AsyncAppender">
+        <queueSize>512</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>true</includeCallerData>
+        <neverBlock>false</neverBlock>
+        <appender-ref ref="JSON_CONSOLE"/>
+    </appender>
+
+    <!-- Logger Configuration -->
+    <logger name="com.authplatform" level="${LOG_LEVEL}" additivity="false">
+        <springProfile name="local,dev">
+            <appender-ref ref="CONSOLE"/>
+        </springProfile>
+        <springProfile name="!local &amp; !dev">
+            <appender-ref ref="ASYNC_JSON"/>
+        </springProfile>
+    </logger>
+
+    <logger name="org.springframework" level="INFO"/>
+    <logger name="org.springframework.security" level="INFO"/>
+    <logger name="org.hibernate" level="WARN"/>
+    <logger name="com.zaxxer.hikari" level="INFO"/>
+    <logger name="software.amazon.awssdk" level="INFO"/>
+
+    <!-- Root Logger -->
+    <root level="INFO">
+        <springProfile name="local,dev">
+            <appender-ref ref="CONSOLE"/>
+        </springProfile>
+        <springProfile name="!local &amp; !dev">
+            <appender-ref ref="ASYNC_JSON"/>
+        </springProfile>
+    </root>
+
+</configuration>
