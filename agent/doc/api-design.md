@@ -10,7 +10,12 @@
 |----------|------|----------|
 | 审批回调 API | 接收管理员审批响应 | API Gateway (公网) |
 | 内部管理 API | 系统管理和监控 | API Gateway (VPC) |
-| Agent 调用 API | Lambda 调用 Agent | 内部调用 |
+| Agent 调用 API | Lambda 调用 3 个 Agent | AgentCore Runtime |
+
+**Agent 架构说明：**
+- **Analyzer Agent**: Phase 1 调用，负责分析、ASR 匹配、生成修复描述
+- **Remediator Agent**: Phase 2 调用，负责代码生成、执行修复
+- **Validator Agent**: Phase 2 调用，负责验证、状态更新、经验保存
 
 ### 1.2 认证方式
 
@@ -537,28 +542,34 @@ Content-Type: application/json
 
 ## 4. 内部 Agent API
 
-### 4.1 Agent 调用接口
+### 4.1 架构概述
 
-这些接口用于系统内部 Lambda 与 Agent 之间的通信。
+SHARA 采用 Lambda + 3 Agent 架构，分为两个处理阶段：
 
-#### 4.1.1 调用 Orchestrator Agent
+| 阶段 | 触发条件 | 调用的 Agent | 主要任务 |
+|------|----------|--------------|----------|
+| Phase 1 | 收到 Finding | Analyzer Agent | 分析、ASR 匹配、生成修复描述 |
+| Phase 2 | 收到审批通过 | Remediator → Validator | 代码生成、执行修复、验证 |
 
-**Function:** `shara-orchestrator-agent`
+### 4.2 Phase 1: Lambda → Analyzer Agent
+
+**触发时机：** EventBridge 收到 Security Hub Finding 后 Lambda 调用
 
 **Input Event:**
 ```json
 {
-  "action": "process_finding",
+  "action": "analyze_finding",
   "taskId": "task-12345678",
+  "memorySessionId": "session-task-12345678",
   "finding": {
-    "id": "arn:aws:securityhub:...",
+    "id": "arn:aws:securityhub:us-east-1:123456789012:finding/abc123",
     "SchemaVersion": "2018-10-08",
     "ProductArn": "arn:aws:securityhub:...",
     "GeneratorId": "aws-config-rules",
     "AwsAccountId": "123456789012",
     "Types": ["Software and Configuration Checks/AWS Security Best Practices"],
     "Title": "S3 bucket has public read access",
-    "Description": "...",
+    "Description": "S3 bucket 'my-bucket' is configured to allow public read access",
     "Severity": {
       "Label": "HIGH",
       "Normalized": 70
@@ -571,12 +582,9 @@ Content-Type: application/json
       }
     ],
     "Compliance": {
-      "Status": "FAILED"
+      "Status": "FAILED",
+      "SecurityControlId": "S3.1"
     }
-  },
-  "options": {
-    "mode": "auto",
-    "notifyOnComplete": true
   }
 }
 ```
@@ -587,70 +595,163 @@ Content-Type: application/json
   "status": "success",
   "taskId": "task-12345678",
   "result": {
-    "phase": "pending_approval",
+    "phase": "waiting_approval",
     "analysis": {
-      "completed": true,
-      "riskLevel": "HIGH"
+      "riskLevel": "HIGH",
+      "impactAssessment": "该 bucket 包含敏感配置文件，公开访问可能导致数据泄露",
+      "affectedResources": ["arn:aws:s3:::my-bucket"]
     },
-    "remediationPlan": {
-      "generated": true,
-      "stepsCount": 3
+    "asrMatch": {
+      "matched": true,
+      "playbookId": "ASR_S3_1",
+      "confidence": 0.95
     },
-    "approvalRequest": {
-      "sent": true,
-      "sentAt": "2025-01-28T10:05:30Z",
-      "expiresAt": "2025-01-29T10:05:30Z"
+    "remediation": {
+      "summary": "移除 S3 bucket 的公开访问权限",
+      "description": "通过启用 S3 Block Public Access 来阻止所有公共访问...",
+      "steps": ["启用 Block Public Access", "验证配置生效"],
+      "estimatedImpact": "LOW",
+      "rollbackAvailable": true,
+      "isDestructive": false
     }
   }
 }
 ```
 
-#### 4.1.2 Agent 间通信
+### 4.3 Phase 2: Lambda → Remediator Agent
 
-**Analyzer -> Remediator:**
+**触发时机：** 管理员审批通过后 Lambda 调用
+
+**Input Event:**
 ```json
 {
-  "action": "generate_remediation",
+  "action": "execute_remediation",
   "taskId": "task-12345678",
-  "analysis": {
-    "findingType": "S3PublicAccess",
+  "memorySessionId": "session-task-12345678",
+  "approvalInfo": {
+    "approvedBy": "admin@example.com",
+    "approvedAt": "2025-01-28T10:15:00Z"
+  },
+  "findingSummary": {
+    "controlId": "S3.1",
     "resourceType": "AwsS3Bucket",
     "resourceId": "arn:aws:s3:::my-bucket",
-    "riskLevel": "HIGH",
-    "context": {
-      "bucketPolicy": {...},
-      "publicAccessBlock": {...},
-      "bucketAcl": {...}
-    },
-    "recommendation": "block_public_access"
+    "region": "us-east-1"
   }
 }
 ```
 
-**Remediator -> Validator:**
+**Output:**
+```json
+{
+  "status": "success",
+  "taskId": "task-12345678",
+  "result": {
+    "codeGeneration": {
+      "completed": true,
+      "codeType": "python",
+      "generatedAt": "2025-01-28T10:16:00Z"
+    },
+    "execution": {
+      "status": "success",
+      "startedAt": "2025-01-28T10:16:30Z",
+      "completedAt": "2025-01-28T10:17:00Z",
+      "stepsCompleted": 1
+    },
+    "rollbackData": {
+      "saved": true,
+      "preState": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": false,
+          "IgnorePublicAcls": false
+        }
+      }
+    },
+    "nextAction": "validation"
+  }
+}
+```
+
+### 4.4 Phase 2: Remediator → Validator Agent
+
+**触发时机：** Remediator 执行修复成功后调用 Validator
+
+**Input Event:**
 ```json
 {
   "action": "validate_remediation",
   "taskId": "task-12345678",
+  "memorySessionId": "session-task-12345678",
   "remediation": {
-    "type": "S3PublicAccess",
+    "controlId": "S3.1",
+    "resourceType": "AwsS3Bucket",
     "resourceId": "arn:aws:s3:::my-bucket",
-    "actions": [
+    "executedActions": [
       {
         "service": "s3",
         "operation": "PutPublicAccessBlock",
-        "parameters": {...},
-        "executed": true,
         "result": "success"
       }
     ]
   },
   "expectedState": {
-    "publicAccessBlocked": true,
-    "bucketPolicySecure": true
+    "publicAccessBlocked": true
   }
 }
 ```
+
+**Output:**
+```json
+{
+  "status": "success",
+  "taskId": "task-12345678",
+  "result": {
+    "validation": {
+      "passed": true,
+      "checks": [
+        {
+          "name": "PublicAccessBlocked",
+          "expected": true,
+          "actual": true,
+          "passed": true
+        }
+      ]
+    },
+    "securityHubUpdate": {
+      "updated": true,
+      "newStatus": "RESOLVED"
+    },
+    "experienceSaved": {
+      "saved": true,
+      "namespace": "/remediation/S3.1/user-123"
+    }
+  }
+}
+```
+
+### 4.5 Agent 工具清单
+
+#### Analyzer Agent Tools
+| 工具名称 | 用途 |
+|----------|------|
+| `fetch_asr_playbook` | 从 S3 获取 ASR Playbook |
+| `search_similar_findings` | 从 Memory LTM 搜索相似修复经验 |
+| `get_resource_details` | 获取资源当前配置 |
+| `save_analysis_result` | 保存分析结果到 Memory |
+
+#### Remediator Agent Tools
+| 工具名称 | 用途 |
+|----------|------|
+| `get_analysis_context` | 从 Memory 获取 Phase 1 分析结果 |
+| `execute_code` | 通过 Code Interpreter 执行代码 |
+| `save_rollback_data` | 保存回滚数据 |
+
+#### Validator Agent Tools
+| 工具名称 | 用途 |
+|----------|------|
+| `verify_resource_state` | 验证资源配置状态 |
+| `update_security_hub` | 更新 Security Hub Finding 状态 |
+| `save_experience` | 保存修复经验到 Memory LTM |
 
 ---
 
@@ -732,3 +833,4 @@ Content-Type: application/json
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|----------|
 | 1.0 | 2025-01-28 | - | 初始版本 |
+| 2.0 | 2025-01-29 | - | 重构为两阶段架构；移除 Orchestrator Agent；更新 Agent 调用接口（Phase 1: Analyzer, Phase 2: Remediator → Validator）；新增 Agent 工具清单 |

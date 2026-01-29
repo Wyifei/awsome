@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_4_1",
+  "source": "AWS-ASR",
+  "control_id": "4.1",
+  "standard": "CIS120",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "4.1",
+    "resource_type": "AwsUnknown*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):ec2:(?:[a-z]{2}(?:-gov)?-[a-z]+-[0-9]):[0-9]{12}:security-group/(sg-[a-f0-9]{8,17})$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control 4.1",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with 4.1 security control"
+  },
+  "remediation": {
+    "summary": "Remediate 4.1 finding",
+    "approach": "Security control 4.1",
+    "ssm_document": "AWS-DisablePublicAccessForSecurityGroup",
+    "parameters": [
+      "GroupId",
+      "AutomationAssumeRole"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for 4.1",
+        "type": "remediation",
+        "ssm_document": "AWS-DisablePublicAccessForSecurityGroup"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback 4.1 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.565493Z",
+    "tags": [
+      "CIS120",
+      "unknown",
+      "4.1"
+    ]
+  }
+}

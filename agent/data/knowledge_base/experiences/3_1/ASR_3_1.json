@@ -1,0 +1,88 @@
+{
+  "experience_id": "ASR_3_1",
+  "source": "AWS-ASR",
+  "control_id": "3.1",
+  "standard": "CIS120",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "3.1",
+    "resource_type": "AwsUnknown*",
+    "resource_id_regex": "",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control 3.1",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with 3.1 security control"
+  },
+  "remediation": {
+    "summary": "Remediate 3.1 finding",
+    "approach": "Security control 3.1",
+    "ssm_document": "ASR-CreateLogMetricFilterAndAlarm",
+    "parameters": [
+      "AutomationAssumeRole",
+      "FilterName",
+      "FilterPattern",
+      "MetricName",
+      "MetricValue",
+      "MetricNamespace",
+      "AlarmName",
+      "AlarmDesc",
+      "AlarmThreshold",
+      "LogGroupName",
+      "SNSTopicName",
+      "KMSKeyArn"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for 3.1",
+        "type": "remediation",
+        "ssm_document": "ASR-CreateLogMetricFilterAndAlarm"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback 3.1 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.538982Z",
+    "tags": [
+      "CIS120",
+      "unknown",
+      "3.1"
+    ]
+  }
+}

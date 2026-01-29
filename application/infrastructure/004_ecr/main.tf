@@ -54,7 +54,7 @@ resource "aws_ecr_lifecycle_policy" "services" {
         selection = {
           tagStatus   = "any"
           countType   = "imageCountMoreThan"
-          countNumber = 30
+          countNumber = 1
         }
         action = {
           type = "expire"

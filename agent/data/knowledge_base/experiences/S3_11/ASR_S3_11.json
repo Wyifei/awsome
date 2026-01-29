@@ -1,0 +1,80 @@
+{
+  "experience_id": "ASR_S3_11",
+  "source": "AWS-ASR",
+  "control_id": "S3.11",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "S3.11",
+    "resource_type": "AwsS*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):s3:::([A-Za-z0-9.-]{3,63})$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "S3 bucket 应启用事件通知",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with S3.11 security control"
+  },
+  "remediation": {
+    "summary": "Remediate S3.11 finding",
+    "approach": "S3 bucket 应启用事件通知",
+    "ssm_document": "ASR-EnableBucketEventNotifications",
+    "parameters": [
+      "BucketName",
+      "AccountId",
+      "EventTypes",
+      "AutomationAssumeRole"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for S3.11",
+        "type": "remediation",
+        "ssm_document": "ASR-EnableBucketEventNotifications"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback S3.11 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.452487Z",
+    "tags": [
+      "AFSBP",
+      "s",
+      "S3.11"
+    ]
+  }
+}

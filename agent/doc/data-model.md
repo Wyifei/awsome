@@ -48,6 +48,7 @@ interface TaskItem {
   taskId: string;               // UUID
   findingId: string;            // Security Hub Finding ARN
   status: TaskStatus;           // 任务状态
+  phase: 'pre_approval' | 'post_approval';  // 当前处理阶段
   severity: 'HIGH' | 'CRITICAL';
   source: string;               // AWS Config, GuardDuty, etc.
 
@@ -69,19 +70,26 @@ interface TaskItem {
     analyzedBy: string;         // Agent ID
   };
 
-  // Remediation Plan
+  // Remediation Plan (Phase 1: Analyzer 生成描述)
   remediation?: {
-    summary: string;
-    steps: RemediationStep[];
-    estimatedImpact: string;
+    summary: string;             // 修复方案概述
+    description: string;         // 详细修复描述（审批邮件内容）
+    steps: RemediationStep[];    // 修复步骤（文字描述）
+    estimatedImpact: string;     // 预估影响
     rollbackAvailable: boolean;
-    rollbackPlan?: string[];
-    generatedCode?: {
-      type: 'aws-cli' | 'cloudformation' | 'terraform';
-      content: string;
-    };
-    generatedAt: string;
-    generatedBy: string;
+    rollbackPlan?: string[];     // 回滚步骤描述
+    asrPlaybookId?: string;      // 匹配的 ASR Playbook ID (如有)
+    isDestructive?: boolean;     // 是否为破坏性操作
+    generatedAt: string;         // Phase 1 完成时间
+    generatedBy: string;         // analyzer-agent
+  };
+
+  // Generated Code (Phase 2: Remediator 生成代码，审批后)
+  generatedCode?: {
+    type: 'python' | 'aws-cli';
+    content: string;             // 实际执行代码
+    generatedAt: string;         // Phase 2 代码生成时间
+    generatedBy: string;         // remediator-agent
   };
 
   // Approval Info
@@ -116,26 +124,33 @@ interface TaskItem {
   ttl?: number;                 // Unix timestamp for auto-deletion
   version: number;              // Optimistic locking
 
+  // AgentCore Memory
+  memorySessionId?: string;     // Memory session ID for cross-phase context
+
   // Tracing
   traceId?: string;
   spanId?: string;
 }
 
 type TaskStatus =
-  | 'created'
-  | 'analyzing'
-  | 'analysis_failed'
-  | 'planning'
-  | 'planning_failed'
-  | 'pending_approval'
-  | 'approved'
-  | 'rejected'
-  | 'approval_expired'
-  | 'executing'
-  | 'execution_failed'
-  | 'validating'
-  | 'completed'
-  | 'cancelled';
+  // Phase 1: Pre-Approval (Analyzer only)
+  | 'pending'              // 初始状态，等待处理
+  | 'analyzing'            // Analyzer Agent 分析中（ASR 匹配、风险评估）
+  | 'analysis_failed'      // 分析失败
+  | 'waiting_approval'     // 等待管理员审批（只有描述，无代码）
+  | 'approved'             // 已审批，准备进入 Phase 2
+  | 'rejected'             // 审批被拒绝
+  | 'approval_expired'     // 审批超时
+  // Phase 2: Post-Approval (Remediator + Validator)
+  | 'generating_code'      // Remediator Agent 生成代码中
+  | 'executing'            // Remediator Agent 执行修复中
+  | 'execution_failed'     // 执行失败
+  | 'validating'           // Validator Agent 验证中
+  | 'validation_failed'    // 验证失败
+  | 'waiting_feedback'     // 等待用户反馈
+  | 'completed'            // 任务完成
+  | 'rolled_back'          // 已回滚
+  | 'cancelled';           // 已取消
 
 interface RemediationStep {
   order: number;
@@ -150,12 +165,12 @@ interface RemediationStep {
 }
 ```
 
-**示例数据：**
+**示例数据 (Phase 1 - 等待审批状态)：**
 ```json
 {
   "PK": "TASK#task-12345678-abcd-efgh-ijkl-mnopqrstuvwx",
   "SK": "METADATA",
-  "GSI1PK": "STATUS#pending_approval",
+  "GSI1PK": "STATUS#waiting_approval",
   "GSI1SK": "2025-01-28T10:00:00Z",
   "GSI2PK": "FINDING#arn:aws:securityhub:us-east-1:123456789012:finding/abc123",
   "GSI2SK": "2025-01-28T10:00:00Z",
@@ -164,7 +179,8 @@ interface RemediationStep {
 
   "taskId": "task-12345678-abcd-efgh-ijkl-mnopqrstuvwx",
   "findingId": "arn:aws:securityhub:us-east-1:123456789012:finding/abc123",
-  "status": "pending_approval",
+  "status": "waiting_approval",
+  "phase": "pre_approval",
   "severity": "HIGH",
   "source": "AWS Config",
 
@@ -181,38 +197,29 @@ interface RemediationStep {
     "affectedResources": ["arn:aws:s3:::my-bucket"],
     "recommendations": ["启用 Block Public Access", "审查 Bucket Policy"],
     "analyzedAt": "2025-01-28T10:02:00Z",
-    "analyzedBy": "analyzer-agent-v1"
+    "analyzedBy": "analyzer-agent"
   },
 
   "remediation": {
     "summary": "移除 S3 bucket 的公开访问权限",
+    "description": "通过启用 S3 Block Public Access 来阻止所有公共访问。此操作将配置存储桶级别的访问阻止设置，防止任何公共访问策略生效。",
     "steps": [
       {
         "order": 1,
         "action": "EnableBlockPublicAccess",
-        "description": "启用 Block Public Access",
+        "description": "启用 Block Public Access 配置",
         "service": "s3",
         "operation": "PutPublicAccessBlock",
-        "parameters": {
-          "Bucket": "my-bucket",
-          "PublicAccessBlockConfiguration": {
-            "BlockPublicAcls": true,
-            "IgnorePublicAcls": true,
-            "BlockPublicPolicy": true,
-            "RestrictPublicBuckets": true
-          }
-        },
         "status": "pending"
       }
     ],
     "estimatedImpact": "LOW",
     "rollbackAvailable": true,
-    "generatedCode": {
-      "type": "aws-cli",
-      "content": "aws s3api put-public-access-block --bucket my-bucket ..."
-    },
+    "rollbackPlan": ["恢复原始 Public Access Block 配置"],
+    "asrPlaybookId": "ASR_S3_1",
+    "isDestructive": false,
     "generatedAt": "2025-01-28T10:04:00Z",
-    "generatedBy": "remediator-agent-v1"
+    "generatedBy": "analyzer-agent"
   },
 
   "approval": {
@@ -222,9 +229,33 @@ interface RemediationStep {
     "token": "sha256:abc123..."
   },
 
+  "memorySessionId": "session-task-12345678",
+
   "createdAt": "2025-01-28T10:00:00Z",
   "updatedAt": "2025-01-28T10:05:00Z",
   "version": 3
+}
+```
+
+**示例数据 (Phase 2 - 执行修复后)：**
+```json
+{
+  "taskId": "task-12345678-abcd-efgh-ijkl-mnopqrstuvwx",
+  "status": "completed",
+  "phase": "post_approval",
+
+  "generatedCode": {
+    "type": "python",
+    "content": "import boto3\n\ns3 = boto3.client('s3')\ns3.put_public_access_block(...)",
+    "generatedAt": "2025-01-28T11:00:00Z",
+    "generatedBy": "remediator-agent"
+  },
+
+  "execution": {
+    "status": "success",
+    "startedAt": "2025-01-28T11:01:00Z",
+    "completedAt": "2025-01-28T11:02:00Z"
+  }
 }
 ```
 
@@ -270,25 +301,32 @@ interface TaskEventItem {
 }
 
 type TaskEventType =
+  // Task lifecycle
   | 'task_created'
   | 'finding_received'
-  | 'analysis_started'
-  | 'analysis_completed'
+  | 'task_cancelled'
+  | 'error_occurred'
+  // Phase 1: Pre-Approval (Analyzer Agent)
+  | 'analysis_started'          // Analyzer Agent 开始分析
+  | 'asr_playbook_matched'      // 匹配到 ASR Playbook
+  | 'analysis_completed'        // 分析完成，生成修复描述
   | 'analysis_failed'
-  | 'remediation_planned'
-  | 'approval_requested'
+  | 'approval_requested'        // 发送审批请求（只包含描述）
   | 'approval_email_sent'
-  | 'approval_received'
+  | 'approval_received'         // 收到审批响应
   | 'approval_expired'
-  | 'execution_started'
+  // Phase 2: Post-Approval (Remediator + Validator Agents)
+  | 'code_generation_started'   // Remediator 开始生成代码
+  | 'code_generation_completed' // 代码生成完成
+  | 'execution_started'         // 开始执行修复
   | 'execution_step_completed'
   | 'execution_completed'
   | 'execution_failed'
-  | 'validation_started'
+  | 'validation_started'        // Validator 开始验证
   | 'validation_completed'
-  | 'finding_updated'
-  | 'task_cancelled'
-  | 'error_occurred';
+  | 'validation_failed'
+  | 'finding_updated'           // Security Hub Finding 状态更新
+  | 'experience_saved';         // 修复经验保存到 Memory
 ```
 
 ### 2.3 Approval Tokens 表
@@ -326,7 +364,106 @@ interface ApprovalTokenItem {
 }
 ```
 
-### 2.4 Configuration 表
+### 2.4 Rollback Data 表
+
+存储修复前的资源状态和回滚方案，用于支持回滚操作。
+
+**表名：** `shara-tasks` (与 Tasks 表共用，使用不同的 SK)
+
+**主键设计：**
+| 键类型 | 属性名 | 类型 | 说明 |
+|--------|--------|------|------|
+| Partition Key | PK | String | `TASK#<taskId>` |
+| Sort Key | SK | String | `ROLLBACK#<resourceArn>` |
+
+**属性定义：**
+
+```typescript
+interface RollbackDataItem {
+  PK: string;                   // TASK#<taskId>
+  SK: string;                   // ROLLBACK#<resourceArn>
+
+  taskId: string;
+  resourceArn: string;
+  resourceType: string;         // AwsS3Bucket, AwsEc2SecurityGroup, etc.
+
+  // 修复前的完整资源状态
+  preState: {
+    // S3 示例
+    PublicAccessBlockConfiguration?: {
+      BlockPublicAcls: boolean;
+      IgnorePublicAcls: boolean;
+      BlockPublicPolicy: boolean;
+      RestrictPublicBuckets: boolean;
+    };
+    BucketPolicy?: string;
+    // 其他资源类型的配置...
+    [key: string]: any;
+  };
+
+  // Analyzer 生成的回滚方案
+  rollbackPlan: {
+    summary: string;
+    steps: Array<{
+      order: number;
+      description: string;
+      action: {
+        service: string;
+        operation: string;
+        parameters: Record<string, any>;
+      };
+      code: string;  // Python/Boto3 代码
+    }>;
+    generatedCode: string;  // 完整回滚代码
+  };
+
+  createdAt: string;            // ISO8601
+  ttl: number;                  // 30 天后过期
+}
+```
+
+**示例数据：**
+```json
+{
+  "PK": "TASK#task-12345678",
+  "SK": "ROLLBACK#arn:aws:s3:::my-bucket",
+  "taskId": "task-12345678",
+  "resourceArn": "arn:aws:s3:::my-bucket",
+  "resourceType": "AwsS3Bucket",
+  "preState": {
+    "PublicAccessBlockConfiguration": {
+      "BlockPublicAcls": false,
+      "IgnorePublicAcls": false,
+      "BlockPublicPolicy": false,
+      "RestrictPublicBuckets": false
+    },
+    "BucketPolicy": "{\"Version\":\"2012-10-17\",\"Statement\":[...]}"
+  },
+  "rollbackPlan": {
+    "summary": "恢复 S3 Block Public Access 到原始配置",
+    "steps": [
+      {
+        "order": 1,
+        "description": "恢复 Block Public Access 配置",
+        "action": {
+          "service": "s3",
+          "operation": "PutPublicAccessBlock",
+          "parameters": {
+            "Bucket": "my-bucket",
+            "PublicAccessBlockConfiguration": "${preState.PublicAccessBlockConfiguration}"
+          }
+        },
+        "code": "s3.put_public_access_block(Bucket='my-bucket', PublicAccessBlockConfiguration=pre_state['PublicAccessBlockConfiguration'])"
+      }
+    ],
+    "generatedCode": "..."
+  },
+  "createdAt": "2025-01-29T10:00:00Z",
+  "ttl": 1740825600
+}
+```
+
+### 2.5 Configuration 表
 
 存储系统配置。
 
@@ -374,186 +511,283 @@ interface ApprovalTokenItem {
 
 ## 3. S3 存储结构
 
-### 3.1 知识库存储
+### 3.1 知识库存储（修复经验）
 
-**Bucket:** `shara-knowledge-base-<account-id>-<region>`
+SHARA 采用"经验学习"模式，知识库包含两类经验：
+1. **ASR 预置经验** - 从 AWS Automated Security Response 转换的 110 个修复经验，作为初始知识库
+2. **用户验证经验** - 用户确认修复有效后保存的经验，持续积累
+
+**Bucket:** `shara-knowledge-<stage>-<account-id>`
 
 ```
-shara-knowledge-base/
-├── playbooks/
-│   ├── s3/
-│   │   ├── public-access/
-│   │   │   ├── playbook.md
-│   │   │   ├── remediation.json
-│   │   │   └── templates/
-│   │   │       ├── cloudformation.yaml
-│   │   │       └── cli-commands.sh
-│   │   ├── encryption/
-│   │   └── logging/
-│   ├── ec2/
-│   │   ├── security-group/
-│   │   ├── instance-metadata/
-│   │   └── ebs-encryption/
-│   ├── iam/
-│   │   ├── overprivileged-role/
-│   │   ├── access-key-rotation/
-│   │   └── mfa-enforcement/
-│   ├── rds/
-│   ├── lambda/
-│   └── ...
-├── templates/
-│   ├── cloudformation/
-│   │   ├── s3-secure-bucket.yaml
-│   │   ├── vpc-flow-logs.yaml
-│   │   └── ...
-│   └── terraform/
-│       ├── s3-secure-bucket.tf
-│       └── ...
-├── policies/
-│   ├── remediation-policies.json
-│   ├── exclusion-rules.json
-│   └── risk-assessment-rules.json
-└── index.json
+shara-knowledge-{stage}-{account}/
+├── index.json                         # 知识库索引（包含所有经验的元数据）
+└── experiences/                       # 修复经验目录
+    ├── S3_1/                          # 按 Control ID 分类（下划线替代点号）
+    │   ├── ASR_S3_1.json              # ASR 预置经验
+    │   ├── ASR_S3_1_code.py           # ASR 修复代码
+    │   ├── USER_S3_1_20250129.json    # 用户验证经验
+    │   └── USER_S3_1_20250129_code.py # 用户修复代码
+    ├── EC2_2/
+    │   ├── ASR_EC2_2.json
+    │   └── ASR_EC2_2_code.py
+    ├── CloudTrail_4/
+    │   └── ...
+    └── ...
 ```
 
-### 3.2 Playbook 格式
+### 3.2 ASR 预置经验格式
+
+从 AWS Automated Security Response 转换的预置经验：
 
 ```json
-// playbooks/s3/public-access/remediation.json
+// experiences/S3_1/ASR_S3_1.json
 {
-  "id": "s3-public-access",
-  "name": "S3 Public Access Remediation",
-  "version": "1.0.0",
-  "description": "修复 S3 bucket 公开访问问题",
-
-  "triggers": {
-    "findingTypes": [
-      "Software and Configuration Checks/AWS Security Best Practices/S3.2"
+  "experience_id": "ASR_S3_1",
+  "control_id": "S3.1",
+  "standard": "AFSBP",
+  "title": "S3 Block Public Access setting should be enabled",
+  "description": "This control checks whether S3 Block Public Access is enabled at the bucket level",
+  "resource_type": "AwsS3Bucket",
+  "remediation": {
+    "summary": "Enable S3 Block Public Access",
+    "approach": "Configure bucket-level block public access settings to prevent public access",
+    "parameters": [
+      {
+        "name": "BlockPublicAcls",
+        "type": "boolean",
+        "default": true,
+        "description": "Block public ACLs"
+      },
+      {
+        "name": "IgnorePublicAcls",
+        "type": "boolean",
+        "default": true,
+        "description": "Ignore public ACLs"
+      },
+      {
+        "name": "BlockPublicPolicy",
+        "type": "boolean",
+        "default": true,
+        "description": "Block public bucket policies"
+      },
+      {
+        "name": "RestrictPublicBuckets",
+        "type": "boolean",
+        "default": true,
+        "description": "Restrict public bucket access"
+      }
     ],
-    "resourceTypes": ["AwsS3Bucket"],
-    "severities": ["HIGH", "CRITICAL"]
+    "code_file": "ASR_S3_1_code.py"
+  },
+  "is_destructive": false,
+  "source": "AWS Automated Security Response",
+  "created_at": "2025-01-29T05:45:46Z",
+  "validated_count": 0
+}
+```
+
+### 3.3 知识库索引格式 (index.json)
+
+索引文件提供快速的精确匹配查询，避免每次都进行语义搜索：
+
+```json
+{
+  "version": "1.0.0",
+  "generated_at": "2025-01-29T05:45:46Z",
+  "source": "AWS Automated Security Response",
+  "statistics": {
+    "total_experiences": 110,
+    "by_standard": {
+      "AFSBP": 68,
+      "CIS120": 16,
+      "PCI321": 26
+    },
+    "destructive_count": 12
+  },
+  "controls": [
+    {
+      "control_id": "S3.1",
+      "standard": "AFSBP",
+      "experience_id": "ASR_S3_1",
+      "is_destructive": false,
+      "path": "experiences/S3_1"
+    },
+    {
+      "control_id": "EC2.2",
+      "standard": "AFSBP",
+      "experience_id": "ASR_EC2_2",
+      "is_destructive": true,
+      "path": "experiences/EC2_2"
+    }
+    // ... 110 entries total
+  ]
+}
+```
+
+### 3.4 用户验证经验格式
+
+```json
+// experiences/S3_1/USER_S3_1_20250129.json
+{
+  "task_id": "task-12345678-abcd-efgh-ijkl",
+  "control_id": "S3.1",
+  "finding_title": "S3 Block Public Access setting is disabled for account",
+  "finding_type": "Software and Configuration Checks/AWS Security Best Practices",
+
+  "resource": {
+    "type": "AwsS3Bucket",
+    "id": "arn:aws:s3:::my-bucket",
+    "region": "ap-northeast-1",
+    "account_id": "123456789012"
   },
 
   "analysis": {
-    "contextRequired": [
-      "s3:GetBucketPolicy",
-      "s3:GetBucketAcl",
-      "s3:GetPublicAccessBlock",
-      "s3:GetBucketLocation"
+    "summary": "S3 存储桶 my-bucket 未启用 Block Public Access，存在数据泄露风险",
+    "risk_level": "HIGH",
+    "risk_factors": [
+      "存储桶包含敏感配置文件",
+      "位于生产环境"
     ],
-    "riskFactors": [
-      {
-        "condition": "bucket contains sensitive data tags",
-        "multiplier": 1.5
-      },
-      {
-        "condition": "bucket is in production account",
-        "multiplier": 1.2
-      }
-    ]
+    "root_cause": "存储桶创建时未启用默认的公共访问阻止设置"
   },
 
   "remediation": {
-    "strategy": "block_public_access",
+    "approach": "启用 S3 Block Public Access 阻止所有公共访问",
     "steps": [
       {
         "order": 1,
-        "name": "enable_block_public_access",
-        "description": "启用账户级别的 Block Public Access",
-        "action": {
-          "service": "s3",
-          "operation": "PutPublicAccessBlock",
-          "parameters": {
-            "Bucket": "${resourceName}",
-            "PublicAccessBlockConfiguration": {
-              "BlockPublicAcls": true,
-              "IgnorePublicAcls": true,
-              "BlockPublicPolicy": true,
-              "RestrictPublicBuckets": true
-            }
-          }
-        },
-        "rollback": {
-          "service": "s3",
-          "operation": "DeletePublicAccessBlock",
-          "parameters": {
-            "Bucket": "${resourceName}"
-          }
-        }
-      },
-      {
-        "order": 2,
-        "name": "update_bucket_policy",
-        "description": "移除公开访问的 Policy 语句",
-        "condition": "bucket_policy_has_public_statements",
-        "action": {
-          "service": "s3",
-          "operation": "PutBucketPolicy",
-          "parameters": {
-            "Bucket": "${resourceName}",
-            "Policy": "${securedPolicy}"
-          }
-        }
+        "description": "配置 Block Public Access",
+        "service": "s3",
+        "operation": "PutPublicAccessBlock"
       }
     ],
-    "validation": {
-      "checks": [
-        {
-          "name": "verify_block_public_access",
-          "action": {
-            "service": "s3",
-            "operation": "GetPublicAccessBlock",
-            "parameters": {
-              "Bucket": "${resourceName}"
-            }
-          },
-          "expectedResult": {
-            "PublicAccessBlockConfiguration.BlockPublicAcls": true,
-            "PublicAccessBlockConfiguration.IgnorePublicAcls": true,
-            "PublicAccessBlockConfiguration.BlockPublicPolicy": true,
-            "PublicAccessBlockConfiguration.RestrictPublicBuckets": true
-          }
-        }
-      ]
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
     }
   },
 
-  "notifications": {
-    "onSuccess": {
-      "template": "remediation-success",
-      "includeDetails": true
-    },
-    "onFailure": {
-      "template": "remediation-failure",
-      "escalate": true
-    }
+  "generated_code": "import boto3\n\ns3 = boto3.client('s3')\n\ns3.put_public_access_block(\n    Bucket='my-bucket',\n    PublicAccessBlockConfiguration={\n        'BlockPublicAcls': True,\n        'IgnorePublicAcls': True,\n        'BlockPublicPolicy': True,\n        'RestrictPublicBuckets': True\n    }\n)",
+
+  "lessons_learned": "对于包含敏感数据的存储桶，应在创建时就启用 Block Public Access。建议配置 SCP 强制所有新建存储桶启用此设置。",
+
+  "references": {
+    "aws_documentation": [
+      "https://docs.aws.amazon.com/AmazonS3/latest/userguide/access-control-block-public-access.html"
+    ],
+    "knowledge_base_hits": []
+  },
+
+  "metadata": {
+    "rating": "effective",
+    "rated_by": "admin@example.com",
+    "rated_at": "2025-01-29T12:00:00Z",
+    "created_at": "2025-01-29T10:00:00Z",
+    "execution_duration_seconds": 3
   }
 }
 ```
 
-### 3.3 报告存储
+### 3.5 修复代码文件格式
 
-**Bucket:** `shara-reports-<account-id>-<region>`
+```python
+# experiences/S3.1/{task_id}_code.py
+"""
+修复方案: S3 Block Public Access setting is disabled for account
+Control ID: S3.1
+Resource: arn:aws:s3:::my-bucket
+Generated: 2025-01-29T10:00:00Z
+"""
+
+import boto3
+
+def remediate(bucket_name: str) -> dict:
+    """
+    启用 S3 Block Public Access
+
+    Args:
+        bucket_name: S3 存储桶名称
+
+    Returns:
+        dict: 执行结果
+    """
+    s3 = boto3.client('s3')
+
+    # 配置 Block Public Access
+    s3.put_public_access_block(
+        Bucket=bucket_name,
+        PublicAccessBlockConfiguration={
+            'BlockPublicAcls': True,
+            'IgnorePublicAcls': True,
+            'BlockPublicPolicy': True,
+            'RestrictPublicBuckets': True
+        }
+    )
+
+    return {
+        'success': True,
+        'message': f'Successfully enabled Block Public Access for {bucket_name}'
+    }
+
+
+def rollback(bucket_name: str, pre_state: dict) -> dict:
+    """
+    回滚 S3 Block Public Access 配置
+
+    Args:
+        bucket_name: S3 存储桶名称
+        pre_state: 修复前的配置状态
+
+    Returns:
+        dict: 回滚结果
+    """
+    s3 = boto3.client('s3')
+
+    # 恢复原始配置
+    s3.put_public_access_block(
+        Bucket=bucket_name,
+        PublicAccessBlockConfiguration=pre_state['PublicAccessBlockConfiguration']
+    )
+
+    return {
+        'success': True,
+        'message': f'Successfully rolled back Block Public Access for {bucket_name}'
+    }
+
+
+if __name__ == '__main__':
+    # 示例用法
+    result = remediate('my-bucket')
+    print(result)
+```
+
+### 3.6 工件存储
+
+**Bucket:** `shara-artifacts-<stage>-<account-id>`
 
 ```
-shara-reports/
-├── daily/
-│   ├── 2025/
-│   │   └── 01/
-│   │       ├── 28/
-│   │       │   ├── summary.json
-│   │       │   ├── findings-processed.json
-│   │       │   └── remediations-executed.json
-│   │       └── ...
-├── tasks/
-│   ├── task-12345678/
-│   │   ├── finding.json
-│   │   ├── analysis.json
-│   │   ├── remediation-plan.json
-│   │   ├── execution-log.json
-│   │   └── audit-trail.json
+shara-artifacts-{stage}-{account}/
+├── tasks/                             # 任务相关文件
+│   ├── {task_id}/
+│   │   ├── finding.json               # 原始 Finding
+│   │   ├── analysis.json              # 分析结果
+│   │   ├── remediation-plan.json      # 修复方案
+│   │   ├── execution-log.json         # 执行日志
+│   │   └── audit-trail.json           # 审计记录
 │   └── ...
-└── exports/
+├── reports/                           # 报告目录
+│   ├── daily/
+│   │   ├── 2025/
+│   │   │   └── 01/
+│   │   │       ├── 29/
+│   │   │       │   ├── summary.json
+│   │   │       │   └── findings-processed.json
+│   │   │       └── ...
+│   └── monthly/
+│       └── ...
+└── exports/                           # 导出文件
     └── ...
 ```
 
@@ -848,3 +1082,6 @@ response = events_table.query(
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|----------|
 | 1.0 | 2025-01-28 | - | 初始版本 |
+| 2.0 | 2025-01-29 | - | 更新任务状态；增加 Rollback Data 数据模型；重构知识库为经验学习模式 |
+| 2.1 | 2025-01-29 | - | 新增 ASR 预置经验数据格式；新增知识库索引 (index.json) 格式；区分 ASR 和用户经验 |
+| 3.0 | 2025-01-29 | - | 重构为两阶段工作流（Phase 1: 审批前仅生成描述；Phase 2: 审批后生成代码执行）；分离 remediation 和 generatedCode；新增 phase 和 memorySessionId 字段 |

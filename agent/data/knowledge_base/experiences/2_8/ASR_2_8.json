@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_2_8",
+  "source": "AWS-ASR",
+  "control_id": "2.8",
+  "standard": "CIS120",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "2.8",
+    "resource_type": "AwsUnknown*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):kms:(?:[a-z]{2}(?:-gov)?-[a-z]+-\\d):\\d{12}:key/([A-Za-z0-9-]{36})$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control 2.8",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with 2.8 security control"
+  },
+  "remediation": {
+    "summary": "Remediate 2.8 finding",
+    "approach": "Security control 2.8",
+    "ssm_document": "ASR-EnableKeyRotation",
+    "parameters": [
+      "KeyId",
+      "AutomationAssumeRole"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for 2.8",
+        "type": "remediation",
+        "ssm_document": "ASR-EnableKeyRotation"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback 2.8 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.529859Z",
+    "tags": [
+      "CIS120",
+      "unknown",
+      "2.8"
+    ]
+  }
+}

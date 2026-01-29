@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_ElastiCache_2",
+  "source": "AWS-ASR",
+  "control_id": "ElastiCache.2",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "ElastiCache.2",
+    "resource_type": "AwsElasticache*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):elasticache:(?:[a-z]{2}(?:-gov)?-[a-z]+-\\d):(?:\\d{12}):cluster:([a-zA-Z](?:(?!--)[a-zA-Z0-9-]){0,48}[a-zA-Z0-9]$|[a-zA-Z]$)",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control ElastiCache.2",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with ElastiCache.2 security control"
+  },
+  "remediation": {
+    "summary": "Remediate ElastiCache.2 finding",
+    "approach": "Security control ElastiCache.2",
+    "ssm_document": "ASR-EnableElastiCacheVersionUpgrades",
+    "parameters": [
+      "AutomationAssumeRole",
+      "ClusterId"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for ElastiCache.2",
+        "type": "remediation",
+        "ssm_document": "ASR-EnableElastiCacheVersionUpgrades"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback ElastiCache.2 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.508592Z",
+    "tags": [
+      "AFSBP",
+      "elasticache",
+      "ElastiCache.2"
+    ]
+  }
+}

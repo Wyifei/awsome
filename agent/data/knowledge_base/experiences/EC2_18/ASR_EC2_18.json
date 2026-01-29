@@ -1,0 +1,74 @@
+{
+  "experience_id": "ASR_EC2_18",
+  "source": "AWS-ASR",
+  "control_id": "EC2.18",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "EC2.18",
+    "resource_type": "AwsEc*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):ec2:(?:[a-z]{2}(?:-gov)?-[a-z]+-\\d):\\d{12}:security-group/(sg-[0-9a-f]*)$",
+    "severity": [
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "安全组应仅允许授权端口的入站流量",
+    "risk_level": "HIGH",
+    "root_cause": "Resource does not comply with EC2.18 security control"
+  },
+  "remediation": {
+    "summary": "Remediate EC2.18 finding",
+    "approach": "安全组应仅允许授权端口的入站流量",
+    "ssm_document": "ASR-RevokeUnauthorizedInboundRules",
+    "parameters": [
+      "AutomationAssumeRole",
+      "SecurityGroupId",
+      "AuthorizedTcpPorts",
+      "AuthorizedUdpPorts"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for EC2.18",
+        "type": "remediation",
+        "ssm_document": "ASR-RevokeUnauthorizedInboundRules"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": true,
+    "impact_assessment": {
+      "service_impact": "minimal",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": false,
+    "summary": "Rollback not recommended for destructive operations",
+    "steps": []
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.442648Z",
+    "tags": [
+      "AFSBP",
+      "ec",
+      "EC2.18"
+    ]
+  }
+}

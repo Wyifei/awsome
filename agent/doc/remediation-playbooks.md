@@ -1,45 +1,88 @@
-# Security Hub Auto-Remediation Agent 修复方案知识库
+# Security Hub Auto-Remediation Agent 修复参考手册
 
 ## 1. 概述
 
-本文档定义 SHARA 系统支持的修复场景和对应的 Playbook。每个 Playbook 包含完整的分析、修复、验证步骤。
+本文档提供常见 Security Hub Finding 的修复参考，供 Agent 分析和决策时参考。
+
+**重要说明：** SHARA 采用"经验学习"模式，Agent 不依赖固定的 Playbook 规则，而是：
+1. 利用 LLM 能力理解 Finding 并生成修复方案
+2. 参考本文档中的修复模式作为指导
+3. 从用户反馈的成功修复经验中持续学习
+
+### 1.1 经验学习流程
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         修复经验学习流程                                  │
+│                                                                          │
+│  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐                 │
+│  │  修复完成    │───▶│  发送邮件   │───▶│  用户评价    │                 │
+│  └─────────────┘    │ (含评价链接) │    └──────┬──────┘                 │
+│                     └─────────────┘           │                         │
+│                                               │                         │
+│                           ┌───────────────────┴───────────────────┐     │
+│                           │                                       │     │
+│                           ▼                                       ▼     │
+│                  ┌─────────────────┐                    ┌─────────────┐ │
+│                  │  评价"有效"     │                    │ 评价"无效"  │ │
+│                  └────────┬────────┘                    └─────────────┘ │
+│                           │                                             │
+│                           ▼                                             │
+│                  ┌─────────────────┐                                    │
+│                  │  Agent 保存     │                                    │
+│                  │  修复经验       │                                    │
+│                  │  (思路+代码)    │                                    │
+│                  └────────┬────────┘                                    │
+│                           │                                             │
+│                           ▼                                             │
+│                  ┌─────────────────────────────────────────┐           │
+│                  │  Bedrock Knowledge Base 向量化          │           │
+│                  │                                         │           │
+│                  │  未来遇到类似 Finding 时:               │           │
+│                  │  1. 检索相似经验                        │           │
+│                  │  2. 参考成功案例                        │           │
+│                  │  3. 生成更优修复方案                    │           │
+│                  └─────────────────────────────────────────┘           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 2. Playbook 结构
+## 2. 修复经验存储格式
 
-### 2.1 标准 Playbook 格式
+当用户评价修复"有效"后，Agent 将修复经验保存到 Knowledge Bucket：
 
-```yaml
-id: playbook-unique-id
-name: Playbook Display Name
-version: "1.0.0"
-description: Detailed description
-category: s3 | ec2 | iam | rds | ...
-severity_handled:
-  - HIGH
-  - CRITICAL
+```json
+{
+  "task_id": "task-xxx-yyy",
+  "control_id": "S3.1",
+  "finding_title": "S3 Block Public Access should be enabled",
+  "resource_type": "AwsS3Bucket",
+  "resource_id": "arn:aws:s3:::my-bucket",
+  "severity": "HIGH",
 
-triggers:
-  finding_types: []
-  generator_ids: []
-  resource_types: []
+  "analysis_summary": "Agent 对问题的分析和理解...",
+  "remediation_approach": "选择的修复策略和原因...",
 
-analysis:
-  context_queries: []
-  risk_factors: []
+  "execution_steps": [
+    {
+      "step": 1,
+      "action": "s3:GetPublicAccessBlock",
+      "purpose": "备份当前配置"
+    },
+    {
+      "step": 2,
+      "action": "s3:PutPublicAccessBlock",
+      "purpose": "启用 Block Public Access"
+    }
+  ],
 
-remediation:
-  strategy: description
-  prerequisites: []
-  steps: []
-  rollback: []
+  "code_executed": "# 实际执行的代码...",
+  "lessons_learned": "从本次修复中学到的经验...",
 
-validation:
-  checks: []
-
-notifications:
-  templates: {}
+  "rating": "effective",
+  "created_at": "2025-01-29T10:30:00Z"
+}
 ```
 
 ---
@@ -1024,3 +1067,4 @@ def test_s3_public_access_block_remediation(test_bucket):
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|----------|
 | 1.0 | 2025-01-28 | - | 初始版本 |
+| 1.1 | 2025-01-29 | - | 重构为"经验学习"模式，移除固定 Playbook 依赖 |

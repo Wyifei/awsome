@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_RDS_7",
+  "source": "AWS-ASR",
+  "control_id": "RDS.7",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "RDS.7",
+    "resource_type": "AwsRds*",
+    "resource_id_regex": "",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "RDS 集群应启用删除保护",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with RDS.7 security control"
+  },
+  "remediation": {
+    "summary": "Remediate RDS.7 finding",
+    "approach": "RDS 集群应启用删除保护",
+    "ssm_document": "ASR-EnableRDSClusterDeletionProtection",
+    "parameters": [
+      "RDSClusterARN",
+      "AutomationAssumeRole"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for RDS.7",
+        "type": "remediation",
+        "ssm_document": "ASR-EnableRDSClusterDeletionProtection"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback RDS.7 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.489925Z",
+    "tags": [
+      "AFSBP",
+      "rds",
+      "RDS.7"
+    ]
+  }
+}

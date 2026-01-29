@@ -1,0 +1,82 @@
+{
+  "experience_id": "ASR_DynamoDB_1",
+  "source": "AWS-ASR",
+  "control_id": "DynamoDB.1",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "DynamoDB.1",
+    "resource_type": "AwsDynamodb*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):dynamodb:(?:[a-z]{2}(?:-gov)?-[a-z]+-\\d):(?:\\d{12}):table\\/([a-zA-Z0-9._-]{3,255})$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control DynamoDB.1",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with DynamoDB.1 security control"
+  },
+  "remediation": {
+    "summary": "Remediate DynamoDB.1 finding",
+    "approach": "Security control DynamoDB.1",
+    "ssm_document": "ASR-ConfigureDynamoDBAutoScaling",
+    "parameters": [
+      "AutomationAssumeRole",
+      "TableId",
+      "MinProvisionedReadCapacity",
+      "TargetReadUtilization",
+      "MinProvisionedWriteCapacity",
+      "TargetWriteUtilization"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for DynamoDB.1",
+        "type": "remediation",
+        "ssm_document": "ASR-ConfigureDynamoDBAutoScaling"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback DynamoDB.1 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.482097Z",
+    "tags": [
+      "AFSBP",
+      "dynamodb",
+      "DynamoDB.1"
+    ]
+  }
+}

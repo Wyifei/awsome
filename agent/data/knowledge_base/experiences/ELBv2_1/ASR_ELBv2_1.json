@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_ELBv2_1",
+  "source": "AWS-ASR",
+  "control_id": "ELBv2.1",
+  "standard": "PCI321",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "ELBv2.1",
+    "resource_type": "AwsElbv*",
+    "resource_id_regex": "",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control ELBv2.1",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with ELBv2.1 security control"
+  },
+  "remediation": {
+    "summary": "Remediate ELBv2.1 finding",
+    "approach": "Security control ELBv2.1",
+    "ssm_document": "ASR-EnforceHTTPSForALB",
+    "parameters": [
+      "AutomationAssumeRole",
+      "ResourceARN"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for ELBv2.1",
+        "type": "remediation",
+        "ssm_document": "ASR-EnforceHTTPSForALB"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback ELBv2.1 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.589614Z",
+    "tags": [
+      "PCI321",
+      "elbv",
+      "ELBv2.1"
+    ]
+  }
+}

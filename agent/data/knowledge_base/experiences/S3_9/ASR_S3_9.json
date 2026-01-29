@@ -1,0 +1,83 @@
+{
+  "experience_id": "ASR_S3_9",
+  "source": "AWS-ASR",
+  "control_id": "S3.9",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "S3.9",
+    "resource_type": "AwsS*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):s3:::([A-Za-z0-9.-]{3,63})$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "S3 bucket 应启用服务器访问日志",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with S3.9 security control"
+  },
+  "remediation": {
+    "summary": "Remediate S3.9 finding",
+    "approach": "S3 bucket 应启用服务器访问日志",
+    "ssm_document": "AWS-ConfigureS3BucketLogging",
+    "parameters": [
+      "BucketName",
+      "GrantedPermission",
+      "GranteeType",
+      "GranteeUri",
+      "TargetPrefix",
+      "TargetBucket",
+      "AutomationAssumeRole"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for S3.9",
+        "type": "remediation",
+        "ssm_document": "AWS-ConfigureS3BucketLogging"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback S3.9 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.392948Z",
+    "tags": [
+      "AFSBP",
+      "s",
+      "S3.9"
+    ]
+  }
+}

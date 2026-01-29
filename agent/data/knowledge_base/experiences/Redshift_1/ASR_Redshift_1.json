@@ -1,0 +1,72 @@
+{
+  "experience_id": "ASR_Redshift_1",
+  "source": "AWS-ASR",
+  "control_id": "Redshift.1",
+  "standard": "PCI321",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "Redshift.1",
+    "resource_type": "AwsRedshift*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):redshift:(?:[a-z]{2}(?:-gov)?-[a-z]+-\\d):\\d{12}:cluster:(?!.*--)([a-z][a-z0-9-]{0,62})(?<!-)$",
+    "severity": [
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control Redshift.1",
+    "risk_level": "HIGH",
+    "root_cause": "Resource does not comply with Redshift.1 security control"
+  },
+  "remediation": {
+    "summary": "Remediate Redshift.1 finding",
+    "approach": "Security control Redshift.1",
+    "ssm_document": "ASR-DisablePublicAccessToRedshiftCluster",
+    "parameters": [
+      "ClusterIdentifier",
+      "AutomationAssumeRole"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for Redshift.1",
+        "type": "remediation",
+        "ssm_document": "ASR-DisablePublicAccessToRedshiftCluster"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": true,
+    "impact_assessment": {
+      "service_impact": "minimal",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": false,
+    "summary": "Rollback not recommended for destructive operations",
+    "steps": []
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.610129Z",
+    "tags": [
+      "PCI321",
+      "redshift",
+      "Redshift.1"
+    ]
+  }
+}

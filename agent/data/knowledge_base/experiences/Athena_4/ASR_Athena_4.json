@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_Athena_4",
+  "source": "AWS-ASR",
+  "control_id": "Athena.4",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "Athena.4",
+    "resource_type": "AwsAthena*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):athena:(?:[a-z]{2}(?:-gov)?-[a-z]+-\\d):\\d{12}:workgroup\\/(.+)$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control Athena.4",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with Athena.4 security control"
+  },
+  "remediation": {
+    "summary": "Remediate Athena.4 finding",
+    "approach": "Security control Athena.4",
+    "ssm_document": "ASR-EnableAthenaWorkGroupLogging",
+    "parameters": [
+      "AutomationAssumeRole",
+      "WorkGroupName"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for Athena.4",
+        "type": "remediation",
+        "ssm_document": "ASR-EnableAthenaWorkGroupLogging"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback Athena.4 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.358257Z",
+    "tags": [
+      "AFSBP",
+      "athena",
+      "Athena.4"
+    ]
+  }
+}

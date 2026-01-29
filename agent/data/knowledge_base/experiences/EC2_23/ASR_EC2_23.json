@@ -1,0 +1,78 @@
+{
+  "experience_id": "ASR_EC2_23",
+  "source": "AWS-ASR",
+  "control_id": "EC2.23",
+  "standard": "AFSBP",
+  "standard_version": "1.0.0",
+  "finding_pattern": {
+    "title_pattern": "EC2.23",
+    "resource_type": "AwsEc*",
+    "resource_id_regex": "^arn:(?:aws|aws-cn|aws-us-gov):ec2:[a-z]{2}-[a-z]+-\\d{1}:\\d{12}:transit-gateway\\/(tgw-[a-z0-9\\-]+)$",
+    "severity": [
+      "MEDIUM",
+      "HIGH",
+      "CRITICAL"
+    ]
+  },
+  "analysis": {
+    "summary": "Security control EC2.23",
+    "risk_level": "MEDIUM",
+    "root_cause": "Resource does not comply with EC2.23 security control"
+  },
+  "remediation": {
+    "summary": "Remediate EC2.23 finding",
+    "approach": "Security control EC2.23",
+    "ssm_document": "ASR-DisableTGWAutoAcceptSharedAttachments",
+    "parameters": [
+      "AutomationAssumeRole",
+      "TransitGatewayId"
+    ],
+    "steps": [
+      {
+        "order": 1,
+        "description": "Parse finding input and extract resource ID",
+        "type": "parse_input"
+      },
+      {
+        "order": 2,
+        "description": "Execute remediation for EC2.23",
+        "type": "remediation",
+        "ssm_document": "ASR-DisableTGWAutoAcceptSharedAttachments"
+      },
+      {
+        "order": 3,
+        "description": "Update Security Hub finding status",
+        "type": "update_finding",
+        "workflow_status": "RESOLVED"
+      }
+    ],
+    "is_destructive": false,
+    "impact_assessment": {
+      "service_impact": "none",
+      "downtime": "none",
+      "data_loss": false
+    }
+  },
+  "rollback": {
+    "available": true,
+    "summary": "Rollback EC2.23 remediation",
+    "steps": [
+      {
+        "order": 1,
+        "description": "Restore previous configuration from saved state"
+      }
+    ]
+  },
+  "metadata": {
+    "source_project": "automated-security-response-on-aws",
+    "source_version": "2.1.0",
+    "verified": true,
+    "verified_by": "AWS Solutions",
+    "created_at": "2026-01-29T05:45:46.484622Z",
+    "tags": [
+      "AFSBP",
+      "ec",
+      "EC2.23"
+    ]
+  }
+}

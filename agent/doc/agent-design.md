@@ -2,975 +2,1213 @@
 
 ## 1. 概述
 
-本文档详细描述 SHARA 系统中各智能体（Agent）的设计，包括职责、能力、工具集、Prompt 设计以及协作方式。
+本文档详细描述 SHARA 系统中各智能体（Agent）的设计，包括职责、能力、工具集、Prompt 设计以及协作方式。**此文档是后续 Agent 开发的主要依据。**
 
 ---
 
-## 2. Agent 框架选型
+## 2. 技术栈
 
-### 2.1 Strands Agent Framework
+### 2.1 框架选型
 
-选择 AWS Strands Agent 框架作为基础，主要原因：
+| 组件 | 技术选型 | 用途 |
+|------|----------|------|
+| Agent 框架 | Strands Agent SDK | Agent 开发、工具注册、对话管理 |
+| 运行环境 | AgentCore Runtime | 安全隔离的生产执行环境 |
+| 记忆服务 | AgentCore Memory | 短期记忆 (STM) + 长期记忆 (LTM) |
+| 代码执行 | AgentCore Code Interpreter | 沙盒执行修复代码 |
+| LLM | Amazon Bedrock (Claude) | 智能推理和代码生成 |
 
-| 特性 | 说明 |
-|------|------|
-| AWS 原生集成 | 与 Bedrock、Lambda、DynamoDB 等深度集成 |
-| 多 Agent 支持 | 内置 Agent 协作和通信机制 |
-| 工具扩展 | 易于注册自定义工具 |
-| 可观测性 | 内置追踪和日志支持 |
-| 开源 | 社区活跃，持续迭代 |
+### 2.2 依赖安装
 
-### 2.2 运行环境
-
+```bash
+pip install strands-agents strands-agents-tools  # Strands SDK
+pip install bedrock-agentcore                    # AgentCore SDK
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    AWS AgentCore Runtime                     │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │                  Strands Agent SDK                     │  │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐  │  │
-│  │  │   Agent     │ │    Tool     │ │    Memory       │  │  │
-│  │  │   Runtime   │ │   Registry  │ │    Store        │  │  │
-│  │  └─────────────┘ └─────────────┘ └─────────────────┘  │  │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐  │  │
-│  │  │   LLM       │ │  Callback   │ │    Tracing      │  │  │
-│  │  │   Client    │ │  Handler    │ │    Integration  │  │  │
-│  │  └─────────────┘ └─────────────┘ └─────────────────┘  │  │
-│  └───────────────────────────────────────────────────────┘  │
-│                                                              │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │                  Amazon Bedrock                        │  │
-│  │          Claude 3.5 Sonnet / Claude 3 Opus            │  │
-│  └───────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────┘
+
+### 2.3 核心类库
+
+```python
+# Strands Agent
+from strands import Agent, tool
+from strands.models import BedrockModel
+
+# AgentCore Memory
+from bedrock_agentcore.memory import MemorySessionManager
+from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
+
+# AgentCore Memory + Strands 集成
+from bedrock_agentcore.memory.integrations.strands import (
+    AgentCoreMemorySessionManager,
+    AgentCoreMemoryConfig,
+    RetrievalConfig
+)
+
+# AgentCore Runtime
+from bedrock_agentcore import BedrockAgentCoreApp
 ```
 
 ---
 
-## 3. Agent 详细设计
+## 3. 两阶段架构
 
-### 3.1 Orchestrator Agent (编排智能体)
+### 3.1 架构概览
 
-#### 3.1.1 职责
+SHARA 采用 **Lambda 调度 + Agent 执行** 的两阶段混合架构：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                              SHARA 两阶段架构                                     │
+│                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────┐ │
+│  │                     PHASE 1: 审批前 (分析阶段)                               │ │
+│  │                                                                             │ │
+│  │   EventBridge ──▶ Lambda (Event Handler) ──▶ Analyzer Agent                │ │
+│  │                          │                        │                         │ │
+│  │                          │                        ├─ 从 S3 获取 ASR Playbook │ │
+│  │                          │                        ├─ 从 Memory LTM 搜索经验  │ │
+│  │                          │                        ├─ 风险评估               │ │
+│  │                          │                        └─ 生成修复描述 (无代码)   │ │
+│  │                          │                                                  │ │
+│  │                          ▼                                                  │ │
+│  │                   发送审批邮件 (只包含描述，无代码)                           │ │
+│  └────────────────────────────────────────────────────────────────────────────┘ │
+│                                    │                                             │
+│                                    ▼ 管理员审批                                  │
+│                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────┐ │
+│  │                     PHASE 2: 审批后 (执行阶段)                               │ │
+│  │                                                                             │ │
+│  │   API Gateway ──▶ Lambda (Approval Handler) ──▶ Remediator Agent           │ │
+│  │                                                      │                      │ │
+│  │                                                      ├─ 从 Memory STM 获取  │ │
+│  │                                                      │   Phase 1 上下文     │ │
+│  │                                                      ├─ 生成修复代码        │ │
+│  │                                                      └─ Code Interpreter    │ │
+│  │                                                           执行代码          │ │
+│  │                                                            │                │ │
+│  │                                                            ▼                │ │
+│  │                                                    Validator Agent          │ │
+│  │                                                      │                      │ │
+│  │                                                      ├─ 验证修复效果        │ │
+│  │                                                      ├─ 更新 Finding 状态   │ │
+│  │                                                      └─ 保存经验到 LTM      │ │
+│  └────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 组件职责
+
+| 组件 | 阶段 | 职责 |
+|------|------|------|
+| **Event Handler Lambda** | Phase 1 | 接收 Finding、创建 Memory Session、调用 Analyzer、发送审批邮件 |
+| **Analyzer Agent** | Phase 1 | 分析 Finding、ASR 匹配、Memory LTM 搜索、生成修复描述 |
+| **Approval Handler Lambda** | Phase 2 | 处理审批、调用 Remediator 和 Validator |
+| **Remediator Agent** | Phase 2 | 从 Memory 获取上下文、生成代码、执行修复、保存回滚数据 |
+| **Validator Agent** | Phase 2 | 验证修复、更新 Security Hub、保存经验到 Memory LTM |
+
+### 3.3 数据流
+
+| 阶段 | 输入 | Agent | 输出 |
+|------|------|-------|------|
+| Phase 1 | Security Hub Finding | Analyzer | 修复描述（文字） |
+| Phase 2 | 审批通过 + Memory 上下文 | Remediator | 修复代码 + 执行结果 |
+| Phase 2 | 执行结果 | Validator | 验证报告 + 经验 |
+
+---
+
+## 4. Memory 架构
+
+### 4.1 Memory 用途
+
+| 类型 | 用途 | 生命周期 |
+|------|------|----------|
+| **Session (STM)** | Phase 1 → Phase 2 上下文传递 | 任务周期 |
+| **LTM** | 存储和检索修复经验 | 永久 |
+
+### 4.2 Session (STM) 设计
+
+每个任务创建一个独立的 Memory Session，用于跨阶段传递上下文：
+
+```python
+# Session ID 命名规则
+session_id = f"session-task-{task_id}"
+
+# Session 内容
+{
+    "phase1_analysis": {
+        "finding_summary": "...",
+        "control_id": "S3.1",
+        "asr_playbook_matched": true,
+        "risk_assessment": {...},
+        "remediation_description": "..."
+    },
+    "phase2_execution": {
+        "generated_code": "...",
+        "execution_result": {...},
+        "rollback_data": {...}
+    }
+}
+```
+
+### 4.3 LTM Namespace 设计
+
+```
+/remediation/
+├── /remediation/{controlId}/           # 按 Control ID 分类
+│   ├── /remediation/S3.1/user-123     # 用户验证的经验
+│   └── /remediation/S3.1/user-456
+└── /remediation/{resourceType}/        # 按资源类型分类
+    ├── /remediation/AwsS3Bucket/...
+    └── /remediation/AwsEc2SecurityGroup/...
+```
+
+### 4.4 Memory 操作流程
+
+| 阶段 | Agent | 操作 | API |
+|------|-------|------|-----|
+| Phase 1 | Analyzer | 搜索相似经验 | `search_long_term_memories()` |
+| Phase 1 | Analyzer | 保存分析结果 | `add_turns()` |
+| Phase 2 | Remediator | 获取 Phase 1 结果 | `get_last_k_turns()` |
+| Phase 2 | Remediator | 保存执行结果 | `add_turns()` |
+| Phase 2 | Validator | 保存经验到 LTM | Memory LTM API |
+
+---
+
+## 5. Analyzer Agent (Phase 1)
+
+### 5.1 职责
 
 | 职责 | 描述 |
 |------|------|
-| 任务接收 | 接收来自 Lambda 的处理请求 |
-| 任务分解 | 将复杂任务分解为子任务 |
-| Agent 调度 | 根据任务类型调用相应的子 Agent |
-| 状态管理 | 维护整体处理状态 |
-| 异常处理 | 处理子 Agent 的错误和超时 |
-| 结果聚合 | 汇总各 Agent 的处理结果 |
+| Finding 解析 | 解析 ASFF 格式，提取 Control ID |
+| ASR Playbook 匹配 | 从 S3 精确匹配 ASR 预置方案 |
+| Memory LTM 搜索 | 语义搜索相似修复经验 |
+| 资源上下文收集 | 获取资源当前配置 |
+| 风险评估 | 评估 Finding 的实际风险 |
+| **生成修复描述** | 生成文字描述（**不生成代码**） |
 
-#### 3.1.2 System Prompt
-
-```markdown
-# Role
-You are the Orchestrator Agent for the Security Hub Auto-Remediation Agent (SHARA) system.
-Your role is to coordinate the analysis and remediation of AWS Security Hub findings.
-
-# Responsibilities
-1. Receive security findings from AWS Security Hub
-2. Coordinate the analysis process by delegating to the Analyzer Agent
-3. Coordinate remediation planning by delegating to the Remediator Agent
-4. Manage the approval workflow
-5. Oversee remediation execution
-6. Coordinate validation by delegating to the Validator Agent
-
-# Guidelines
-- Always validate input data before processing
-- Maintain detailed state for each task
-- Handle errors gracefully and provide clear error messages
-- Never skip the approval step for actual remediation
-- Log all significant actions for audit purposes
-
-# Task Flow
-1. ANALYZE: Delegate to Analyzer Agent to understand the finding
-2. PLAN: Delegate to Remediator Agent to create remediation plan
-3. APPROVE: Request approval via email notification
-4. EXECUTE: After approval, delegate execution to Remediator Agent
-5. VALIDATE: Delegate to Validator Agent to verify the fix
-
-# Output Format
-Always respond with a structured JSON containing:
-- status: current processing status
-- phase: current phase (analyze, plan, approve, execute, validate)
-- result: phase-specific results
-- nextAction: what happens next
-- errors: any errors encountered
-```
-
-#### 3.1.3 工具集
-
-```python
-ORCHESTRATOR_TOOLS = [
-    # 子 Agent 调用
-    Tool(
-        name="invoke_analyzer",
-        description="调用 Analyzer Agent 分析 Finding",
-        parameters={
-            "finding": "Security Hub finding object",
-            "context": "Additional context"
-        }
-    ),
-    Tool(
-        name="invoke_remediator",
-        description="调用 Remediator Agent 生成/执行修复方案",
-        parameters={
-            "analysis": "Analysis result from Analyzer",
-            "action": "plan | execute"
-        }
-    ),
-    Tool(
-        name="invoke_validator",
-        description="调用 Validator Agent 验证修复结果",
-        parameters={
-            "remediation": "Executed remediation details",
-            "expectedState": "Expected resource state"
-        }
-    ),
-
-    # 状态管理
-    Tool(
-        name="update_task_status",
-        description="更新任务状态",
-        parameters={
-            "taskId": "Task ID",
-            "status": "New status",
-            "details": "Status details"
-        }
-    ),
-    Tool(
-        name="get_task_status",
-        description="获取任务当前状态",
-        parameters={"taskId": "Task ID"}
-    ),
-
-    # 通知
-    Tool(
-        name="send_approval_request",
-        description="发送审批请求邮件",
-        parameters={
-            "taskId": "Task ID",
-            "remediation": "Remediation plan",
-            "recipients": "Email recipients"
-        }
-    ),
-    Tool(
-        name="send_notification",
-        description="发送状态通知",
-        parameters={
-            "type": "success | failure | info",
-            "message": "Notification message",
-            "recipients": "Email recipients"
-        }
-    )
-]
-```
-
-#### 3.1.4 状态转换逻辑
-
-```python
-class OrchestratorStateMachine:
-    async def process(self, task_id: str, finding: dict):
-        try:
-            # 1. 分析阶段
-            await self.update_status(task_id, "analyzing")
-            analysis = await self.invoke_analyzer(finding)
-
-            if analysis.skip_remediation:
-                await self.update_status(task_id, "skipped", analysis.reason)
-                return
-
-            # 2. 方案生成阶段
-            await self.update_status(task_id, "planning")
-            plan = await self.invoke_remediator(analysis, action="plan")
-
-            # 3. 审批阶段
-            await self.update_status(task_id, "pending_approval")
-            await self.send_approval_request(task_id, plan)
-
-            # 等待审批回调...
-
-        except Exception as e:
-            await self.handle_error(task_id, e)
-
-    async def handle_approval(self, task_id: str, approved: bool, reason: str = None):
-        if not approved:
-            await self.update_status(task_id, "rejected", reason)
-            return
-
-        try:
-            # 4. 执行阶段
-            await self.update_status(task_id, "executing")
-            result = await self.invoke_remediator(task_id, action="execute")
-
-            # 5. 验证阶段
-            await self.update_status(task_id, "validating")
-            validation = await self.invoke_validator(result)
-
-            if validation.success:
-                await self.update_status(task_id, "completed")
-                await self.update_finding_status(task_id, "RESOLVED")
-            else:
-                await self.handle_validation_failure(task_id, validation)
-
-        except Exception as e:
-            await self.handle_execution_error(task_id, e)
-```
-
----
-
-### 3.2 Analyzer Agent (分析智能体)
-
-#### 3.2.1 职责
-
-| 职责 | 描述 |
-|------|------|
-| Finding 解析 | 解析 ASFF 格式的 Finding 数据 |
-| 上下文收集 | 获取相关资源的配置信息 |
-| 风险评估 | 评估 Finding 的实际风险等级 |
-| 影响分析 | 分析修复可能带来的影响 |
-| 分类判断 | 确定 Finding 类型和修复策略 |
-
-#### 3.2.2 System Prompt
+### 5.2 System Prompt
 
 ```markdown
 # Role
-You are the Analyzer Agent for the SHARA system. Your job is to deeply analyze
-AWS Security Hub findings and provide comprehensive analysis for remediation planning.
+You are the Analyzer Agent for SHARA (Security Hub Auto-Remediation Agent).
+Your job is to analyze AWS Security Hub findings and generate remediation descriptions.
 
-# Capabilities
-1. Parse and understand AWS Security Finding Format (ASFF)
-2. Query AWS services to gather resource context
-3. Assess actual security risk based on resource configuration
-4. Identify the root cause of the security issue
-5. Determine the appropriate remediation strategy
+# IMPORTANT
+- You ONLY generate text descriptions, NOT executable code
+- Code generation happens in Phase 2 after human approval
+- Your output will be sent to administrators for approval
 
 # Analysis Process
-1. **Parse Finding**: Extract key information from the ASFF finding
-2. **Identify Resource**: Determine the affected AWS resource(s)
-3. **Gather Context**: Query AWS APIs to get current resource configuration
-4. **Assess Risk**: Evaluate the actual risk level considering:
-   - Data sensitivity
-   - Network exposure
-   - Compliance requirements
-   - Business criticality
-5. **Classify Issue**: Categorize the finding type for remediation routing
-6. **Recommend Strategy**: Suggest the appropriate remediation approach
-
-# Supported Finding Types
-- S3: Public access, encryption, logging, versioning
-- EC2: Security groups, instance metadata, EBS encryption
-- IAM: Overprivileged roles, access keys, MFA
-- RDS: Public access, encryption, backup
-- Lambda: VPC configuration, permissions
-- CloudTrail: Logging configuration
-- GuardDuty: Threat detections
-- Inspector: Vulnerability findings
+1. **Parse Finding**: Extract Control ID and resource information from ASFF
+2. **Fetch ASR Playbook**: Use fetch_asr_playbook tool to get predefined remediation approach
+3. **Search Similar Experiences**: Use search_similar_findings tool to find past successful fixes
+4. **Gather Context**: Query AWS APIs to get current resource configuration
+5. **Risk Assessment**: Evaluate actual risk considering data sensitivity and exposure
+6. **Generate Description**: Create detailed remediation description in plain text
 
 # Output Format
-Provide analysis in the following JSON structure:
 {
-  "findingType": "category of the finding",
-  "resourceType": "AWS resource type",
-  "resourceId": "resource ARN",
-  "currentState": {...},
-  "riskAssessment": {
-    "level": "LOW|MEDIUM|HIGH|CRITICAL",
-    "factors": [...],
-    "justification": "..."
-  },
-  "rootCause": "description of the security issue",
-  "remediationStrategy": "recommended approach",
-  "additionalContext": {...}
-}
-
-# Important Notes
-- Always use the appropriate AWS API tools to gather context
-- Do not assume resource state - always verify
-- Consider the blast radius of potential remediation
-- Flag findings that may require manual intervention
-```
-
-#### 3.2.3 工具集
-
-```python
-ANALYZER_TOOLS = [
-    # S3 分析工具
-    Tool(
-        name="get_s3_bucket_info",
-        description="获取 S3 bucket 的完整配置信息",
-        handler=get_s3_bucket_info,
-        parameters={
-            "bucket_name": "S3 bucket name"
-        }
-    ),
-    Tool(
-        name="get_s3_bucket_policy",
-        description="获取 S3 bucket policy",
-        handler=get_s3_bucket_policy,
-        parameters={
-            "bucket_name": "S3 bucket name"
-        }
-    ),
-    Tool(
-        name="analyze_s3_policy_risks",
-        description="分析 S3 bucket policy 的风险点",
-        handler=analyze_s3_policy_risks,
-        parameters={
-            "policy": "Bucket policy JSON"
-        }
-    ),
-
-    # EC2 分析工具
-    Tool(
-        name="get_security_group_rules",
-        description="获取安全组规则详情",
-        handler=get_security_group_rules,
-        parameters={
-            "security_group_id": "Security group ID"
-        }
-    ),
-    Tool(
-        name="get_instance_info",
-        description="获取 EC2 实例详情",
-        handler=get_instance_info,
-        parameters={
-            "instance_id": "EC2 instance ID"
-        }
-    ),
-    Tool(
-        name="analyze_security_group_exposure",
-        description="分析安全组的网络暴露风险",
-        handler=analyze_security_group_exposure,
-        parameters={
-            "security_group_id": "Security group ID"
-        }
-    ),
-
-    # IAM 分析工具
-    Tool(
-        name="get_iam_role_info",
-        description="获取 IAM role 详情",
-        handler=get_iam_role_info,
-        parameters={
-            "role_name": "IAM role name"
-        }
-    ),
-    Tool(
-        name="analyze_iam_permissions",
-        description="分析 IAM 权限范围",
-        handler=analyze_iam_permissions,
-        parameters={
-            "policy_document": "IAM policy JSON"
-        }
-    ),
-
-    # 通用分析工具
-    Tool(
-        name="get_resource_tags",
-        description="获取资源标签用于业务上下文判断",
-        handler=get_resource_tags,
-        parameters={
-            "resource_arn": "Resource ARN"
-        }
-    ),
-    Tool(
-        name="get_cloudtrail_events",
-        description="获取资源相关的 CloudTrail 事件",
-        handler=get_cloudtrail_events,
-        parameters={
-            "resource_arn": "Resource ARN",
-            "hours": "Hours to look back"
-        }
-    ),
-    Tool(
-        name="query_config_history",
-        description="获取资源的配置变更历史",
-        handler=query_config_history,
-        parameters={
-            "resource_type": "AWS Config resource type",
-            "resource_id": "Resource identifier"
-        }
-    )
-]
-```
-
-#### 3.2.4 分析流程示例
-
-```python
-class AnalyzerAgent:
-    async def analyze(self, finding: dict) -> AnalysisResult:
-        # 1. 解析 Finding
-        finding_type = self.classify_finding(finding)
-        resource = finding['Resources'][0]
-
-        # 2. 获取资源上下文
-        context = await self.gather_context(resource)
-
-        # 3. 风险评估
-        risk = await self.assess_risk(finding, context)
-
-        # 4. 生成分析结果
-        return AnalysisResult(
-            finding_type=finding_type,
-            resource_type=resource['Type'],
-            resource_id=resource['Id'],
-            current_state=context,
-            risk_assessment=risk,
-            root_cause=self.identify_root_cause(finding, context),
-            remediation_strategy=self.recommend_strategy(finding_type, risk)
-        )
-
-    async def gather_context(self, resource: dict) -> dict:
-        """根据资源类型收集上下文"""
-        handlers = {
-            'AwsS3Bucket': self.gather_s3_context,
-            'AwsEc2SecurityGroup': self.gather_sg_context,
-            'AwsIamRole': self.gather_iam_context,
-            # ...
-        }
-        handler = handlers.get(resource['Type'])
-        if handler:
-            return await handler(resource['Id'])
-        return {}
-```
-
----
-
-### 3.3 Remediator Agent (修复智能体)
-
-#### 3.3.1 职责
-
-| 职责 | 描述 |
-|------|------|
-| 方案生成 | 根据分析结果生成修复方案 |
-| 代码生成 | 生成可执行的 AWS CLI/IaC 代码 |
-| 影响评估 | 评估修复操作的潜在影响 |
-| 回滚设计 | 设计回滚方案 |
-| 执行修复 | 执行审批通过的修复操作 |
-
-#### 3.3.2 System Prompt
-
-```markdown
-# Role
-You are the Remediator Agent for the SHARA system. Your job is to generate and
-execute remediation plans for AWS Security Hub findings.
-
-# Capabilities
-1. Generate comprehensive remediation plans based on analysis
-2. Create executable AWS CLI commands
-3. Generate Infrastructure as Code (CloudFormation/Terraform)
-4. Assess potential impact of remediation actions
-5. Design rollback procedures
-6. Execute approved remediation actions safely
-
-# Remediation Planning Guidelines
-1. **Safety First**: Always design reversible changes when possible
-2. **Minimal Impact**: Choose the least disruptive remediation approach
-3. **Best Practices**: Follow AWS security best practices
-4. **Documentation**: Provide clear descriptions for each step
-5. **Validation**: Include validation steps in the plan
-
-# Supported Remediation Types
-
-## S3 Remediations
-- Block public access
-- Enable encryption (SSE-S3, SSE-KMS)
-- Update bucket policy
-- Enable versioning
-- Configure logging
-
-## EC2/Network Remediations
-- Restrict security group rules
-- Enable VPC flow logs
-- Configure IMDS v2
-- Enable EBS encryption
-
-## IAM Remediations
-- Reduce permissions (least privilege)
-- Enable MFA
-- Rotate access keys
-- Update trust policies
-
-# Plan Output Format
-{
-  "summary": "Brief description of remediation",
-  "steps": [
-    {
-      "order": 1,
-      "name": "step_identifier",
-      "description": "Human readable description",
-      "action": {
-        "service": "aws_service",
-        "operation": "api_operation",
-        "parameters": {...}
-      },
-      "rollback": {...},
-      "validation": {...}
+  "analysis": {
+    "control_id": "S3.1",
+    "finding_type": "S3 Block Public Access disabled",
+    "resource_type": "AwsS3Bucket",
+    "resource_id": "arn:aws:s3:::my-bucket",
+    "risk_assessment": {
+      "level": "HIGH",
+      "factors": ["Contains sensitive data", "Public exposure"],
+      "justification": "..."
     }
-  ],
-  "impactAssessment": {
-    "serviceImpact": "none|minimal|significant",
-    "downtime": "none|brief|extended",
-    "dataLoss": false
   },
-  "rollbackPlan": {...},
-  "generatedCode": {
-    "awsCli": "...",
-    "cloudformation": "..."
+  "asr_match": {
+    "matched": true,
+    "playbook_id": "ASR_S3_1",
+    "confidence": 0.95
+  },
+  "similar_experiences": [...],
+  "remediation": {
+    "summary": "Enable S3 Block Public Access",
+    "description": "This remediation will configure bucket-level block public access settings...",
+    "steps": [
+      "Step 1: Enable BlockPublicAcls",
+      "Step 2: Enable IgnorePublicAcls",
+      "Step 3: Enable BlockPublicPolicy",
+      "Step 4: Enable RestrictPublicBuckets"
+    ],
+    "estimated_impact": "LOW",
+    "rollback_available": true,
+    "is_destructive": false
   }
 }
 
-# Execution Guidelines
-- Always verify current state before making changes
-- Execute one step at a time
-- Verify each step before proceeding
-- Stop immediately on any error
-- Preserve all evidence for audit
+# Important Notes
+- ALWAYS try to match ASR playbook first
+- Include risk assessment factors
+- Provide clear step-by-step description
+- Mark if the operation is destructive
 ```
 
-#### 3.3.3 工具集
+### 5.3 工具集
 
 ```python
-REMEDIATOR_TOOLS = [
-    # 知识库查询
-    Tool(
-        name="search_playbook",
-        description="搜索修复方案知识库",
-        handler=search_playbook,
-        parameters={
-            "finding_type": "Finding type identifier",
-            "resource_type": "AWS resource type"
-        }
-    ),
-    Tool(
-        name="get_remediation_template",
-        description="获取修复模板",
-        handler=get_remediation_template,
-        parameters={
-            "template_id": "Template identifier",
-            "parameters": "Template parameters"
-        }
-    ),
+from strands import tool
+import boto3
 
-    # S3 修复工具
-    Tool(
-        name="s3_put_public_access_block",
-        description="配置 S3 Block Public Access",
-        handler=s3_put_public_access_block,
-        parameters={
-            "bucket": "Bucket name",
-            "config": "Block public access configuration"
-        }
-    ),
-    Tool(
-        name="s3_put_bucket_policy",
-        description="更新 S3 bucket policy",
-        handler=s3_put_bucket_policy,
-        parameters={
-            "bucket": "Bucket name",
-            "policy": "New policy document"
-        }
-    ),
-    Tool(
-        name="s3_put_bucket_encryption",
-        description="配置 S3 bucket 加密",
-        handler=s3_put_bucket_encryption,
-        parameters={
-            "bucket": "Bucket name",
-            "encryption_config": "Encryption configuration"
-        }
-    ),
+# ============ ASR Playbook 工具 ============
 
-    # EC2 修复工具
-    Tool(
-        name="ec2_revoke_security_group_ingress",
-        description="移除安全组入站规则",
-        handler=ec2_revoke_security_group_ingress,
-        parameters={
-            "group_id": "Security group ID",
-            "rule": "Rule to remove"
-        }
-    ),
-    Tool(
-        name="ec2_authorize_security_group_ingress",
-        description="添加安全组入站规则",
-        handler=ec2_authorize_security_group_ingress,
-        parameters={
-            "group_id": "Security group ID",
-            "rule": "Rule to add"
-        }
-    ),
+@tool
+def fetch_asr_playbook(control_id: str) -> dict:
+    """从 S3 获取 ASR 预置修复方案。
 
-    # IAM 修复工具
-    Tool(
-        name="iam_put_role_policy",
-        description="更新 IAM role 内联策略",
-        handler=iam_put_role_policy,
-        parameters={
-            "role_name": "Role name",
-            "policy_name": "Policy name",
-            "policy_document": "Policy JSON"
-        }
-    ),
+    Args:
+        control_id: Security Hub Control ID (如 S3.1, EC2.19)
 
-    # Security Hub 更新
-    Tool(
-        name="update_finding_status",
-        description="更新 Security Hub Finding 状态",
-        handler=update_finding_status,
-        parameters={
-            "finding_id": "Finding ID",
-            "status": "RESOLVED | SUPPRESSED",
-            "note": "Status change note"
-        }
-    ),
+    Returns:
+        ASR Playbook 内容，包含修复方案和代码模板
+    """
+    s3 = boto3.client('s3')
 
-    # 代码生成
-    Tool(
-        name="generate_cli_command",
-        description="生成 AWS CLI 命令",
-        handler=generate_cli_command,
-        parameters={
-            "service": "AWS service",
-            "operation": "API operation",
-            "parameters": "Operation parameters"
-        }
-    ),
-    Tool(
-        name="generate_cloudformation",
-        description="生成 CloudFormation 模板片段",
-        handler=generate_cloudformation,
-        parameters={
-            "resource_type": "CloudFormation resource type",
-            "properties": "Resource properties"
+    # 1. 读取索引文件
+    index_obj = s3.get_object(
+        Bucket=ASR_BUCKET,
+        Key="index.json"
+    )
+    index = json.loads(index_obj['Body'].read())
+
+    # 2. 查找匹配的 Control
+    control_key = control_id.replace('.', '_')
+    match = next(
+        (c for c in index['controls'] if c['control_id'] == control_id),
+        None
+    )
+
+    if not match:
+        return {"matched": False, "control_id": control_id}
+
+    # 3. 获取 Playbook 详情
+    playbook_obj = s3.get_object(
+        Bucket=ASR_BUCKET,
+        Key=f"{match['path']}/{match['experience_id']}.json"
+    )
+    playbook = json.loads(playbook_obj['Body'].read())
+
+    return {
+        "matched": True,
+        "playbook_id": match['experience_id'],
+        "playbook": playbook,
+        "is_destructive": match.get('is_destructive', False)
+    }
+
+
+@tool
+def search_similar_findings(
+    control_id: str,
+    finding_title: str,
+    resource_type: str,
+    top_k: int = 5
+) -> list:
+    """从 Memory LTM 搜索相似的修复经验。
+
+    Args:
+        control_id: Security Hub Control ID
+        finding_title: Finding 标题用于语义搜索
+        resource_type: AWS 资源类型
+        top_k: 返回的最大结果数
+
+    Returns:
+        相似修复经验列表
+    """
+    # 使用 AgentCore Memory 搜索
+    query = f"Control: {control_id}, Finding: {finding_title}, Resource: {resource_type}"
+
+    memories = memory_session.search_long_term_memories(
+        query=query,
+        namespace_prefix=f"/remediation/{control_id.replace('.', '_')}/",
+        top_k=top_k
+    )
+
+    return memories
+
+
+@tool
+def save_analysis_result(
+    task_id: str,
+    analysis: dict,
+    remediation_description: str
+) -> dict:
+    """保存分析结果到 Memory Session (供 Phase 2 使用)。
+
+    Args:
+        task_id: 任务 ID
+        analysis: 分析结果
+        remediation_description: 修复方案描述
+
+    Returns:
+        保存结果
+    """
+    from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
+
+    # 保存为对话记录
+    memory_session.add_turns([
+        ConversationalMessage(
+            json.dumps({
+                "type": "phase1_analysis",
+                "task_id": task_id,
+                "analysis": analysis,
+                "remediation_description": remediation_description
+            }),
+            MessageRole.ASSISTANT
+        )
+    ])
+
+    return {"success": True, "task_id": task_id}
+
+
+# ============ 资源信息获取工具 ============
+
+@tool
+def get_s3_bucket_info(bucket_name: str) -> dict:
+    """获取 S3 bucket 的完整配置信息。
+
+    Args:
+        bucket_name: S3 bucket 名称
+
+    Returns:
+        Bucket 配置信息
+    """
+    s3 = boto3.client('s3')
+
+    info = {
+        "bucket_name": bucket_name,
+        "public_access_block": None,
+        "bucket_policy": None,
+        "bucket_acl": None,
+        "encryption": None
+    }
+
+    try:
+        info["public_access_block"] = s3.get_public_access_block(
+            Bucket=bucket_name
+        )["PublicAccessBlockConfiguration"]
+    except s3.exceptions.NoSuchPublicAccessBlockConfiguration:
+        info["public_access_block"] = None
+
+    try:
+        info["bucket_policy"] = s3.get_bucket_policy(Bucket=bucket_name)["Policy"]
+    except s3.exceptions.NoSuchBucketPolicy:
+        info["bucket_policy"] = None
+
+    try:
+        info["bucket_acl"] = s3.get_bucket_acl(Bucket=bucket_name)
+    except Exception:
+        pass
+
+    try:
+        info["encryption"] = s3.get_bucket_encryption(Bucket=bucket_name)
+    except s3.exceptions.ServerSideEncryptionConfigurationNotFoundError:
+        info["encryption"] = None
+
+    return info
+
+
+@tool
+def get_security_group_rules(security_group_id: str) -> dict:
+    """获取安全组规则详情。
+
+    Args:
+        security_group_id: 安全组 ID
+
+    Returns:
+        安全组规则信息
+    """
+    ec2 = boto3.client('ec2')
+
+    response = ec2.describe_security_groups(
+        GroupIds=[security_group_id]
+    )
+
+    if not response['SecurityGroups']:
+        return {"error": "Security group not found"}
+
+    sg = response['SecurityGroups'][0]
+    return {
+        "group_id": sg['GroupId'],
+        "group_name": sg['GroupName'],
+        "vpc_id": sg.get('VpcId'),
+        "inbound_rules": sg['IpPermissions'],
+        "outbound_rules": sg['IpPermissionsEgress'],
+        "tags": sg.get('Tags', [])
+    }
+
+
+@tool
+def get_iam_role_info(role_name: str) -> dict:
+    """获取 IAM Role 详情。
+
+    Args:
+        role_name: IAM Role 名称
+
+    Returns:
+        Role 信息
+    """
+    iam = boto3.client('iam')
+
+    role = iam.get_role(RoleName=role_name)['Role']
+
+    # 获取内联策略
+    inline_policies = iam.list_role_policies(RoleName=role_name)['PolicyNames']
+
+    # 获取附加的托管策略
+    attached_policies = iam.list_attached_role_policies(RoleName=role_name)['AttachedPolicies']
+
+    return {
+        "role_name": role['RoleName'],
+        "role_arn": role['Arn'],
+        "assume_role_policy": role['AssumeRolePolicyDocument'],
+        "inline_policies": inline_policies,
+        "attached_policies": attached_policies
+    }
+```
+
+### 5.4 Agent 实例化
+
+```python
+from strands import Agent
+from strands.models import BedrockModel
+from bedrock_agentcore.memory.integrations.strands import (
+    AgentCoreMemorySessionManager,
+    AgentCoreMemoryConfig,
+    RetrievalConfig
+)
+
+def create_analyzer_agent(task_id: str, memory_id: str) -> Agent:
+    """创建 Analyzer Agent 实例"""
+
+    # 配置 Memory
+    memory_config = AgentCoreMemoryConfig(
+        memory_id=memory_id,
+        actor_id=f"task-{task_id}",
+        session_id=f"session-task-{task_id}",
+        retrieval_config={
+            # 搜索相似修复经验
+            "remediation/{controlId}": RetrievalConfig(
+                top_k=5,
+                relevance_score=0.5
+            )
         }
     )
-]
-```
 
-#### 3.3.4 修复执行流程
+    session_manager = AgentCoreMemorySessionManager(
+        agentcore_memory_config=memory_config,
+        region_name="us-east-1"
+    )
 
-```python
-class RemediatorAgent:
-    async def generate_plan(self, analysis: AnalysisResult) -> RemediationPlan:
-        # 1. 查询知识库
-        playbook = await self.search_playbook(
-            analysis.finding_type,
-            analysis.resource_type
-        )
+    # 创建 Agent
+    agent = Agent(
+        model=BedrockModel(
+            model_id="anthropic.claude-sonnet-4-20250514-v1:0",
+            temperature=0.2,
+            max_tokens=8192
+        ),
+        system_prompt=ANALYZER_SYSTEM_PROMPT,
+        tools=[
+            fetch_asr_playbook,
+            search_similar_findings,
+            save_analysis_result,
+            get_s3_bucket_info,
+            get_security_group_rules,
+            get_iam_role_info,
+        ],
+        session_manager=session_manager
+    )
 
-        # 2. 定制化方案
-        plan = await self.customize_plan(playbook, analysis)
-
-        # 3. 生成可执行代码
-        plan.generated_code = await self.generate_code(plan)
-
-        # 4. 设计回滚方案
-        plan.rollback_plan = await self.design_rollback(plan)
-
-        return plan
-
-    async def execute(self, task_id: str) -> ExecutionResult:
-        task = await self.get_task(task_id)
-        plan = task.remediation
-
-        results = []
-        for step in plan.steps:
-            try:
-                # 执行步骤
-                result = await self.execute_step(step)
-                results.append(result)
-
-                # 验证步骤结果
-                if step.validation:
-                    await self.validate_step(step.validation)
-
-            except Exception as e:
-                # 记录错误
-                await self.log_error(task_id, step, e)
-
-                # 决定是否回滚
-                if self.should_rollback(e):
-                    await self.rollback(task_id, results)
-
-                raise
-
-        return ExecutionResult(success=True, steps=results)
+    return agent
 ```
 
 ---
 
-### 3.4 Validator Agent (验证智能体)
+## 6. Remediator Agent (Phase 2)
 
-#### 3.4.1 职责
+### 6.1 职责
 
 | 职责 | 描述 |
 |------|------|
-| 状态验证 | 验证资源达到预期安全状态 |
-| 合规检查 | 确认修复满足合规要求 |
-| 回归测试 | 确保修复未引入新问题 |
-| 结果报告 | 生成验证报告 |
+| **获取 Phase 1 上下文** | 从 Memory Session 读取分析结果 |
+| **生成修复代码** | 基于分析结果生成 Python/Boto3 代码 |
+| **保存回滚数据** | 执行前保存资源当前状态 |
+| **执行修复** | 通过 Code Interpreter 执行代码 |
 
-#### 3.4.2 System Prompt
+### 6.2 System Prompt
 
 ```markdown
 # Role
-You are the Validator Agent for the SHARA system. Your job is to verify that
-remediation actions have been successful and the security finding has been resolved.
+You are the Remediator Agent for SHARA. Your job is to generate and execute
+remediation code based on the analysis from Phase 1.
 
-# Responsibilities
-1. Verify resource state matches expected secure configuration
-2. Run additional security checks to ensure no regression
-3. Update Security Hub finding status
-4. Generate validation report
+# IMPORTANT
+- You operate AFTER human approval has been received
+- Always retrieve Phase 1 analysis context first
+- Always save rollback data before making changes
+- Execute code through Code Interpreter for sandboxed execution
 
-# Validation Process
-1. **State Check**: Verify resource configuration matches expected state
-2. **Security Scan**: Run additional security checks if applicable
-3. **Side Effect Check**: Ensure no unintended changes occurred
-4. **Compliance Verify**: Confirm compliance requirements are met
-5. **Report Generation**: Document validation results
+# Execution Process
+1. **Get Phase 1 Context**: Use get_analysis_context tool to retrieve analysis results
+2. **Save Rollback Data**: Save current resource state before any changes
+3. **Generate Code**: Create Python/Boto3 remediation code
+4. **Execute Code**: Use execute_code tool (Code Interpreter) to run the code
+5. **Report Results**: Return execution status and any errors
+
+# Code Generation Guidelines
+- Use boto3 for all AWS operations
+- Include proper error handling
+- Add comments explaining each step
+- Make code idempotent when possible
 
 # Output Format
 {
-  "success": true|false,
-  "checks": [
-    {
-      "name": "check_name",
-      "passed": true|false,
-      "expected": {...},
-      "actual": {...},
-      "message": "..."
-    }
-  ],
-  "findingStatus": "RESOLVED|FAILED",
-  "recommendations": [...],
-  "report": {...}
+  "phase1_context_retrieved": true,
+  "rollback_data_saved": true,
+  "generated_code": {
+    "language": "python",
+    "code": "import boto3\n..."
+  },
+  "execution": {
+    "status": "success|failed",
+    "started_at": "...",
+    "completed_at": "...",
+    "output": {...},
+    "error": null
+  }
 }
+
+# Important Notes
+- NEVER execute without saving rollback data first
+- Stop immediately on any error
+- Log all actions for audit
 ```
 
-#### 3.4.3 工具集
+### 6.3 工具集
 
 ```python
-VALIDATOR_TOOLS = [
-    # 状态验证
-    Tool(
-        name="verify_s3_configuration",
-        description="验证 S3 bucket 配置",
-        handler=verify_s3_configuration,
-        parameters={
-            "bucket": "Bucket name",
-            "expected_state": "Expected configuration"
-        }
-    ),
-    Tool(
-        name="verify_security_group",
-        description="验证安全组规则",
-        handler=verify_security_group,
-        parameters={
-            "group_id": "Security group ID",
-            "expected_rules": "Expected rule set"
-        }
-    ),
+from strands import tool
+import boto3
+import json
 
-    # 安全扫描
-    Tool(
-        name="run_config_evaluation",
-        description="触发 AWS Config 规则重新评估",
-        handler=run_config_evaluation,
-        parameters={
-            "resource_type": "Resource type",
-            "resource_id": "Resource ID"
-        }
-    ),
-    Tool(
-        name="check_access_analyzer",
-        description="检查 IAM Access Analyzer 结果",
-        handler=check_access_analyzer,
-        parameters={
-            "resource_arn": "Resource ARN"
-        }
-    ),
+@tool
+def get_analysis_context(task_id: str) -> dict:
+    """从 Memory Session 获取 Phase 1 分析结果。
 
-    # Finding 更新
-    Tool(
-        name="update_security_hub_finding",
-        description="更新 Security Hub Finding 状态",
-        handler=update_security_hub_finding,
-        parameters={
-            "finding_id": "Finding ID",
-            "workflow_status": "RESOLVED | NOTIFIED",
-            "note": "Status note"
+    Args:
+        task_id: 任务 ID
+
+    Returns:
+        Phase 1 分析结果，包含修复描述和 ASR 匹配信息
+    """
+    # 获取最近的对话记录
+    turns = memory_session.get_last_k_turns(k=10)
+
+    # 查找 Phase 1 分析结果
+    for turn in reversed(turns):
+        content = turn.get('content', '')
+        if isinstance(content, str) and 'phase1_analysis' in content:
+            data = json.loads(content)
+            if data.get('type') == 'phase1_analysis':
+                return {
+                    "success": True,
+                    "analysis": data.get('analysis'),
+                    "remediation_description": data.get('remediation_description')
+                }
+
+    return {"success": False, "error": "Phase 1 analysis not found"}
+
+
+@tool
+def save_rollback_data(
+    task_id: str,
+    resource_arn: str,
+    resource_type: str,
+    current_state: dict
+) -> dict:
+    """保存资源当前状态用于回滚。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+        resource_type: 资源类型
+        current_state: 当前资源配置状态
+
+    Returns:
+        保存结果
+    """
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('shara-tasks')
+
+    import time
+    ttl = int(time.time()) + (30 * 24 * 60 * 60)  # 30 天
+
+    table.put_item(Item={
+        'PK': f'TASK#{task_id}',
+        'SK': f'ROLLBACK#{resource_arn}',
+        'task_id': task_id,
+        'resource_arn': resource_arn,
+        'resource_type': resource_type,
+        'pre_state': current_state,
+        'created_at': datetime.utcnow().isoformat(),
+        'ttl': ttl
+    })
+
+    return {"success": True, "resource_arn": resource_arn}
+
+
+@tool
+def execute_code(code: str, timeout_seconds: int = 300) -> dict:
+    """通过 Code Interpreter 执行 Python 代码。
+
+    Args:
+        code: 要执行的 Python 代码
+        timeout_seconds: 执行超时时间
+
+    Returns:
+        执行结果，包含输出和错误信息
+    """
+    # 使用 AgentCore Code Interpreter
+    from bedrock_agentcore.tools import CodeInterpreterClient
+
+    client = CodeInterpreterClient()
+
+    result = client.execute(
+        code=code,
+        timeout=timeout_seconds,
+        environment={
+            "AWS_REGION": os.environ.get("AWS_REGION", "us-east-1")
         }
     )
-]
+
+    return {
+        "status": "success" if result.exit_code == 0 else "failed",
+        "exit_code": result.exit_code,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "execution_time_ms": result.execution_time_ms
+    }
+
+
+@tool
+def get_rollback_data(task_id: str, resource_arn: str) -> dict:
+    """获取保存的回滚数据。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+
+    Returns:
+        回滚数据，包含资源修复前的状态
+    """
+    dynamodb = boto3.resource('dynamodb')
+    table = dynamodb.Table('shara-tasks')
+
+    response = table.get_item(Key={
+        'PK': f'TASK#{task_id}',
+        'SK': f'ROLLBACK#{resource_arn}'
+    })
+
+    if 'Item' not in response:
+        return {"success": False, "error": "Rollback data not found"}
+
+    return {
+        "success": True,
+        "pre_state": response['Item']['pre_state'],
+        "resource_type": response['Item']['resource_type']
+    }
+
+
+@tool
+def execute_rollback(task_id: str, resource_arn: str) -> dict:
+    """执行回滚操作，恢复资源到修复前状态。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+
+    Returns:
+        回滚执行结果
+    """
+    # 1. 获取回滚数据
+    rollback_data = get_rollback_data(task_id, resource_arn)
+    if not rollback_data.get('success'):
+        return rollback_data
+
+    pre_state = rollback_data['pre_state']
+    resource_type = rollback_data['resource_type']
+
+    # 2. 根据资源类型生成回滚代码
+    if resource_type == 'AwsS3Bucket':
+        bucket_name = resource_arn.split(':')[-1]
+        rollback_code = f"""
+import boto3
+s3 = boto3.client('s3')
+s3.put_public_access_block(
+    Bucket='{bucket_name}',
+    PublicAccessBlockConfiguration={json.dumps(pre_state.get('PublicAccessBlockConfiguration', {}))}
+)
+print("Rollback completed successfully")
+"""
+    else:
+        return {"success": False, "error": f"Unsupported resource type: {resource_type}"}
+
+    # 3. 执行回滚代码
+    result = execute_code(rollback_code)
+
+    return {
+        "success": result['status'] == 'success',
+        "rollback_result": result
+    }
+```
+
+### 6.4 Agent 实例化
+
+```python
+def create_remediator_agent(task_id: str, memory_session_id: str) -> Agent:
+    """创建 Remediator Agent 实例"""
+
+    # 复用 Phase 1 创建的 Memory Session
+    memory_config = AgentCoreMemoryConfig(
+        memory_id=MEMORY_ID,
+        actor_id=f"task-{task_id}",
+        session_id=memory_session_id  # 使用同一个 Session
+    )
+
+    session_manager = AgentCoreMemorySessionManager(
+        agentcore_memory_config=memory_config,
+        region_name="us-east-1"
+    )
+
+    agent = Agent(
+        model=BedrockModel(
+            model_id="anthropic.claude-sonnet-4-20250514-v1:0",
+            temperature=0.1,  # 低温度确保代码生成稳定
+            max_tokens=8192
+        ),
+        system_prompt=REMEDIATOR_SYSTEM_PROMPT,
+        tools=[
+            get_analysis_context,
+            save_rollback_data,
+            execute_code,
+            get_rollback_data,
+            execute_rollback,
+        ],
+        session_manager=session_manager
+    )
+
+    return agent
 ```
 
 ---
 
-## 4. Agent 协作设计
+## 7. Validator Agent (Phase 2)
 
-### 4.1 通信协议
+### 7.1 职责
+
+| 职责 | 描述 |
+|------|------|
+| **验证修复效果** | 检查资源状态是否符合预期 |
+| **更新 Security Hub** | 将 Finding 状态更新为 RESOLVED |
+| **保存修复经验** | 将验证通过的经验保存到 Memory LTM |
+
+### 7.2 System Prompt
+
+```markdown
+# Role
+You are the Validator Agent for SHARA. Your job is to verify remediation results
+and save successful experiences to long-term memory.
+
+# Validation Process
+1. **Verify Resource State**: Check if resource matches expected secure configuration
+2. **Update Security Hub**: Set finding status to RESOLVED if validation passes
+3. **Save Experience**: Save successful remediation to Memory LTM for future reference
+
+# Output Format
+{
+  "validation": {
+    "passed": true|false,
+    "checks": [
+      {
+        "name": "PublicAccessBlocked",
+        "expected": true,
+        "actual": true,
+        "passed": true
+      }
+    ]
+  },
+  "security_hub_update": {
+    "updated": true,
+    "new_status": "RESOLVED"
+  },
+  "experience_saved": {
+    "saved": true,
+    "namespace": "/remediation/S3.1/..."
+  }
+}
+
+# Important Notes
+- Only save experience if validation passes
+- Include all validation check details
+- Update Security Hub with appropriate workflow status
+```
+
+### 7.3 工具集
 
 ```python
-@dataclass
-class AgentMessage:
-    """Agent 间通信消息格式"""
-    message_id: str
-    source_agent: str
-    target_agent: str
-    action: str
-    payload: dict
-    context: dict
-    timestamp: str
-    trace_id: str
+from strands import tool
+import boto3
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+@tool
+def verify_resource_state(
+    resource_arn: str,
+    resource_type: str,
+    expected_state: dict
+) -> dict:
+    """验证资源当前状态是否符合预期。
 
-    @classmethod
-    def from_dict(cls, data: dict) -> 'AgentMessage':
-        return cls(**data)
+    Args:
+        resource_arn: 资源 ARN
+        resource_type: 资源类型
+        expected_state: 预期的资源状态
+
+    Returns:
+        验证结果
+    """
+    checks = []
+
+    if resource_type == 'AwsS3Bucket':
+        bucket_name = resource_arn.split(':')[-1]
+        s3 = boto3.client('s3')
+
+        try:
+            actual = s3.get_public_access_block(Bucket=bucket_name)
+            config = actual['PublicAccessBlockConfiguration']
+
+            for key, expected_value in expected_state.items():
+                actual_value = config.get(key)
+                checks.append({
+                    "name": key,
+                    "expected": expected_value,
+                    "actual": actual_value,
+                    "passed": actual_value == expected_value
+                })
+        except Exception as e:
+            checks.append({
+                "name": "PublicAccessBlock",
+                "expected": "configured",
+                "actual": f"error: {str(e)}",
+                "passed": False
+            })
+
+    all_passed = all(c['passed'] for c in checks)
+
+    return {
+        "passed": all_passed,
+        "checks": checks
+    }
+
+
+@tool
+def update_security_hub_finding(
+    finding_id: str,
+    workflow_status: str = "RESOLVED",
+    note: str = None
+) -> dict:
+    """更新 Security Hub Finding 状态。
+
+    Args:
+        finding_id: Finding ID (ARN)
+        workflow_status: 新状态 (RESOLVED, NOTIFIED, SUPPRESSED)
+        note: 状态说明
+
+    Returns:
+        更新结果
+    """
+    securityhub = boto3.client('securityhub')
+
+    update = {
+        'Id': finding_id,
+        'ProductArn': finding_id.rsplit('/', 1)[0],
+        'Workflow': {'Status': workflow_status}
+    }
+
+    if note:
+        update['Note'] = {
+            'Text': note,
+            'UpdatedBy': 'SHARA'
+        }
+
+    response = securityhub.batch_update_findings(
+        FindingIdentifiers=[{
+            'Id': finding_id,
+            'ProductArn': update['ProductArn']
+        }],
+        Workflow={'Status': workflow_status},
+        Note={'Text': note or 'Remediated by SHARA', 'UpdatedBy': 'SHARA'}
+    )
+
+    return {
+        "updated": len(response.get('ProcessedFindings', [])) > 0,
+        "finding_id": finding_id,
+        "new_status": workflow_status
+    }
+
+
+@tool
+def save_experience_to_ltm(
+    control_id: str,
+    task_id: str,
+    finding_title: str,
+    resource_type: str,
+    analysis_summary: str,
+    remediation_approach: str,
+    generated_code: str
+) -> dict:
+    """保存修复经验到 Memory 长期记忆。
+
+    Args:
+        control_id: Control ID
+        task_id: 任务 ID
+        finding_title: Finding 标题
+        resource_type: 资源类型
+        analysis_summary: 分析摘要
+        remediation_approach: 修复方案
+        generated_code: 生成的代码
+
+    Returns:
+        保存结果
+    """
+    from bedrock_agentcore.memory import MemorySessionManager
+
+    manager = MemorySessionManager(
+        memory_id=MEMORY_ID,
+        region_name="us-east-1"
+    )
+
+    # 构建经验文档
+    experience = {
+        "task_id": task_id,
+        "control_id": control_id,
+        "finding_title": finding_title,
+        "resource_type": resource_type,
+        "analysis_summary": analysis_summary,
+        "remediation_approach": remediation_approach,
+        "generated_code": generated_code,
+        "source": "user_validated",
+        "created_at": datetime.utcnow().isoformat()
+    }
+
+    # 保存到 LTM
+    namespace = f"/remediation/{control_id.replace('.', '_')}/{task_id}"
+
+    # 使用 Memory API 保存
+    # (具体 API 根据 AgentCore Memory LTM 文档实现)
+
+    return {
+        "saved": True,
+        "namespace": namespace,
+        "experience_id": task_id
+    }
 ```
 
-### 4.2 协作流程
-
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│                        Multi-Agent Collaboration Flow                         │
-│                                                                               │
-│   Lambda                                                                      │
-│     │                                                                         │
-│     │ 1. ProcessFinding(finding)                                              │
-│     ▼                                                                         │
-│  Orchestrator                                                                 │
-│     │                                                                         │
-│     │ 2. AnalyzeFinding(finding)                                              │
-│     ├────────────────────────────▶ Analyzer                                   │
-│     │                                   │                                     │
-│     │◀──────────────────────────────────┤ 3. AnalysisResult                   │
-│     │                                                                         │
-│     │ 4. GeneratePlan(analysis)                                               │
-│     ├────────────────────────────▶ Remediator                                 │
-│     │                                   │                                     │
-│     │◀──────────────────────────────────┤ 5. RemediationPlan                  │
-│     │                                                                         │
-│     │ 6. SendApprovalEmail(plan)                                              │
-│     │────────────▶ SES ────────────▶ Admin                                    │
-│     │                                                                         │
-│     │           ... wait for approval ...                                     │
-│     │                                                                         │
-│     │◀──────────────────────────────────────── 7. ApprovalCallback            │
-│     │                                                                         │
-│     │ 8. ExecutePlan(plan)                                                    │
-│     ├────────────────────────────▶ Remediator                                 │
-│     │                                   │                                     │
-│     │◀──────────────────────────────────┤ 9. ExecutionResult                  │
-│     │                                                                         │
-│     │ 10. ValidateFix(result)                                                 │
-│     ├────────────────────────────▶ Validator                                  │
-│     │                                   │                                     │
-│     │◀──────────────────────────────────┤ 11. ValidationResult                │
-│     │                                                                         │
-│     │ 12. Complete                                                            │
-│     ▼                                                                         │
-│   Done                                                                        │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-### 4.3 错误处理与重试
+### 7.4 Agent 实例化
 
 ```python
-class AgentCoordinator:
-    """Agent 协调器，处理 Agent 间的通信和错误"""
+def create_validator_agent(task_id: str, memory_session_id: str) -> Agent:
+    """创建 Validator Agent 实例"""
 
-    async def invoke_agent(
-        self,
-        agent_type: str,
-        action: str,
-        payload: dict,
-        max_retries: int = 3
-    ) -> dict:
-        for attempt in range(max_retries):
-            try:
-                result = await self._invoke(agent_type, action, payload)
-                return result
+    memory_config = AgentCoreMemoryConfig(
+        memory_id=MEMORY_ID,
+        actor_id=f"task-{task_id}",
+        session_id=memory_session_id
+    )
 
-            except RetryableError as e:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2 ** attempt)  # 指数退避
-                    continue
-                raise
+    session_manager = AgentCoreMemorySessionManager(
+        agentcore_memory_config=memory_config,
+        region_name="us-east-1"
+    )
 
-            except NonRetryableError as e:
-                # 记录错误，不重试
-                await self.log_error(agent_type, action, e)
-                raise
+    agent = Agent(
+        model=BedrockModel(
+            model_id="anthropic.claude-sonnet-4-20250514-v1:0",
+            temperature=0.1,
+            max_tokens=4096
+        ),
+        system_prompt=VALIDATOR_SYSTEM_PROMPT,
+        tools=[
+            verify_resource_state,
+            update_security_hub_finding,
+            save_experience_to_ltm,
+        ],
+        session_manager=session_manager
+    )
 
-    async def handle_agent_failure(
-        self,
-        task_id: str,
-        agent_type: str,
-        error: Exception
-    ):
-        """处理 Agent 执行失败"""
-        # 更新任务状态
-        await self.update_task_status(
-            task_id,
-            f"{agent_type}_failed",
-            str(error)
-        )
-
-        # 发送告警
-        await self.send_alert(
-            f"Agent {agent_type} failed for task {task_id}",
-            error
-        )
-
-        # 决定是否需要人工干预
-        if self.requires_manual_intervention(error):
-            await self.escalate_to_human(task_id, error)
+    return agent
 ```
 
 ---
 
-## 5. LLM 配置
+## 8. 完整工作流程
 
-### 5.1 模型选择
+### 8.1 Phase 1: 分析阶段
 
-| Agent | 模型 | 理由 |
-|-------|------|------|
-| Orchestrator | Claude 3.5 Sonnet | 平衡性能和成本，适合任务调度 |
-| Analyzer | Claude 3.5 Sonnet | 需要强大的推理能力 |
-| Remediator | Claude 3 Opus | 需要最强的代码生成能力 |
-| Validator | Claude 3.5 Sonnet | 验证任务相对简单 |
+```python
+async def phase1_analyze(finding: dict) -> dict:
+    """Phase 1: 分析 Finding 并生成修复描述"""
 
-### 5.2 模型参数
+    # 1. 创建任务
+    task_id = str(uuid.uuid4())
+    control_id = extract_control_id(finding)
+
+    # 2. 创建 Memory Session
+    memory_session_id = f"session-task-{task_id}"
+
+    # 3. 创建 Analyzer Agent
+    analyzer = create_analyzer_agent(task_id, MEMORY_ID)
+
+    # 4. 构建 Prompt
+    prompt = f"""
+    Analyze this Security Hub Finding and generate a remediation description:
+
+    Control ID: {control_id}
+    Finding: {json.dumps(finding, indent=2)}
+
+    Steps:
+    1. Fetch ASR playbook for {control_id}
+    2. Search for similar past experiences
+    3. Get current resource configuration
+    4. Assess risk level
+    5. Generate detailed remediation description (NO CODE)
+    6. Save analysis result to Memory
+    """
+
+    # 5. 执行 Agent
+    result = analyzer(prompt)
+
+    # 6. 解析结果
+    analysis_result = parse_analyzer_output(result.message)
+
+    return {
+        "task_id": task_id,
+        "memory_session_id": memory_session_id,
+        "analysis": analysis_result,
+        "approval_required": True
+    }
+```
+
+### 8.2 Phase 2: 执行阶段
+
+```python
+async def phase2_execute(task_id: str, memory_session_id: str) -> dict:
+    """Phase 2: 生成代码并执行修复"""
+
+    # 1. 创建 Remediator Agent
+    remediator = create_remediator_agent(task_id, memory_session_id)
+
+    # 2. 执行修复
+    remediation_prompt = f"""
+    Execute remediation for task {task_id}:
+
+    1. Get Phase 1 analysis context from Memory
+    2. Get current resource state and save rollback data
+    3. Generate Python/boto3 remediation code
+    4. Execute code using execute_code tool
+    """
+
+    remediation_result = remediator(remediation_prompt)
+
+    # 3. 如果修复成功，调用 Validator
+    if remediation_result.get('success'):
+        validator = create_validator_agent(task_id, memory_session_id)
+
+        validation_prompt = f"""
+        Validate remediation for task {task_id}:
+
+        1. Verify resource state matches expected configuration
+        2. Update Security Hub finding status to RESOLVED
+        3. Save successful experience to Memory LTM
+        """
+
+        validation_result = validator(validation_prompt)
+
+        return {
+            "task_id": task_id,
+            "remediation": remediation_result,
+            "validation": validation_result
+        }
+
+    return {
+        "task_id": task_id,
+        "remediation": remediation_result,
+        "validation": None,
+        "error": "Remediation failed"
+    }
+```
+
+### 8.3 状态流转
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  PHASE 1: 审批前                                                                 │
+│                                                                                  │
+│  PENDING ──▶ ANALYZING ──▶ WAITING_APPROVAL                                     │
+│                  │              │                                                │
+│                  ▼              ▼                                                │
+│           ANALYSIS_FAILED   REJECTED / APPROVAL_EXPIRED                         │
+│                                                                                  │
+├─────────────────────────────────────────────────────────────────────────────────┤
+│  PHASE 2: 审批后                                                                 │
+│                                                                                  │
+│  APPROVED ──▶ GENERATING_CODE ──▶ EXECUTING ──▶ VALIDATING ──▶ WAITING_FEEDBACK │
+│                     │                 │              │               │          │
+│                     ▼                 ▼              ▼               │          │
+│                  FAILED           FAILED          FAILED             │          │
+│                                                                      │          │
+│                                            ┌─────────────────────────┘          │
+│                                            │                                     │
+│                                            ▼                                     │
+│                                  ┌─────────────────────┐                        │
+│                                  │                     │                        │
+│                                  ▼                     ▼                        │
+│                             COMPLETED             ROLLED_BACK                   │
+│                        (经验已保存到 LTM)          (已回滚)                      │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 9. LLM 配置
+
+### 9.1 模型选择
+
+| Agent | 模型 | Temperature | 理由 |
+|-------|------|-------------|------|
+| Analyzer | Claude Sonnet 4 | 0.2 | 需要准确分析和推理 |
+| Remediator | Claude Sonnet 4 | 0.1 | 代码生成需要高度确定性 |
+| Validator | Claude Sonnet 4 | 0.1 | 验证任务需要精确 |
+
+### 9.2 模型参数配置
 
 ```python
 MODEL_CONFIGS = {
-    "orchestrator": {
-        "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
-        "temperature": 0.3,
-        "max_tokens": 4096,
-        "top_p": 0.9
-    },
     "analyzer": {
-        "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model_id": "anthropic.claude-sonnet-4-20250514-v1:0",
         "temperature": 0.2,
         "max_tokens": 8192,
         "top_p": 0.9
     },
     "remediator": {
-        "model_id": "anthropic.claude-3-opus-20240229-v1:0",
-        "temperature": 0.1,  # 低温度确保代码生成稳定
+        "model_id": "anthropic.claude-sonnet-4-20250514-v1:0",
+        "temperature": 0.1,
         "max_tokens": 8192,
         "top_p": 0.95
     },
     "validator": {
-        "model_id": "anthropic.claude-3-5-sonnet-20241022-v2:0",
+        "model_id": "anthropic.claude-sonnet-4-20250514-v1:0",
         "temperature": 0.1,
         "max_tokens": 4096,
         "top_p": 0.9
@@ -980,156 +1218,68 @@ MODEL_CONFIGS = {
 
 ---
 
-## 6. 知识库集成
+## 10. 可观测性
 
-### 6.1 RAG (检索增强生成) 设计
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Knowledge Base Integration                │
-│                                                              │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │   Playbook   │    │   Bedrock    │    │   Vector     │  │
-│  │   Storage    │───▶│   Embedding  │───▶│   Store      │  │
-│  │   (S3)       │    │              │    │   (OpenSearch│  │
-│  └──────────────┘    └──────────────┘    │   Serverless)│  │
-│                                           └───────┬──────┘  │
-│                                                   │         │
-│                                                   ▼         │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐  │
-│  │   Agent      │◀───│   Bedrock    │◀───│   Semantic   │  │
-│  │   (Query)    │    │   KB API     │    │   Search     │  │
-│  └──────────────┘    └──────────────┘    └──────────────┘  │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### 6.2 知识库查询示例
+### 10.1 追踪配置
 
 ```python
-async def search_remediation_playbook(
-    finding_type: str,
-    resource_type: str,
-    context: dict
-) -> List[Playbook]:
-    """搜索最相关的修复 Playbook"""
+import os
 
-    # 构建查询
-    query = f"""
-    Finding Type: {finding_type}
-    Resource Type: {resource_type}
-    Context: {json.dumps(context)}
+# OpenTelemetry 配置
+os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = "https://your-collector:4317"
+os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] = "gen_ai_latest_experimental"
 
-    Find the most relevant remediation playbook for this security finding.
-    """
-
-    # 调用 Bedrock Knowledge Base
-    response = await bedrock_kb.retrieve(
-        knowledgeBaseId=KNOWLEDGE_BASE_ID,
-        retrievalQuery={"text": query},
-        retrievalConfiguration={
-            "vectorSearchConfiguration": {
-                "numberOfResults": 5
-            }
-        }
-    )
-
-    # 解析结果
-    playbooks = []
-    for result in response['retrievalResults']:
-        playbook = await load_playbook(result['location']['s3Location'])
-        playbooks.append(playbook)
-
-    return playbooks
+# Agent 自定义追踪属性
+agent = Agent(
+    custom_trace_attributes={
+        "shara.task_id": task_id,
+        "shara.control_id": control_id,
+        "shara.phase": "phase1|phase2",
+        "shara.resource_arn": resource_arn,
+    }
+)
 ```
 
----
-
-## 7. 监控与调试
-
-### 7.1 Agent 执行追踪
-
-```python
-@dataclass
-class AgentTrace:
-    trace_id: str
-    agent_type: str
-    action: str
-    start_time: datetime
-    end_time: Optional[datetime]
-    status: str
-    input_tokens: int
-    output_tokens: int
-    tool_calls: List[dict]
-    llm_calls: List[dict]
-    errors: List[dict]
-
-class AgentTracer:
-    """Agent 执行追踪器"""
-
-    def start_trace(self, agent_type: str, action: str) -> AgentTrace:
-        return AgentTrace(
-            trace_id=str(uuid.uuid4()),
-            agent_type=agent_type,
-            action=action,
-            start_time=datetime.utcnow(),
-            end_time=None,
-            status="running",
-            input_tokens=0,
-            output_tokens=0,
-            tool_calls=[],
-            llm_calls=[],
-            errors=[]
-        )
-
-    def record_tool_call(self, trace: AgentTrace, tool: str, input: dict, output: dict):
-        trace.tool_calls.append({
-            "tool": tool,
-            "input": input,
-            "output": output,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-
-    def record_llm_call(self, trace: AgentTrace, prompt: str, response: str, tokens: dict):
-        trace.llm_calls.append({
-            "prompt_preview": prompt[:500],
-            "response_preview": response[:500],
-            "tokens": tokens,
-            "timestamp": datetime.utcnow().isoformat()
-        })
-        trace.input_tokens += tokens.get("input", 0)
-        trace.output_tokens += tokens.get("output", 0)
-```
-
-### 7.2 日志格式
+### 10.2 日志格式
 
 ```json
 {
-  "timestamp": "2025-01-28T10:30:00.123Z",
-  "level": "INFO",
-  "logger": "shara.agent.analyzer",
-  "trace_id": "1-abc123-def456",
-  "span_id": "span-789",
-  "task_id": "task-12345",
-  "agent": "analyzer",
-  "action": "analyze_finding",
-  "message": "Starting finding analysis",
-  "context": {
-    "finding_id": "arn:aws:securityhub:...",
-    "finding_type": "S3PublicAccess",
-    "resource_type": "AwsS3Bucket"
-  },
-  "metrics": {
-    "duration_ms": null,
-    "tool_calls": 0,
-    "llm_tokens": 0
-  }
+    "timestamp": "2025-01-29T10:30:00.123Z",
+    "level": "INFO",
+    "logger": "shara.agent.analyzer",
+    "trace_id": "1-abc123-def456",
+    "task_id": "task-12345",
+    "phase": "phase1",
+    "agent": "analyzer",
+    "action": "fetch_asr_playbook",
+    "message": "ASR playbook matched",
+    "context": {
+        "control_id": "S3.1",
+        "playbook_id": "ASR_S3_1",
+        "match_confidence": 0.95
+    }
 }
 ```
 
+### 10.3 关键指标
+
+| 指标 | 类型 | 说明 |
+|------|------|------|
+| `shara.findings.received` | Counter | 接收的 Finding 数量 |
+| `shara.phase1.duration_ms` | Timer | Phase 1 处理时长 |
+| `shara.phase2.duration_ms` | Timer | Phase 2 处理时长 |
+| `shara.asr.match_rate` | Gauge | ASR 匹配率 |
+| `shara.remediation.success_rate` | Gauge | 修复成功率 |
+| `shara.llm.tokens.input` | Counter | LLM 输入 Token |
+| `shara.llm.tokens.output` | Counter | LLM 输出 Token |
+
 ---
 
-## 8. 文档版本
+## 11. 文档版本
 
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|----------|
 | 1.0 | 2025-01-28 | - | 初始版本 |
+| 2.0 | 2025-01-29 | - | 重构架构：移除 Orchestrator，Lambda 负责调度 |
+| 2.1 | 2025-01-29 | - | 新增知识库设计章节 |
+| 3.0 | 2025-01-29 | - | 重构为两阶段架构；集成 Strands SDK 和 AgentCore Memory；Analyzer 只生成描述，Remediator 生成代码；使用 @tool 装饰器；新增 Code Interpreter 集成 |
