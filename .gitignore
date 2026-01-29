@@ -94,3 +94,4 @@ logs/
 *.temp
 
 repo/
+agent/.venv/
