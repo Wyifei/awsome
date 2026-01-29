@@ -1,6 +1,6 @@
 # SHARA Agent 开发 TODO
 
-> 上次更新: 2025-01-28
+> 上次更新: 2025-01-29
 > 状态: 文档设计阶段完成，待开始代码实现
 
 ---
@@ -15,6 +15,7 @@
 - [x] 智能体设计文档 `agent-design.md`
 - [x] 部署指南 `deployment-guide.md`
 - [x] 修复方案知识库 `remediation-playbooks.md`
+- [x] AgentCore 集成指南 `agentcore-integration.md`
 
 ---
 
