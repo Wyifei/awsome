@@ -86,12 +86,21 @@ SHARA 采用 **Lambda 调度 + Agent 执行** 的两阶段混合架构：
 │  │                                                      └─ Code Interpreter    │ │
 │  │                                                           执行代码          │ │
 │  │                                                            │                │ │
+│  │                                                            │                │ │
+│  │                                                      (A2A Protocol)         │ │
+│  │                                                            │                │ │
 │  │                                                            ▼                │ │
 │  │                                                    Validator Agent          │ │
 │  │                                                      │                      │ │
-│  │                                                      ├─ 验证修复效果        │ │
+│  │                                                      ├─ 审查代码安全性      │ │
+│  │                                                      ├─ 验证执行结果        │ │
 │  │                                                      ├─ 更新 Finding 状态   │ │
-│  │                                                      └─ 保存经验到 LTM      │ │
+│  │                                                      ├─ 保存经验到 LTM      │ │
+│  │                                                      └─ 触发结果邮件        │ │
+│  │                                                            │                │ │
+│  │                                                            ▼                │ │
+│  │                                                   Lambda (Result Email)     │ │
+│  │                                                   (含 Rollback 链接)        │ │
 │  └────────────────────────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -102,9 +111,10 @@ SHARA 采用 **Lambda 调度 + Agent 执行** 的两阶段混合架构：
 |------|------|------|
 | **Event Handler Lambda** | Phase 1 | 接收 Finding、创建 Memory Session、调用 Analyzer、发送审批邮件 |
 | **Analyzer Agent** | Phase 1 | 分析 Finding、ASR 匹配、Memory LTM 搜索、生成修复描述 |
-| **Approval Handler Lambda** | Phase 2 | 处理审批、调用 Remediator 和 Validator |
-| **Remediator Agent** | Phase 2 | 从 Memory 获取上下文、生成代码、执行修复、保存回滚数据 |
-| **Validator Agent** | Phase 2 | 验证修复、更新 Security Hub、保存经验到 Memory LTM |
+| **Approval Handler Lambda** | Phase 2 | 处理审批、调用 Remediator |
+| **Remediator Agent** | Phase 2 | 从 Memory 获取上下文、生成代码、执行修复、保存回滚数据、通过 A2A 调用 Validator |
+| **Validator Agent** | Phase 2 | 审查代码安全、验证执行结果、更新 Security Hub、保存经验到 LTM、触发结果邮件 |
+| **Feedback Handler Lambda** | Phase 2 | 处理回滚请求、调用 Remediator 执行回滚 |
 
 ### 3.3 数据流
 
@@ -537,32 +547,39 @@ def create_analyzer_agent(task_id: str, memory_id: str) -> Agent:
 | **生成修复代码** | 基于分析结果生成 Python/Boto3 代码 |
 | **保存回滚数据** | 执行前保存资源当前状态 |
 | **执行修复** | 通过 Code Interpreter 执行代码 |
+| **调用 Validator** | 通过 A2A 协议调用 Validator Agent 进行代码审查和结果验证 |
+| **执行回滚** | 当用户点击回滚链接时执行回滚操作 |
 
 ### 6.2 System Prompt
 
 ```markdown
 # Role
 You are the Remediator Agent for SHARA. Your job is to generate and execute
-remediation code based on the analysis from Phase 1.
+remediation code based on the analysis from Phase 1, then invoke Validator Agent.
 
 # IMPORTANT
 - You operate AFTER human approval has been received
 - Always retrieve Phase 1 analysis context first
 - Always save rollback data before making changes
 - Execute code through Code Interpreter for sandboxed execution
+- After execution, call Validator Agent via A2A protocol
 
 # Execution Process
 1. **Get Phase 1 Context**: Use get_analysis_context tool to retrieve analysis results
 2. **Save Rollback Data**: Save current resource state before any changes
 3. **Generate Code**: Create Python/Boto3 remediation code
 4. **Execute Code**: Use execute_code tool (Code Interpreter) to run the code
-5. **Report Results**: Return execution status and any errors
+5. **Invoke Validator**: Use invoke_validator_agent tool to call Validator via A2A
+   - Pass: generated code, execution result, task_id, resource info
+   - Validator will: review code security, verify results, trigger result email
+6. **Report Results**: Return execution status and Validator response
 
 # Code Generation Guidelines
 - Use boto3 for all AWS operations
 - Include proper error handling
 - Add comments explaining each step
 - Make code idempotent when possible
+- IMPORTANT: The generated code will be sent to Validator for security review
 
 # Output Format
 {
@@ -578,6 +595,11 @@ remediation code based on the analysis from Phase 1.
     "completed_at": "...",
     "output": {...},
     "error": null
+  },
+  "validator_response": {
+    "code_review": "passed|warning|failed",
+    "verification": "passed|failed",
+    "email_sent": true
   }
 }
 
@@ -585,6 +607,7 @@ remediation code based on the analysis from Phase 1.
 - NEVER execute without saving rollback data first
 - Stop immediately on any error
 - Log all actions for audit
+- Always invoke Validator after execution (success or failure)
 ```
 
 ### 6.3 工具集
@@ -763,6 +786,78 @@ print("Rollback completed successfully")
         "success": result['status'] == 'success',
         "rollback_result": result
     }
+
+
+@tool
+def invoke_validator_agent(
+    task_id: str,
+    resource_arn: str,
+    resource_type: str,
+    generated_code: str,
+    execution_result: dict,
+    is_rollback: bool = False
+) -> dict:
+    """通过 A2A 协议调用 Validator Agent。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+        resource_type: 资源类型
+        generated_code: 生成的修复代码
+        execution_result: 代码执行结果
+        is_rollback: 是否为回滚操作（回滚邮件不含 Rollback 链接）
+
+    Returns:
+        Validator Agent 的响应，包含代码审查结果、验证结果、邮件发送状态
+    """
+    import httpx
+    import os
+
+    validator_url = os.environ.get('VALIDATOR_RUNTIME_URL')
+    if not validator_url:
+        return {"success": False, "error": "VALIDATOR_RUNTIME_URL not configured"}
+
+    # A2A JSON-RPC 2.0 请求
+    a2a_request = {
+        "jsonrpc": "2.0",
+        "method": "tasks/send",
+        "params": {
+            "message": {
+                "role": "user",
+                "parts": [{
+                    "type": "text",
+                    "text": json.dumps({
+                        "task_id": task_id,
+                        "resource_arn": resource_arn,
+                        "resource_type": resource_type,
+                        "generated_code": generated_code,
+                        "execution_result": execution_result,
+                        "is_rollback": is_rollback
+                    })
+                }]
+            }
+        },
+        "id": task_id
+    }
+
+    try:
+        response = httpx.post(
+            f"{validator_url}/a2a",
+            json=a2a_request,
+            timeout=300.0
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        return {
+            "success": True,
+            "validator_response": result.get("result", {})
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"A2A call failed: {str(e)}"
+        }
 ```
 
 ### 6.4 Agent 实例化
@@ -796,6 +891,7 @@ def create_remediator_agent(task_id: str, memory_session_id: str) -> Agent:
             execute_code,
             get_rollback_data,
             execute_rollback,
+            invoke_validator_agent,  # A2A 调用 Validator
         ],
         session_manager=session_manager
     )
@@ -811,24 +907,62 @@ def create_remediator_agent(task_id: str, memory_session_id: str) -> Agent:
 
 | 职责 | 描述 |
 |------|------|
-| **验证修复效果** | 检查资源状态是否符合预期 |
+| **代码安全审查** | 检查 Remediator 生成的代码是否存在安全风险（危险操作、敏感信息泄露等） |
+| **执行结果验证** | 检查资源状态是否符合预期 |
 | **更新 Security Hub** | 将 Finding 状态更新为 RESOLVED |
 | **保存修复经验** | 将验证通过的经验保存到 Memory LTM |
+| **触发结果邮件** | 调用 Lambda 发送结果邮件（含 Rollback 链接，回滚邮件除外） |
+
+### 7.1.1 触发方式
+
+Validator Agent 通过 A2A 协议被 Remediator Agent 调用：
+
+```
+Remediator Agent ──(A2A Protocol)──▶ Validator Agent
+                   传递:
+                   - task_id
+                   - generated_code
+                   - execution_result
+                   - resource_arn
+                   - is_rollback (是否为回滚操作)
+```
 
 ### 7.2 System Prompt
 
 ```markdown
 # Role
-You are the Validator Agent for SHARA. Your job is to verify remediation results
-and save successful experiences to long-term memory.
+You are the Validator Agent for SHARA. You are invoked via A2A protocol by Remediator Agent.
+Your job is to:
+1. Review generated code for security issues
+2. Verify remediation results
+3. Save successful experiences
+4. Trigger result email to user
+
+# IMPORTANT
+- You are called by Remediator via A2A protocol
+- You receive: task_id, generated_code, execution_result, resource_arn, is_rollback
+- For rollback operations (is_rollback=true), result email should NOT contain Rollback link
 
 # Validation Process
-1. **Verify Resource State**: Check if resource matches expected secure configuration
-2. **Update Security Hub**: Set finding status to RESOLVED if validation passes
-3. **Save Experience**: Save successful remediation to Memory LTM for future reference
+1. **Review Code Security**: Check generated code for security risks
+   - Dangerous operations (delete, destroy, etc.)
+   - Sensitive information leakage
+   - Privilege escalation risks
+   - Environment damage potential
+2. **Verify Resource State**: Check if resource matches expected secure configuration
+3. **Update Security Hub**: Set finding status to RESOLVED if validation passes
+4. **Save Experience**: Save successful remediation to Memory LTM for future reference
+5. **Trigger Result Email**: Call trigger_result_email tool to send email via Lambda
+   - Include Rollback link for normal remediation
+   - Do NOT include Rollback link for rollback operations
 
 # Output Format
 {
+  "code_review": {
+    "status": "passed|warning|rejected",
+    "issues": [],
+    "risk_level": "low|medium|high"
+  },
   "validation": {
     "passed": true|false,
     "checks": [
@@ -847,13 +981,20 @@ and save successful experiences to long-term memory.
   "experience_saved": {
     "saved": true,
     "namespace": "/remediation/S3.1/..."
+  },
+  "result_email": {
+    "sent": true,
+    "includes_rollback_link": true|false
   }
 }
 
 # Important Notes
-- Only save experience if validation passes
+- Review code BEFORE reporting validation results
+- Only save experience if both code review and validation pass
 - Include all validation check details
 - Update Security Hub with appropriate workflow status
+- For rollback operations: do NOT include Rollback link in email
+- For rollback failures: alert user to handle manually
 ```
 
 ### 7.3 工具集
@@ -861,6 +1002,120 @@ and save successful experiences to long-term memory.
 ```python
 from strands import tool
 import boto3
+import re
+
+
+@tool
+def review_code_security(code: str) -> dict:
+    """审查生成的代码是否存在安全风险。
+
+    Args:
+        code: 要审查的 Python 代码
+
+    Returns:
+        审查结果，包含状态、问题列表、风险等级
+    """
+    issues = []
+    risk_level = "low"
+
+    # 危险操作检测
+    dangerous_patterns = [
+        (r'\.delete_', "检测到删除操作"),
+        (r'\.terminate_', "检测到终止操作"),
+        (r'\.destroy_', "检测到销毁操作"),
+        (r'iam\.create_user', "检测到创建 IAM 用户"),
+        (r'iam\.create_access_key', "检测到创建访问密钥"),
+        (r'sts\.assume_role', "检测到角色切换"),
+    ]
+
+    for pattern, message in dangerous_patterns:
+        if re.search(pattern, code, re.IGNORECASE):
+            issues.append({"type": "dangerous_operation", "message": message})
+            risk_level = "high"
+
+    # 敏感信息泄露检测
+    sensitive_patterns = [
+        (r'password\s*=\s*["\'][^"\']+["\']', "代码中包含硬编码密码"),
+        (r'secret\s*=\s*["\'][^"\']+["\']', "代码中包含硬编码密钥"),
+        (r'AKIA[0-9A-Z]{16}', "代码中包含 AWS Access Key"),
+    ]
+
+    for pattern, message in sensitive_patterns:
+        if re.search(pattern, code, re.IGNORECASE):
+            issues.append({"type": "sensitive_info", "message": message})
+            risk_level = "high"
+
+    # 确定状态
+    if risk_level == "high":
+        status = "rejected"
+    elif issues:
+        status = "warning"
+    else:
+        status = "passed"
+
+    return {
+        "status": status,
+        "issues": issues,
+        "risk_level": risk_level
+    }
+
+
+@tool
+def trigger_result_email(
+    task_id: str,
+    resource_arn: str,
+    code_review_result: dict,
+    validation_result: dict,
+    is_rollback: bool = False
+) -> dict:
+    """触发 Lambda 发送结果邮件。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+        code_review_result: 代码审查结果
+        validation_result: 验证结果
+        is_rollback: 是否为回滚操作（回滚邮件不含 Rollback 链接）
+
+    Returns:
+        邮件发送结果
+    """
+    import os
+
+    lambda_client = boto3.client('lambda')
+
+    # 构建邮件内容
+    payload = {
+        "task_id": task_id,
+        "resource_arn": resource_arn,
+        "code_review": code_review_result,
+        "validation": validation_result,
+        "is_rollback": is_rollback,
+        "include_rollback_link": not is_rollback  # 回滚邮件不含 Rollback 链接
+    }
+
+    result_email_lambda = os.environ.get('RESULT_EMAIL_LAMBDA_ARN')
+    if not result_email_lambda:
+        return {"success": False, "error": "RESULT_EMAIL_LAMBDA_ARN not configured"}
+
+    try:
+        response = lambda_client.invoke(
+            FunctionName=result_email_lambda,
+            InvocationType='Event',  # 异步调用
+            Payload=json.dumps(payload)
+        )
+
+        return {
+            "success": True,
+            "sent": True,
+            "includes_rollback_link": not is_rollback
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Failed to trigger email: {str(e)}"
+        }
+
 
 @tool
 def verify_resource_state(
@@ -1040,9 +1295,11 @@ def create_validator_agent(task_id: str, memory_session_id: str) -> Agent:
         ),
         system_prompt=VALIDATOR_SYSTEM_PROMPT,
         tools=[
+            review_code_security,      # 代码安全审查
             verify_resource_state,
             update_security_hub_finding,
             save_experience_to_ltm,
+            trigger_result_email,      # 触发结果邮件
         ],
         session_manager=session_manager
     )
@@ -1283,3 +1540,4 @@ agent = Agent(
 | 2.0 | 2025-01-29 | - | 重构架构：移除 Orchestrator，Lambda 负责调度 |
 | 2.1 | 2025-01-29 | - | 新增知识库设计章节 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段架构；集成 Strands SDK 和 AgentCore Memory；Analyzer 只生成描述，Remediator 生成代码；使用 @tool 装饰器；新增 Code Interpreter 集成 |
+| 4.0 | 2025-01-31 | - | A2A 协议重构：Remediator 通过 A2A 调用 Validator；新增 invoke_validator_agent 工具；Validator 增强职责：代码安全审查 (review_code_security)、触发结果邮件 (trigger_result_email)；结果邮件含 Rollback 链接，回滚邮件不含 |

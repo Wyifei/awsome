@@ -14,3 +14,6 @@ override.tf.json
 # Temporary files
 *.tmp
 *.zip
+
+# Code Interpreter state
+.code_interpreter_id

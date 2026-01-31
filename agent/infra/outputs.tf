@@ -135,3 +135,27 @@ output "securityhub_rule_arn" {
   description = "Security Hub EventBridge rule ARN"
   value       = aws_cloudwatch_event_rule.securityhub.arn
 }
+
+#------------------------------------------------------------------------------
+# ECR
+#------------------------------------------------------------------------------
+
+output "analyzer_agent_ecr_url" {
+  description = "Analyzer Agent ECR repository URL"
+  value       = aws_ecr_repository.analyzer_agent.repository_url
+}
+
+output "remediator_agent_ecr_url" {
+  description = "Remediator Agent ECR repository URL"
+  value       = aws_ecr_repository.remediator_agent.repository_url
+}
+
+output "validator_agent_ecr_url" {
+  description = "Validator Agent ECR repository URL"
+  value       = aws_ecr_repository.validator_agent.repository_url
+}
+
+output "agentcore_runtime_role_arn" {
+  description = "AgentCore Runtime IAM role ARN"
+  value       = aws_iam_role.agentcore_runtime.arn
+}

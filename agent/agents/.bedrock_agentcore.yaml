@@ -1,0 +1,182 @@
+default_agent: shara_dev_analyzer
+agents:
+  shara_dev_remediator:
+    name: shara_dev_remediator
+    language: python
+    node_version: '20'
+    entrypoint: runtime.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: /Users/yifeiwf/Code/awsome2/agent/agents
+    aws:
+      execution_role: arn:aws:iam::870414140965:role/shara-dev-agentcore-runtime
+      execution_role_auto_create: true
+      account: '870414140965'
+      region: ap-northeast-1
+      ecr_repository: 870414140965.dkr.ecr.ap-northeast-1.amazonaws.com/shara-dev-remediator-agent
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: shara_dev_remediator-UQLfXMETec
+      agent_arn: arn:aws:bedrock-agentcore:ap-northeast-1:870414140965:runtime/shara_dev_remediator-UQLfXMETec
+      agent_session_id: 42025869-cc8c-4536-9de5-ad2ea93dfbf3
+    codebuild:
+      project_name: bedrock-agentcore-shara_dev_remediator-builder
+      execution_role: arn:aws:iam::870414140965:role/AmazonBedrockAgentCoreSDKCodeBuild-ap-northeast-1-87c16fb215
+      source_bucket: bedrock-agentcore-codebuild-sources-870414140965-ap-northeast-1
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
+  shara_dev_validator:
+    name: shara_dev_validator
+    language: python
+    node_version: '20'
+    entrypoint: runtime.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: /Users/yifeiwf/Code/awsome2/agent/agents
+    aws:
+      execution_role: arn:aws:iam::870414140965:role/shara-dev-agentcore-runtime
+      execution_role_auto_create: true
+      account: '870414140965'
+      region: ap-northeast-1
+      ecr_repository: 870414140965.dkr.ecr.ap-northeast-1.amazonaws.com/shara-dev-validator-agent
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: shara_dev_validator-tbjfd6CSOD
+      agent_arn: arn:aws:bedrock-agentcore:ap-northeast-1:870414140965:runtime/shara_dev_validator-tbjfd6CSOD
+      agent_session_id: null
+    codebuild:
+      project_name: bedrock-agentcore-shara_dev_validator-builder
+      execution_role: arn:aws:iam::870414140965:role/AmazonBedrockAgentCoreSDKCodeBuild-ap-northeast-1-612d2ed222
+      source_bucket: bedrock-agentcore-codebuild-sources-870414140965-ap-northeast-1
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false
+  shara_dev_analyzer:
+    name: shara_dev_analyzer
+    language: python
+    node_version: '20'
+    entrypoint: runtime.py
+    deployment_type: container
+    runtime_type: null
+    platform: linux/arm64
+    container_runtime: docker
+    source_path: /Users/yifeiwf/Code/awsome2/agent/agents
+    aws:
+      execution_role: arn:aws:iam::870414140965:role/shara-dev-agentcore-runtime
+      execution_role_auto_create: true
+      account: '870414140965'
+      region: ap-northeast-1
+      ecr_repository: 870414140965.dkr.ecr.ap-northeast-1.amazonaws.com/shara-dev-analyzer-agent
+      ecr_auto_create: false
+      s3_path: null
+      s3_auto_create: false
+      network_configuration:
+        network_mode: PUBLIC
+        network_mode_config: null
+      protocol_configuration:
+        server_protocol: HTTP
+      observability:
+        enabled: true
+      lifecycle_configuration:
+        idle_runtime_session_timeout: null
+        max_lifetime: null
+    bedrock_agentcore:
+      agent_id: shara_dev_analyzer-IooFBS9LwA
+      agent_arn: arn:aws:bedrock-agentcore:ap-northeast-1:870414140965:runtime/shara_dev_analyzer-IooFBS9LwA
+      agent_session_id: null
+    codebuild:
+      project_name: bedrock-agentcore-shara_dev_analyzer-builder
+      execution_role: arn:aws:iam::870414140965:role/AmazonBedrockAgentCoreSDKCodeBuild-ap-northeast-1-3c063f4ef4
+      source_bucket: bedrock-agentcore-codebuild-sources-870414140965-ap-northeast-1
+    memory:
+      mode: NO_MEMORY
+      memory_id: null
+      memory_arn: null
+      memory_name: null
+      event_expiry_days: 30
+      first_invoke_memory_check_done: false
+      was_created_by_toolkit: false
+    identity:
+      credential_providers: []
+      workload: null
+    aws_jwt:
+      enabled: false
+      audiences: []
+      signing_algorithm: ES384
+      issuer_url: null
+      duration_seconds: 300
+    authorizer_configuration: null
+    request_header_configuration: null
+    oauth_configuration: null
+    api_key_env_var_name: null
+    api_key_credential_provider_name: null
+    is_generated_by_agentcore_create: false

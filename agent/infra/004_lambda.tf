@@ -31,14 +31,14 @@ resource "aws_security_group" "lambda" {
 # Event Handler Lambda package
 data "archive_file" "event_handler" {
   type        = "zip"
-  source_dir  = "${path.module}/../code/handlers/event_handler"
+  source_dir  = "${path.module}/lambda/event_handler"
   output_path = "${path.module}/.terraform/tmp/event_handler.zip"
 }
 
 # Approval Handler Lambda package
 data "archive_file" "approval_handler" {
   type        = "zip"
-  source_dir  = "${path.module}/../code/handlers/approval_handler"
+  source_dir  = "${path.module}/lambda/approval_handler"
   output_path = "${path.module}/.terraform/tmp/approval_handler.zip"
 }
 
@@ -88,10 +88,17 @@ resource "aws_lambda_function" "event_handler" {
 
   environment {
     variables = {
-      TASKS_TABLE          = aws_dynamodb_table.tasks.name
-      ASR_PLAYBOOKS_BUCKET = aws_s3_bucket.asr_playbooks.id
-      STAGE                = var.stage
-      LOG_LEVEL            = var.stage == "prod" ? "INFO" : "DEBUG"
+      TASKS_TABLE            = aws_dynamodb_table.tasks.name
+      TOKENS_TABLE           = aws_dynamodb_table.tokens.name
+      ASR_PLAYBOOKS_BUCKET   = aws_s3_bucket.asr_playbooks.id
+      AGENTCORE_MEMORY_ID    = var.agentcore_memory_id
+      ANALYZER_RUNTIME_ARN   = var.analyzer_runtime_arn
+      APPROVAL_EMAIL         = var.approval_email
+      SENDER_EMAIL           = var.sender_email
+      API_GATEWAY_URL        = "https://${aws_api_gateway_rest_api.main.id}.execute-api.${local.region}.amazonaws.com/${var.stage}/"
+      APPROVAL_EXPIRY_HOURS  = tostring(var.approval_expiry_hours)
+      STAGE                  = var.stage
+      LOG_LEVEL              = var.stage == "prod" ? "INFO" : "DEBUG"
     }
   }
 
@@ -134,11 +141,13 @@ resource "aws_lambda_function" "approval_handler" {
 
   environment {
     variables = {
-      TASKS_TABLE          = aws_dynamodb_table.tasks.name
-      TOKENS_TABLE         = aws_dynamodb_table.tokens.name
-      ASR_PLAYBOOKS_BUCKET = aws_s3_bucket.asr_playbooks.id
-      STAGE                = var.stage
-      LOG_LEVEL            = var.stage == "prod" ? "INFO" : "DEBUG"
+      TASKS_TABLE              = aws_dynamodb_table.tasks.name
+      TOKENS_TABLE             = aws_dynamodb_table.tokens.name
+      ASR_PLAYBOOKS_BUCKET     = aws_s3_bucket.asr_playbooks.id
+      AGENTCORE_MEMORY_ID      = var.agentcore_memory_id
+      REMEDIATOR_RUNTIME_ARN   = var.remediator_runtime_arn
+      STAGE                    = var.stage
+      LOG_LEVEL                = var.stage == "prod" ? "INFO" : "DEBUG"
     }
   }
 

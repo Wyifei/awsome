@@ -1,777 +1,808 @@
 {
   "version": "1.0.0",
-  "generated_at": "2026-01-29T05:45:46.337394Z",
-  "source": "AWS Automated Security Response",
+  "source": "AWS-ASR",
+  "description": "ASR Playbooks Index for SHARA",
   "controls": [
     {
-      "control_id": "CloudTrail.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudTrail_4",
-      "is_destructive": false,
-      "path": "experiences/CloudTrail_4"
-    },
-    {
-      "control_id": "S3.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_4",
-      "is_destructive": false,
-      "path": "experiences/S3_4"
-    },
-    {
-      "control_id": "SSM.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SSM_4",
-      "is_destructive": false,
-      "path": "experiences/SSM_4"
-    },
-    {
-      "control_id": "Config.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Config_1",
-      "is_destructive": false,
-      "path": "experiences/Config_1"
-    },
-    {
-      "control_id": "ECR.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_ECR_1",
-      "is_destructive": false,
-      "path": "experiences/ECR_1"
-    },
-    {
-      "control_id": "Athena.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Athena_4",
-      "is_destructive": false,
-      "path": "experiences/Athena_4"
-    },
-    {
-      "control_id": "EC2.10",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_10",
-      "is_destructive": false,
-      "path": "experiences/EC2_10"
-    },
-    {
-      "control_id": "ECS.5",
-      "standard": "AFSBP",
-      "experience_id": "ASR_ECS_5",
-      "is_destructive": false,
-      "path": "experiences/ECS_5"
-    },
-    {
-      "control_id": "RDS.5",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_5",
-      "is_destructive": false,
-      "path": "experiences/RDS_5"
-    },
-    {
-      "control_id": "CloudFormation.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudFormation_1",
-      "is_destructive": false,
-      "path": "experiences/CloudFormation_1"
-    },
-    {
-      "control_id": "ElastiCache.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_ElastiCache_1",
-      "is_destructive": false,
-      "path": "experiences/ElastiCache_1"
-    },
-    {
-      "control_id": "EC2.7",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_7",
-      "is_destructive": false,
-      "path": "experiences/EC2_7"
-    },
-    {
-      "control_id": "IAM.3",
-      "standard": "AFSBP",
-      "experience_id": "ASR_IAM_3",
-      "is_destructive": true,
-      "path": "experiences/IAM_3"
-    },
-    {
-      "control_id": "CodeBuild.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CodeBuild_2",
-      "is_destructive": false,
-      "path": "experiences/CodeBuild_2"
-    },
-    {
-      "control_id": "SecretsManager.3",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SecretsManager_3",
-      "is_destructive": false,
-      "path": "experiences/SecretsManager_3"
-    },
-    {
-      "control_id": "RDS.8",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_8",
-      "is_destructive": false,
-      "path": "experiences/RDS_8"
-    },
-    {
-      "control_id": "SNS.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SNS_2",
-      "is_destructive": false,
-      "path": "experiences/SNS_2"
-    },
-    {
-      "control_id": "Redshift.6",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Redshift_6",
-      "is_destructive": false,
-      "path": "experiences/Redshift_6"
-    },
-    {
-      "control_id": "S3.9",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_9",
-      "is_destructive": false,
-      "path": "experiences/S3_9"
-    },
-    {
-      "control_id": "EC2.6",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_6",
-      "is_destructive": false,
-      "path": "experiences/EC2_6"
-    },
-    {
-      "control_id": "RDS.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_4",
-      "is_destructive": false,
-      "path": "experiences/RDS_4"
-    },
-    {
-      "control_id": "Lambda.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Lambda_1",
-      "is_destructive": true,
-      "path": "experiences/Lambda_1"
-    },
-    {
-      "control_id": "CloudFront.12",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudFront_12",
-      "is_destructive": false,
-      "path": "experiences/CloudFront_12"
-    },
-    {
-      "control_id": "S3.5",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_5",
-      "is_destructive": false,
-      "path": "experiences/S3_5"
-    },
-    {
-      "control_id": "CloudTrail.5",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudTrail_5",
-      "is_destructive": false,
-      "path": "experiences/CloudTrail_5"
-    },
-    {
-      "control_id": "EC2.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_1",
-      "is_destructive": false,
-      "path": "experiences/EC2_1"
-    },
-    {
-      "control_id": "S3.13",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_13",
-      "is_destructive": false,
-      "path": "experiences/S3_13"
-    },
-    {
-      "control_id": "Redshift.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Redshift_1",
-      "is_destructive": true,
-      "path": "experiences/Redshift_1"
-    },
-    {
-      "control_id": "CloudFront.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudFront_1",
-      "is_destructive": false,
-      "path": "experiences/CloudFront_1"
-    },
-    {
-      "control_id": "CloudTrail.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudTrail_2",
-      "is_destructive": false,
-      "path": "experiences/CloudTrail_2"
-    },
-    {
-      "control_id": "S3.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_2",
-      "is_destructive": false,
-      "path": "experiences/S3_2"
-    },
-    {
-      "control_id": "RDS.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_2",
-      "is_destructive": false,
-      "path": "experiences/RDS_2"
-    },
-    {
-      "control_id": "IAM.8",
-      "standard": "AFSBP",
-      "experience_id": "ASR_IAM_8",
-      "is_destructive": true,
-      "path": "experiences/IAM_8"
-    },
-    {
-      "control_id": "Macie.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Macie_1",
-      "is_destructive": false,
-      "path": "experiences/Macie_1"
-    },
-    {
-      "control_id": "SecretsManager.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SecretsManager_4",
-      "is_destructive": false,
-      "path": "experiences/SecretsManager_4"
-    },
-    {
-      "control_id": "CodeBuild.5",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CodeBuild_5",
-      "is_destructive": false,
-      "path": "experiences/CodeBuild_5"
-    },
-    {
-      "control_id": "RDS.16",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_16",
-      "is_destructive": false,
-      "path": "experiences/RDS_16"
-    },
-    {
-      "control_id": "EC2.18",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_18",
-      "is_destructive": true,
-      "path": "experiences/EC2_18"
-    },
-    {
-      "control_id": "IAM.7",
-      "standard": "AFSBP",
-      "experience_id": "ASR_IAM_7",
-      "is_destructive": true,
-      "path": "experiences/IAM_7"
-    },
-    {
-      "control_id": "Redshift.3",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Redshift_3",
-      "is_destructive": false,
-      "path": "experiences/Redshift_3"
-    },
-    {
-      "control_id": "S3.11",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_11",
-      "is_destructive": false,
-      "path": "experiences/S3_11"
-    },
-    {
-      "control_id": "RDS.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_1",
-      "is_destructive": true,
-      "path": "experiences/RDS_1"
-    },
-    {
-      "control_id": "SQS.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SQS_1",
-      "is_destructive": false,
-      "path": "experiences/SQS_1"
-    },
-    {
-      "control_id": "CloudTrail.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_CloudTrail_1",
-      "is_destructive": false,
-      "path": "experiences/CloudTrail_1"
-    },
-    {
-      "control_id": "S3.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_1",
-      "is_destructive": false,
-      "path": "experiences/S3_1"
-    },
-    {
-      "control_id": "SSM.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SSM_1",
-      "is_destructive": false,
-      "path": "experiences/SSM_1"
-    },
-    {
-      "control_id": "GuardDuty.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_GuardDuty_1",
-      "is_destructive": false,
-      "path": "experiences/GuardDuty_1"
-    },
-    {
-      "control_id": "EC2.15",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_15",
-      "is_destructive": false,
-      "path": "experiences/EC2_15"
-    },
-    {
-      "control_id": "EC2.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_2",
-      "is_destructive": true,
-      "path": "experiences/EC2_2"
-    },
-    {
-      "control_id": "APIGateway.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_APIGateway_1",
-      "is_destructive": false,
-      "path": "experiences/APIGateway_1"
-    },
-    {
-      "control_id": "AutoScaling.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_AutoScaling_1",
-      "is_destructive": false,
-      "path": "experiences/AutoScaling_1"
-    },
-    {
-      "control_id": "DynamoDB.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_DynamoDB_1",
-      "is_destructive": false,
-      "path": "experiences/DynamoDB_1"
-    },
-    {
-      "control_id": "EC2.23",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_23",
-      "is_destructive": false,
-      "path": "experiences/EC2_23"
-    },
-    {
-      "control_id": "EC2.19",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_19",
-      "is_destructive": true,
-      "path": "experiences/EC2_19"
-    },
-    {
-      "control_id": "RDS.7",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_7",
-      "is_destructive": false,
-      "path": "experiences/RDS_7"
-    },
-    {
-      "control_id": "S3.6",
-      "standard": "AFSBP",
-      "experience_id": "ASR_S3_6",
-      "is_destructive": false,
-      "path": "experiences/S3_6"
-    },
-    {
-      "control_id": "SecretsManager.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SecretsManager_1",
-      "is_destructive": false,
-      "path": "experiences/SecretsManager_1"
-    },
-    {
-      "control_id": "SNS.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SNS_1",
-      "is_destructive": false,
-      "path": "experiences/SNS_1"
-    },
-    {
-      "control_id": "DynamoDB.6",
-      "standard": "AFSBP",
-      "experience_id": "ASR_DynamoDB_6",
-      "is_destructive": false,
-      "path": "experiences/DynamoDB_6"
-    },
-    {
-      "control_id": "RDS.13",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_13",
-      "is_destructive": false,
-      "path": "experiences/RDS_13"
-    },
-    {
-      "control_id": "ElastiCache.3",
-      "standard": "AFSBP",
-      "experience_id": "ASR_ElastiCache_3",
-      "is_destructive": false,
-      "path": "experiences/ElastiCache_3"
-    },
-    {
-      "control_id": "ElastiCache.2",
-      "standard": "AFSBP",
-      "experience_id": "ASR_ElastiCache_2",
-      "is_destructive": false,
-      "path": "experiences/ElastiCache_2"
-    },
-    {
-      "control_id": "EC2.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_4",
-      "is_destructive": false,
-      "path": "experiences/EC2_4"
-    },
-    {
-      "control_id": "Redshift.4",
-      "standard": "AFSBP",
-      "experience_id": "ASR_Redshift_4",
-      "is_destructive": false,
-      "path": "experiences/Redshift_4"
-    },
-    {
-      "control_id": "EC2.8",
-      "standard": "AFSBP",
-      "experience_id": "ASR_EC2_8",
-      "is_destructive": false,
-      "path": "experiences/EC2_8"
-    },
-    {
-      "control_id": "ELBv2.1",
-      "standard": "AFSBP",
-      "experience_id": "ASR_ELBv2_1",
-      "is_destructive": false,
-      "path": "experiences/ELBv2_1"
-    },
-    {
-      "control_id": "SSM.7",
-      "standard": "AFSBP",
-      "experience_id": "ASR_SSM_7",
-      "is_destructive": false,
-      "path": "experiences/SSM_7"
-    },
-    {
-      "control_id": "RDS.6",
-      "standard": "AFSBP",
-      "experience_id": "ASR_RDS_6",
-      "is_destructive": false,
-      "path": "experiences/RDS_6"
-    },
-    {
-      "control_id": "2.4",
-      "standard": "CIS120",
-      "experience_id": "ASR_2_4",
-      "is_destructive": false,
-      "path": "experiences/2_4"
-    },
-    {
-      "control_id": "2.8",
-      "standard": "CIS120",
-      "experience_id": "ASR_2_8",
-      "is_destructive": false,
-      "path": "experiences/2_8"
-    },
-    {
-      "control_id": "2.9",
-      "standard": "CIS120",
-      "experience_id": "ASR_2_9",
-      "is_destructive": false,
-      "path": "experiences/2_9"
-    },
-    {
-      "control_id": "4.3",
-      "standard": "CIS120",
-      "experience_id": "ASR_4_3",
-      "is_destructive": false,
-      "path": "experiences/4_3"
-    },
-    {
-      "control_id": "3.1",
-      "standard": "CIS120",
-      "experience_id": "ASR_3_1",
-      "is_destructive": false,
-      "path": "experiences/3_1"
-    },
-    {
-      "control_id": "2.5",
-      "standard": "CIS120",
-      "experience_id": "ASR_2_5",
-      "is_destructive": false,
-      "path": "experiences/2_5"
-    },
-    {
       "control_id": "1.20",
-      "standard": "CIS120",
       "experience_id": "ASR_1_20",
-      "is_destructive": false,
-      "path": "experiences/1_20"
-    },
-    {
-      "control_id": "2.2",
+      "path": "1_20",
       "standard": "CIS120",
-      "experience_id": "ASR_2_2",
       "is_destructive": false,
-      "path": "experiences/2_2"
-    },
-    {
-      "control_id": "2.3",
-      "standard": "CIS120",
-      "experience_id": "ASR_2_3",
-      "is_destructive": false,
-      "path": "experiences/2_3"
-    },
-    {
-      "control_id": "1.5",
-      "standard": "CIS120",
-      "experience_id": "ASR_1_5",
-      "is_destructive": false,
-      "path": "experiences/1_5"
-    },
-    {
-      "control_id": "2.1",
-      "standard": "CIS120",
-      "experience_id": "ASR_2_1",
-      "is_destructive": false,
-      "path": "experiences/2_1"
-    },
-    {
-      "control_id": "1.4",
-      "standard": "CIS120",
-      "experience_id": "ASR_1_4",
-      "is_destructive": false,
-      "path": "experiences/1_4"
+      "summary": "Security control 1.20",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "1.3",
-      "standard": "CIS120",
       "experience_id": "ASR_1_3",
+      "path": "1_3",
+      "standard": "CIS120",
       "is_destructive": false,
-      "path": "experiences/1_3"
+      "summary": "Security control 1.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "1.4",
+      "experience_id": "ASR_1_4",
+      "path": "1_4",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 1.4",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "1.5",
+      "experience_id": "ASR_1_5",
+      "path": "1_5",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 1.5",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.1",
+      "experience_id": "ASR_2_1",
+      "path": "2_1",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.2",
+      "experience_id": "ASR_2_2",
+      "path": "2_2",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.2",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.3",
+      "experience_id": "ASR_2_3",
+      "path": "2_3",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.4",
+      "experience_id": "ASR_2_4",
+      "path": "2_4",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.4",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.5",
+      "experience_id": "ASR_2_5",
+      "path": "2_5",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.5",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "2.6",
-      "standard": "CIS120",
       "experience_id": "ASR_2_6",
+      "path": "2_6",
+      "standard": "CIS120",
       "is_destructive": false,
-      "path": "experiences/2_6"
+      "summary": "Security control 2.6",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "2.7",
-      "standard": "CIS120",
       "experience_id": "ASR_2_7",
+      "path": "2_7",
+      "standard": "CIS120",
       "is_destructive": false,
-      "path": "experiences/2_7"
+      "summary": "Security control 2.7",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.8",
+      "experience_id": "ASR_2_8",
+      "path": "2_8",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.8",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "2.9",
+      "experience_id": "ASR_2_9",
+      "path": "2_9",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 2.9",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "3.1",
+      "experience_id": "ASR_3_1",
+      "path": "3_1",
+      "standard": "CIS120",
+      "is_destructive": false,
+      "summary": "Security control 3.1",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "4.1",
-      "standard": "CIS120",
       "experience_id": "ASR_4_1",
+      "path": "4_1",
+      "standard": "CIS120",
       "is_destructive": false,
-      "path": "experiences/4_1"
+      "summary": "Security control 4.1",
+      "risk_level": "MEDIUM"
     },
     {
-      "control_id": "S3.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_S3_1",
+      "control_id": "4.3",
+      "experience_id": "ASR_4_3",
+      "path": "4_3",
+      "standard": "CIS120",
       "is_destructive": false,
-      "path": "experiences/S3_1"
+      "summary": "Security control 4.3",
+      "risk_level": "MEDIUM"
     },
     {
-      "control_id": "RDS.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_RDS_1",
-      "is_destructive": true,
-      "path": "experiences/RDS_1"
-    },
-    {
-      "control_id": "Lambda.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_Lambda_1",
-      "is_destructive": true,
-      "path": "experiences/Lambda_1"
-    },
-    {
-      "control_id": "IAM.7",
-      "standard": "PCI321",
-      "experience_id": "ASR_IAM_7",
-      "is_destructive": true,
-      "path": "experiences/IAM_7"
-    },
-    {
-      "control_id": "EC2.2",
-      "standard": "PCI321",
-      "experience_id": "ASR_EC2_2",
-      "is_destructive": true,
-      "path": "experiences/EC2_2"
-    },
-    {
-      "control_id": "CloudTrail.4",
-      "standard": "PCI321",
-      "experience_id": "ASR_CloudTrail_4",
+      "control_id": "APIGateway.1",
+      "experience_id": "ASR_APIGateway_1",
+      "path": "APIGateway_1",
+      "standard": "AFSBP",
       "is_destructive": false,
-      "path": "experiences/CloudTrail_4"
+      "summary": "Security control APIGateway.1",
+      "risk_level": "MEDIUM"
     },
     {
-      "control_id": "Config.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_Config_1",
+      "control_id": "Athena.4",
+      "experience_id": "ASR_Athena_4",
+      "path": "Athena_4",
+      "standard": "AFSBP",
       "is_destructive": false,
-      "path": "experiences/Config_1"
-    },
-    {
-      "control_id": "EC2.5",
-      "standard": "PCI321",
-      "experience_id": "ASR_EC2_5",
-      "is_destructive": false,
-      "path": "experiences/EC2_5"
-    },
-    {
-      "control_id": "KMS.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_KMS_1",
-      "is_destructive": false,
-      "path": "experiences/KMS_1"
-    },
-    {
-      "control_id": "ELBv2.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_ELBv2_1",
-      "is_destructive": false,
-      "path": "experiences/ELBv2_1"
-    },
-    {
-      "control_id": "CloudTrail.3",
-      "standard": "PCI321",
-      "experience_id": "ASR_CloudTrail_3",
-      "is_destructive": false,
-      "path": "experiences/CloudTrail_3"
-    },
-    {
-      "control_id": "GuardDuty.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_GuardDuty_1",
-      "is_destructive": false,
-      "path": "experiences/GuardDuty_1"
-    },
-    {
-      "control_id": "CloudTrail.2",
-      "standard": "PCI321",
-      "experience_id": "ASR_CloudTrail_2",
-      "is_destructive": false,
-      "path": "experiences/CloudTrail_2"
-    },
-    {
-      "control_id": "S3.6",
-      "standard": "PCI321",
-      "experience_id": "ASR_S3_6",
-      "is_destructive": false,
-      "path": "experiences/S3_6"
+      "summary": "Security control Athena.4",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "AutoScaling.1",
-      "standard": "PCI321",
       "experience_id": "ASR_AutoScaling_1",
-      "is_destructive": false,
-      "path": "experiences/AutoScaling_1"
-    },
-    {
-      "control_id": "CloudTrail.1",
+      "path": "AutoScaling_1",
       "standard": "PCI321",
-      "experience_id": "ASR_CloudTrail_1",
       "is_destructive": false,
-      "path": "experiences/CloudTrail_1"
-    },
-    {
-      "control_id": "S3.5",
-      "standard": "PCI321",
-      "experience_id": "ASR_S3_5",
-      "is_destructive": false,
-      "path": "experiences/S3_5"
-    },
-    {
-      "control_id": "S3.4",
-      "standard": "PCI321",
-      "experience_id": "ASR_S3_4",
-      "is_destructive": false,
-      "path": "experiences/S3_4"
-    },
-    {
-      "control_id": "Redshift.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_Redshift_1",
-      "is_destructive": true,
-      "path": "experiences/Redshift_1"
-    },
-    {
-      "control_id": "EC2.6",
-      "standard": "PCI321",
-      "experience_id": "ASR_EC2_6",
-      "is_destructive": false,
-      "path": "experiences/EC2_6"
+      "summary": "Security control AutoScaling.1",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "CW.1",
-      "standard": "PCI321",
       "experience_id": "ASR_CW_1",
+      "path": "CW_1",
+      "standard": "PCI321",
       "is_destructive": false,
-      "path": "experiences/CW_1"
+      "summary": "Security control CW.1",
+      "risk_level": "MEDIUM"
     },
     {
-      "control_id": "EC2.1",
-      "standard": "PCI321",
-      "experience_id": "ASR_EC2_1",
+      "control_id": "CloudFormation.1",
+      "experience_id": "ASR_CloudFormation_1",
+      "path": "CloudFormation_1",
+      "standard": "AFSBP",
       "is_destructive": false,
-      "path": "experiences/EC2_1"
+      "summary": "Security control CloudFormation.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudFront.1",
+      "experience_id": "ASR_CloudFront_1",
+      "path": "CloudFront_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control CloudFront.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudFront.12",
+      "experience_id": "ASR_CloudFront_12",
+      "path": "CloudFront_12",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control CloudFront.12",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudTrail.1",
+      "experience_id": "ASR_CloudTrail_1",
+      "path": "CloudTrail_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "应启用 CloudTrail 并配置至少一个多区域跟踪",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudTrail.2",
+      "experience_id": "ASR_CloudTrail_2",
+      "path": "CloudTrail_2",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "CloudTrail 应启用静态加密",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudTrail.3",
+      "experience_id": "ASR_CloudTrail_3",
+      "path": "CloudTrail_3",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "Security control CloudTrail.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudTrail.4",
+      "experience_id": "ASR_CloudTrail_4",
+      "path": "CloudTrail_4",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "应启用 CloudTrail 日志文件验证",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "CloudTrail.5",
+      "experience_id": "ASR_CloudTrail_5",
+      "path": "CloudTrail_5",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "CloudTrail 跟踪应与 CloudWatch Logs 集成",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "CodeBuild.2",
-      "standard": "PCI321",
       "experience_id": "ASR_CodeBuild_2",
+      "path": "CodeBuild_2",
+      "standard": "PCI321",
       "is_destructive": false,
-      "path": "experiences/CodeBuild_2"
+      "summary": "Security control CodeBuild.2",
+      "risk_level": "MEDIUM"
     },
     {
-      "control_id": "SSM.3",
-      "standard": "PCI321",
-      "experience_id": "ASR_SSM_3",
+      "control_id": "CodeBuild.5",
+      "experience_id": "ASR_CodeBuild_5",
+      "path": "CodeBuild_5",
+      "standard": "AFSBP",
       "is_destructive": false,
-      "path": "experiences/SSM_3"
+      "summary": "Security control CodeBuild.5",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "Config.1",
+      "experience_id": "ASR_Config_1",
+      "path": "Config_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "应启用 AWS Config",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "DynamoDB.1",
+      "experience_id": "ASR_DynamoDB_1",
+      "path": "DynamoDB_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control DynamoDB.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "DynamoDB.6",
+      "experience_id": "ASR_DynamoDB_6",
+      "path": "DynamoDB_6",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control DynamoDB.6",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.1",
+      "experience_id": "ASR_EC2_1",
+      "path": "EC2_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "EBS 快照不应公开可恢复",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.10",
+      "experience_id": "ASR_EC2_10",
+      "path": "EC2_10",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Amazon EC2 应配置为使用 VPC 端点",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.15",
+      "experience_id": "ASR_EC2_15",
+      "path": "EC2_15",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "EC2 子网不应自动分配公共 IP",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.18",
+      "experience_id": "ASR_EC2_18",
+      "path": "EC2_18",
+      "standard": "AFSBP",
+      "is_destructive": true,
+      "summary": "安全组应仅允许授权端口的入站流量",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "EC2.19",
+      "experience_id": "ASR_EC2_19",
+      "path": "EC2_19",
+      "standard": "AFSBP",
+      "is_destructive": true,
+      "summary": "安全组不应允许对高风险端口的无限制访问",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "EC2.2",
+      "experience_id": "ASR_EC2_2",
+      "path": "EC2_2",
+      "standard": "PCI321",
+      "is_destructive": true,
+      "summary": "VPC 默认安全组不应允许入站和出站流量",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "EC2.23",
+      "experience_id": "ASR_EC2_23",
+      "path": "EC2_23",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control EC2.23",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.4",
+      "experience_id": "ASR_EC2_4",
+      "path": "EC2_4",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "未使用的 EC2 EIP 应移除",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.5",
+      "experience_id": "ASR_EC2_5",
+      "path": "EC2_5",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "Security control EC2.5",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.6",
+      "experience_id": "ASR_EC2_6",
+      "path": "EC2_6",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "VPC 流日志应启用",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.7",
+      "experience_id": "ASR_EC2_7",
+      "path": "EC2_7",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "EBS 默认加密应启用",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "EC2.8",
+      "experience_id": "ASR_EC2_8",
+      "path": "EC2_8",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "EC2 实例应使用 IMDSv2",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "ECR.1",
+      "experience_id": "ASR_ECR_1",
+      "path": "ECR_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control ECR.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "ECS.5",
+      "experience_id": "ASR_ECS_5",
+      "path": "ECS_5",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control ECS.5",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "ELBv2.1",
+      "experience_id": "ASR_ELBv2_1",
+      "path": "ELBv2_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "Security control ELBv2.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "ElastiCache.1",
+      "experience_id": "ASR_ElastiCache_1",
+      "path": "ElastiCache_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control ElastiCache.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "ElastiCache.2",
+      "experience_id": "ASR_ElastiCache_2",
+      "path": "ElastiCache_2",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control ElastiCache.2",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "ElastiCache.3",
+      "experience_id": "ASR_ElastiCache_3",
+      "path": "ElastiCache_3",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control ElastiCache.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "GuardDuty.1",
+      "experience_id": "ASR_GuardDuty_1",
+      "path": "GuardDuty_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "应启用 GuardDuty",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "IAM.3",
+      "experience_id": "ASR_IAM_3",
+      "path": "IAM_3",
+      "standard": "AFSBP",
+      "is_destructive": true,
+      "summary": "IAM 用户访问密钥应每 90 天或更短时间轮换",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "IAM.7",
+      "experience_id": "ASR_IAM_7",
+      "path": "IAM_7",
+      "standard": "PCI321",
+      "is_destructive": true,
+      "summary": "不应为 root 用户设置访问密钥",
+      "risk_level": "HIGH"
     },
     {
       "control_id": "IAM.8",
-      "standard": "PCI321",
       "experience_id": "ASR_IAM_8",
+      "path": "IAM_8",
+      "standard": "PCI321",
       "is_destructive": true,
-      "path": "experiences/IAM_8"
+      "summary": "应移除未使用的 IAM 用户凭证",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "KMS.1",
+      "experience_id": "ASR_KMS_1",
+      "path": "KMS_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "Security control KMS.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "Lambda.1",
+      "experience_id": "ASR_Lambda_1",
+      "path": "Lambda_1",
+      "standard": "PCI321",
+      "is_destructive": true,
+      "summary": "Lambda 函数策略应禁止公共访问",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "Macie.1",
+      "experience_id": "ASR_Macie_1",
+      "path": "Macie_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control Macie.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.1",
+      "experience_id": "ASR_RDS_1",
+      "path": "RDS_1",
+      "standard": "PCI321",
+      "is_destructive": true,
+      "summary": "RDS 快照应为私有",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "RDS.13",
+      "experience_id": "ASR_RDS_13",
+      "path": "RDS_13",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control RDS.13",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.16",
+      "experience_id": "ASR_RDS_16",
+      "path": "RDS_16",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control RDS.16",
+      "risk_level": "MEDIUM"
     },
     {
       "control_id": "RDS.2",
-      "standard": "PCI321",
       "experience_id": "ASR_RDS_2",
+      "path": "RDS_2",
+      "standard": "PCI321",
       "is_destructive": false,
-      "path": "experiences/RDS_2"
+      "summary": "RDS DB 实例应禁止公共访问",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.4",
+      "experience_id": "ASR_RDS_4",
+      "path": "RDS_4",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "RDS 集群快照和数据库快照应加密",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.5",
+      "experience_id": "ASR_RDS_5",
+      "path": "RDS_5",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "RDS DB 实例应配置多个可用区",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.6",
+      "experience_id": "ASR_RDS_6",
+      "path": "RDS_6",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "应为 RDS DB 实例配置增强监控",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.7",
+      "experience_id": "ASR_RDS_7",
+      "path": "RDS_7",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "RDS 集群应启用删除保护",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "RDS.8",
+      "experience_id": "ASR_RDS_8",
+      "path": "RDS_8",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "RDS DB 实例应启用删除保护",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "Redshift.1",
+      "experience_id": "ASR_Redshift_1",
+      "path": "Redshift_1",
+      "standard": "PCI321",
+      "is_destructive": true,
+      "summary": "Security control Redshift.1",
+      "risk_level": "HIGH"
+    },
+    {
+      "control_id": "Redshift.3",
+      "experience_id": "ASR_Redshift_3",
+      "path": "Redshift_3",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control Redshift.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "Redshift.4",
+      "experience_id": "ASR_Redshift_4",
+      "path": "Redshift_4",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control Redshift.4",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "Redshift.6",
+      "experience_id": "ASR_Redshift_6",
+      "path": "Redshift_6",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control Redshift.6",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.1",
+      "experience_id": "ASR_S3_1",
+      "path": "S3_1",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "S3 Block Public Access 应启用",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.11",
+      "experience_id": "ASR_S3_11",
+      "path": "S3_11",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "S3 bucket 应启用事件通知",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.13",
+      "experience_id": "ASR_S3_13",
+      "path": "S3_13",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "S3 bucket 应配置生命周期策略",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.2",
+      "experience_id": "ASR_S3_2",
+      "path": "S3_2",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "S3 bucket 应禁止公共读取访问",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.4",
+      "experience_id": "ASR_S3_4",
+      "path": "S3_4",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "S3 bucket 应启用服务端加密",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.5",
+      "experience_id": "ASR_S3_5",
+      "path": "S3_5",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "S3 bucket 应要求 SSL 请求",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.6",
+      "experience_id": "ASR_S3_6",
+      "path": "S3_6",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "S3 bucket 跨区域访问应限制",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "S3.9",
+      "experience_id": "ASR_S3_9",
+      "path": "S3_9",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "S3 bucket 应启用服务器访问日志",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SNS.1",
+      "experience_id": "ASR_SNS_1",
+      "path": "SNS_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SNS.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SNS.2",
+      "experience_id": "ASR_SNS_2",
+      "path": "SNS_2",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SNS.2",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SQS.1",
+      "experience_id": "ASR_SQS_1",
+      "path": "SQS_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SQS.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SSM.1",
+      "experience_id": "ASR_SSM_1",
+      "path": "SSM_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SSM.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SSM.3",
+      "experience_id": "ASR_SSM_3",
+      "path": "SSM_3",
+      "standard": "PCI321",
+      "is_destructive": false,
+      "summary": "Security control SSM.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SSM.4",
+      "experience_id": "ASR_SSM_4",
+      "path": "SSM_4",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SSM.4",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SSM.7",
+      "experience_id": "ASR_SSM_7",
+      "path": "SSM_7",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SSM.7",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SecretsManager.1",
+      "experience_id": "ASR_SecretsManager_1",
+      "path": "SecretsManager_1",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SecretsManager.1",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SecretsManager.3",
+      "experience_id": "ASR_SecretsManager_3",
+      "path": "SecretsManager_3",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SecretsManager.3",
+      "risk_level": "MEDIUM"
+    },
+    {
+      "control_id": "SecretsManager.4",
+      "experience_id": "ASR_SecretsManager_4",
+      "path": "SecretsManager_4",
+      "standard": "AFSBP",
+      "is_destructive": false,
+      "summary": "Security control SecretsManager.4",
+      "risk_level": "MEDIUM"
     }
   ]
 }

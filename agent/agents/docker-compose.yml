@@ -1,0 +1,117 @@
+# SHARA Agents - Local Development Docker Compose
+# 用于本地开发和测试 Agent
+
+version: '3.8'
+
+services:
+  remediator:
+    build:
+      context: .
+      dockerfile: remediator/Dockerfile
+    container_name: shara-remediator
+    ports:
+      - "8081:8080"
+    environment:
+      # AWS Configuration
+      - AWS_REGION=${AWS_REGION:-ap-northeast-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # DynamoDB Tables
+      - TASKS_TABLE=${TASKS_TABLE:-shara-dev-tasks}
+      - TOKENS_TABLE=${TOKENS_TABLE:-shara-dev-approval-tokens}
+      # S3 Buckets
+      - ASR_PLAYBOOKS_BUCKET=${ASR_PLAYBOOKS_BUCKET:-shara-dev-asr-playbooks-870414140965}
+      # AgentCore Memory
+      - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
+      # LLM
+      - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      # Logging
+      - LOG_LEVEL=INFO
+      - STAGE=dev
+      # OpenTelemetry Observability (disabled for local dev, enable in AWS deployment)
+      - OTEL_SDK_DISABLED=${OTEL_SDK_DISABLED:-true}
+      # - AGENT_OBSERVABILITY_ENABLED=true
+      # - OTEL_PYTHON_DISTRO=aws_distro
+      # - OTEL_PYTHON_CONFIGURATOR=aws_configurator
+      # - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      # - OTEL_RESOURCE_ATTRIBUTES=service.name=shara-remediator
+    volumes:
+      # Mount AWS credentials for local development (optional)
+      - ~/.aws:/root/.aws:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  analyzer:
+    build:
+      context: .
+      dockerfile: analyzer/Dockerfile
+    container_name: shara-analyzer
+    ports:
+      - "8080:8080"
+    environment:
+      - AWS_REGION=${AWS_REGION:-ap-northeast-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - TASKS_TABLE=${TASKS_TABLE:-shara-dev-tasks}
+      - TOKENS_TABLE=${TOKENS_TABLE:-shara-dev-approval-tokens}
+      - ASR_PLAYBOOKS_BUCKET=${ASR_PLAYBOOKS_BUCKET:-shara-dev-asr-playbooks-870414140965}
+      - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
+      - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      - LOG_LEVEL=INFO
+      - STAGE=dev
+      # OpenTelemetry Observability (disabled for local dev, enable in AWS deployment)
+      - OTEL_SDK_DISABLED=${OTEL_SDK_DISABLED:-true}
+      # - AGENT_OBSERVABILITY_ENABLED=true
+      # - OTEL_PYTHON_DISTRO=aws_distro
+      # - OTEL_PYTHON_CONFIGURATOR=aws_configurator
+      # - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      # - OTEL_RESOURCE_ATTRIBUTES=service.name=shara-analyzer
+    volumes:
+      - ~/.aws:/root/.aws:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  validator:
+    build:
+      context: .
+      dockerfile: validator/Dockerfile
+    container_name: shara-validator
+    ports:
+      - "8082:8080"
+    environment:
+      - AWS_REGION=${AWS_REGION:-ap-northeast-1}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      - TASKS_TABLE=${TASKS_TABLE:-shara-dev-tasks}
+      - TOKENS_TABLE=${TOKENS_TABLE:-shara-dev-approval-tokens}
+      - ASR_PLAYBOOKS_BUCKET=${ASR_PLAYBOOKS_BUCKET:-shara-dev-asr-playbooks-870414140965}
+      - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
+      - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      - LOG_LEVEL=INFO
+      - STAGE=dev
+      # OpenTelemetry Observability (disabled for local dev, enable in AWS deployment)
+      - OTEL_SDK_DISABLED=${OTEL_SDK_DISABLED:-true}
+      # - AGENT_OBSERVABILITY_ENABLED=true
+      # - OTEL_PYTHON_DISTRO=aws_distro
+      # - OTEL_PYTHON_CONFIGURATOR=aws_configurator
+      # - OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+      # - OTEL_RESOURCE_ATTRIBUTES=service.name=shara-validator
+    volumes:
+      - ~/.aws:/root/.aws:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

@@ -124,3 +124,68 @@ variable "log_retention_days" {
   type        = number
   default     = 30
 }
+
+#------------------------------------------------------------------------------
+# AgentCore Configuration
+#------------------------------------------------------------------------------
+
+variable "agentcore_memory_id" {
+  description = "AgentCore Memory ID for session management"
+  type        = string
+  default     = ""
+}
+
+variable "analyzer_runtime_arn" {
+  description = "Analyzer Agent Runtime ARN"
+  type        = string
+  default     = ""
+}
+
+variable "remediator_runtime_arn" {
+  description = "Remediator Agent Runtime ARN"
+  type        = string
+  default     = ""
+}
+
+variable "validator_runtime_arn" {
+  description = "Validator Agent Runtime ARN"
+  type        = string
+  default     = ""
+}
+
+#------------------------------------------------------------------------------
+# Code Interpreter Configuration
+#------------------------------------------------------------------------------
+
+variable "code_interpreter_network_mode" {
+  description = "Code Interpreter network mode: PUBLIC or SANDBOX"
+  type        = string
+  default     = "PUBLIC"
+
+  validation {
+    condition     = contains(["PUBLIC", "SANDBOX"], var.code_interpreter_network_mode)
+    error_message = "Network mode must be PUBLIC or SANDBOX"
+  }
+}
+
+#------------------------------------------------------------------------------
+# Email Configuration
+#------------------------------------------------------------------------------
+
+variable "approval_email" {
+  description = "Email address for approval notifications"
+  type        = string
+  default     = ""
+}
+
+variable "sender_email" {
+  description = "SES verified sender email address"
+  type        = string
+  default     = ""
+}
+
+variable "approval_expiry_hours" {
+  description = "Hours until approval token expires"
+  type        = number
+  default     = 24
+}

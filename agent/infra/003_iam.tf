@@ -119,12 +119,55 @@ data "aws_iam_policy_document" "bedrock_access" {
     ]
     resources = ["*"]
   }
+
+  # 注：AgentCore 通过 HTTP Gateway 调用，不需要 bedrock:InvokeAgent
 }
 
 resource "aws_iam_role_policy" "bedrock_access" {
   name   = "bedrock-access"
   role   = aws_iam_role.lambda_execution.id
   policy = data.aws_iam_policy_document.bedrock_access.json
+}
+
+#------------------------------------------------------------------------------
+# AgentCore Runtime Access Policy
+#------------------------------------------------------------------------------
+
+locals {
+  # 收集所有配置的 Runtime ARNs
+  configured_runtime_arns = compact([
+    var.analyzer_runtime_arn,
+    var.remediator_runtime_arn,
+    var.validator_runtime_arn,
+  ])
+  has_runtime_arns = length(local.configured_runtime_arns) > 0
+}
+
+data "aws_iam_policy_document" "agentcore_access" {
+  statement {
+    sid    = "AgentCoreRuntimeInvoke"
+    effect = "Allow"
+    actions = [
+      "bedrock-agentcore:InvokeAgentRuntime",
+      "bedrock-agentcore:InvokeRuntime",
+      "bedrock-agentcore:InvokeAgent",
+    ]
+    resources = local.has_runtime_arns ? concat(
+      local.configured_runtime_arns,
+      [for arn in local.configured_runtime_arns : "${arn}/*"]
+    ) : [
+      "arn:aws:bedrock-agentcore:${var.aws_region}:*:runtime/*",
+      "arn:aws:bedrock-agentcore:${var.aws_region}:*:runtime/*/*"
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "agentcore_access" {
+  count = local.has_runtime_arns ? 1 : 0
+
+  name   = "agentcore-access"
+  role   = aws_iam_role.lambda_execution.id
+  policy = data.aws_iam_policy_document.agentcore_access.json
 }
 
 #------------------------------------------------------------------------------
@@ -231,6 +274,29 @@ resource "aws_iam_role_policy" "security_analysis_read" {
   name   = "security-analysis-read"
   role   = aws_iam_role.lambda_execution.id
   policy = data.aws_iam_policy_document.security_analysis_read.json
+}
+
+#------------------------------------------------------------------------------
+# Lambda Self-Invoke Policy (for async processing)
+#------------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "lambda_self_invoke" {
+  statement {
+    sid    = "LambdaSelfInvoke"
+    effect = "Allow"
+    actions = [
+      "lambda:InvokeFunction",
+    ]
+    resources = [
+      "arn:aws:lambda:${var.aws_region}:${data.aws_caller_identity.current.account_id}:function:${local.name_prefix}-*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "lambda_self_invoke" {
+  name   = "lambda-self-invoke"
+  role   = aws_iam_role.lambda_execution.id
+  policy = data.aws_iam_policy_document.lambda_self_invoke.json
 }
 
 #------------------------------------------------------------------------------

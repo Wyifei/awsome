@@ -9,115 +9,232 @@ from typing import Optional
 from strands import Agent
 from strands.models import BedrockModel
 
-from agents.config import get_config, ANALYZER_MODEL_CONFIG
-from agents.tools.asr_playbook import fetch_asr_playbook
-from agents.tools.memory_tools import (
+from shared.config import get_config, ANALYZER_MODEL_CONFIG
+from shared.tools.asr_playbook import fetch_asr_playbook
+from shared.tools.memory_tools import (
     search_similar_findings,
     save_analysis_result,
     set_memory_session,
 )
-from agents.tools.aws_resources import (
-    get_s3_bucket_info,
-    get_security_group_rules,
-    get_iam_role_info,
-    get_rds_instance_info,
-)
+from shared.tools.aws_resources import get_resource_config
 
 logger = logging.getLogger(__name__)
 
 # Analyzer Agent System Prompt
-ANALYZER_SYSTEM_PROMPT = """# Role
-You are the Analyzer Agent for SHARA (Security Hub Auto-Remediation Agent).
-Your job is to analyze AWS Security Hub findings and generate remediation descriptions.
+ANALYZER_SYSTEM_PROMPT = """# 角色
+你是 SHARA (Security Hub Auto-Remediation Agent) 的分析智能体。
+你的任务是分析 AWS Security Hub 安全发现并生成修复方案描述。
 
-# CRITICAL CONSTRAINTS
-- You ONLY generate text descriptions, NOT executable code
-- Code generation happens in Phase 2 after human approval
-- Your output will be sent to administrators for approval via email
+# 重要约束
+- 你只生成文字描述，不生成可执行代码
+- 代码生成在人工审批后的第二阶段进行
+- 你的输出将通过邮件发送给管理员审批
 
-# Analysis Process
-Follow these steps in order:
+# ⚠️ 强制要求：工具调用顺序
+你必须按以下顺序调用工具，不允许跳过任何步骤：
 
-1. **Parse Finding**: Extract Control ID, resource information, and severity from ASFF format
-2. **Fetch ASR Playbook**: Use fetch_asr_playbook tool to get predefined remediation approach
-3. **Search Similar Experiences**: Use search_similar_findings tool to find past successful fixes from Memory LTM
-4. **Gather Resource Context**: Use appropriate tools (get_s3_bucket_info, get_security_group_rules, etc.) to get current resource configuration
-5. **Risk Assessment**: Evaluate actual risk considering:
-   - Data sensitivity
-   - Exposure level
-   - Potential impact of remediation
-   - Whether the operation is destructive
-6. **Generate Description**: Create detailed remediation description in plain text (NO CODE)
-7. **Save Results**: Use save_analysis_result tool to save analysis for Phase 2
+**第一步（强制）: get_resource_config** - 验证资源是否存在
+**第二步: fetch_asr_playbook** - 获取 ASR 修复方案
+**第三步: search_similar_findings** - 搜索相似经验
+**第四步（强制）: save_analysis_result** - 保存分析结果供 Phase 2 使用
 
-# Output Format
-You MUST return a JSON object with this structure:
+# 分析流程
 
+## 步骤 1: 解析 Finding
+从 ASFF 格式中提取：
+- Control ID (如 SNS.1, S3.1)
+- Resources[].Id (完整 ARN)
+- Resources[].Type (如 AwsSnsTopic, AwsS3Bucket)
+- Severity
+
+## 步骤 2: 【强制】验证资源存在性
+**⚠️ 这是第一个必须调用的工具，不可跳过！**
+
+立即调用 get_resource_config 工具：
+```
+get_resource_config(
+  resource_arn="<Finding 中的 Resources[].Id>",
+  resource_type="<Finding 中的 Resources[].Type>"
+)
+```
+
+根据返回结果：
+- status="found": 资源存在，将 properties 记录到 current_state
+- status="not_found": 资源已删除，current_state 设为 {"status": "RESOURCE_NOT_FOUND"}
+- status="error": 查询失败，记录错误信息
+
+## 步骤 3: 获取 ASR Playbook
+调用 fetch_asr_playbook 工具获取预定义修复方案
+
+## 步骤 4: 搜索相似经验
+调用 search_similar_findings 工具查找历史修复经验
+
+## 步骤 5: 风险评估
+综合评估风险，考虑：
+- 资源是否存在（不存在则风险降低）
+- 数据敏感性和暴露程度
+- 修复操作的潜在影响
+- 是否具有破坏性
+
+## 步骤 6: 生成 JSON 输出
+生成分析结果 JSON（格式见下方）。
+
+## 步骤 7: 【强制】保存分析结果
+**⚠️ 这是必须执行的最后一步，不可跳过！**
+
+调用 save_analysis_result 工具保存分析结果，供 Phase 2 (Remediator) 使用：
+```
+save_analysis_result(
+  task_id="<任务 ID>",
+  analysis=<分析结果 JSON 对象>,
+  remediation_description="<修复方案描述>"
+)
+```
+
+# 输出格式
+必须返回以下结构的 JSON 对象：
+
+```json
 {
   "analysis": {
-    "control_id": "S3.1",
-    "finding_type": "S3 Block Public Access disabled",
-    "resource_type": "AwsS3Bucket",
-    "resource_id": "arn:aws:s3:::my-bucket",
+    "control_id": "SNS.1",
+    "finding_type": "SNS Topic 未启用加密",
+    "resource_type": "AwsSnsTopic",
+    "resource_id": "arn:aws:sns:...",
+    "resource_exists": true,
     "current_state": {
-      "BlockPublicAcls": false,
-      "IgnorePublicAcls": false,
-      "BlockPublicPolicy": false,
-      "RestrictPublicBuckets": false
+      "KmsMasterKeyId": null
     },
     "risk_assessment": {
       "level": "HIGH",
-      "factors": ["Contains sensitive data", "Public exposure risk"],
-      "justification": "Bucket contains configuration files that could expose credentials"
+      "factors": ["消息可能包含敏感信息"],
+      "justification": "..."
     }
   },
   "asr_match": {
     "matched": true,
-    "playbook_id": "ASR_S3_1",
-    "confidence": 0.95
+    "playbook_id": "ASR_SNS_1",
+    "confidence": 1.0,
+    "message": "基于 Control ID 精确匹配 ASR Playbook"
   },
-  "similar_experiences": [
-    {
-      "experience_id": "...",
-      "relevance": 0.85
-    }
-  ],
+  "similar_experiences": [],
   "remediation": {
-    "summary": "Enable S3 Block Public Access",
-    "description": "This remediation will configure bucket-level block public access settings to prevent any public access. The settings will block public ACLs, ignore existing public ACLs, block public bucket policies, and restrict public bucket access.",
-    "steps": [
-      "Step 1: Enable BlockPublicAcls - Prevents new public ACLs from being applied",
-      "Step 2: Enable IgnorePublicAcls - Ignores any existing public ACLs",
-      "Step 3: Enable BlockPublicPolicy - Prevents new public bucket policies",
-      "Step 4: Enable RestrictPublicBuckets - Restricts public access via any policy"
-    ],
+    "can_remediate": true,
+    "cannot_remediate_reason": null,
+    "summary": "为 SNS Topic 启用 KMS 加密",
+    "description": "...",
+    "prerequisites": [],
+    "agent_actions": [],
+    "post_actions": [],
     "estimated_impact": "LOW",
     "rollback_available": true,
     "is_destructive": false
   }
 }
+```
 
-# Important Guidelines
-- ALWAYS try to match ASR playbook first - these are tested remediation approaches
-- Include ALL risk assessment factors
-- Provide clear, step-by-step description that non-technical administrators can understand
-- Mark if the operation is destructive (could cause data loss)
-- NEVER include actual code in your response - only descriptions
-- Save your analysis using save_analysis_result before finishing
+# 修复步骤分类说明（重要）
+在 remediation 对象中，必须将修复步骤分为三类：
+
+## 1. prerequisites（前置条件）
+**审批前人工需要确认的事项**，Agent 无法自动验证或执行。例如：
+- 确认替代访问路径存在（如 VPN、bastion host）
+- 确认业务影响已评估
+- 确认相关团队已通知
+- 验证依赖服务的连通性
+
+## 2. agent_actions（Agent 执行）
+**Agent 将通过 AWS API 自动执行的操作**。只包含可通过代码实现的步骤：
+- 调用 AWS API 修改资源配置
+- 等待资源状态变更
+- 验证配置是否生效
+- 创建/修改安全策略
+
+## 3. post_actions（后续操作）
+**修复完成后人工需要处理的事项**，Agent 无法自动完成。例如：
+- 更新 IaC 代码（Terraform/CloudFormation）保持一致性
+- 更新相关文档
+- 通知相关团队
+- 进行额外的安全审计
+
+## 分类原则
+- **可通过 AWS SDK/API 实现** → agent_actions
+- **需要访问外部系统或人工判断** → prerequisites 或 post_actions
+- **修复前需要确认** → prerequisites
+- **修复后需要跟进** → post_actions
+
+## 示例
+```json
+"remediation": {
+  "can_remediate": true,
+  "summary": "禁用 EKS 集群公共端点访问",
+  "prerequisites": [
+    "确认 VPC 内有可用的私有访问路径（bastion host/VPN/Direct Connect）",
+    "验证 kubectl 可通过私有端点连接集群"
+  ],
+  "agent_actions": [
+    "调用 EKS UpdateClusterConfig API 设置 EndpointPublicAccess=false",
+    "等待集群更新完成（状态变为 ACTIVE）",
+    "验证公共端点已禁用"
+  ],
+  "post_actions": [
+    "更新 Terraform/CloudFormation 代码保持配置一致性",
+    "通知 DevOps 团队配置变更"
+  ],
+  "estimated_impact": "MEDIUM",
+  "rollback_available": true,
+  "is_destructive": false
+}
+```
+
+# can_remediate 字段说明
+**必须**在 remediation 对象中包含 can_remediate 字段：
+
+设置 `can_remediate: false` 的情况：
+1. **资源不存在** - 资源已被删除，无需修复
+2. **ECR/容器镜像漏洞** - 需要开发团队更新代码/镜像，无法通过 AWS API 自动修复
+3. **Inspector 软件漏洞** - 需要更新软件包，不是 AWS 配置问题
+4. **需要手动干预** - 例如需要业务决策、涉及第三方系统等
+5. **不支持的资源类型** - SHARA 当前不支持自动修复的资源
+
+设置 `can_remediate: true` 的情况：
+1. AWS 配置类问题（如 S3 加密、安全组规则、IAM 策略等）
+2. 有对应的 ASR Playbook
+3. 可以通过 AWS API 直接修改配置
+
+当 `can_remediate: false` 时，必须填写 `cannot_remediate_reason` 说明原因。
+
+# asr_match 字段说明
+ASR (Automated Security Response) 匹配基于 Control ID 精确匹配：
+- **matched=true**: 找到对应的 ASR Playbook，confidence 固定为 **1.0**（精确匹配）
+- **matched=false**: 未找到匹配，confidence 为 **0**
+- 不存在中间置信度，因为是基于 Control ID 的精确匹配
+
+# 重要指南
+- **【强制】必须调用 get_resource_config**: 这是第一个必须执行的工具调用
+- **【强制】必须调用 save_analysis_result**: 这是最后一个必须执行的工具调用，保存分析结果供 Phase 2 使用
+- **【强制】必须设置 can_remediate 字段**: 明确指示此 Finding 是否可自动修复
+- **asr_match 必须如实反映 fetch_asr_playbook 的返回结果**，confidence 按上述规则设置
+- 如果资源不存在，设置 resource_exists: false 且 can_remediate: false
+- 绝不在响应中包含可执行代码
 """
 
 
 def create_analyzer_agent(
     task_id: str,
     memory_id: str,
-    region: Optional[str] = None
+    session_id: str,
+    region: Optional[str] = None,
+    actor_id: Optional[str] = None
 ) -> Agent:
     """创建 Analyzer Agent 实例。
 
     Args:
         task_id: 任务 ID
         memory_id: AgentCore Memory ID
+        session_id: Memory Session ID (从 Lambda 传入，确保与 Phase 2 共享)
         region: AWS Region (可选，默认从环境变量获取)
+        actor_id: Actor ID (可选，默认使用 task_id)
 
     Returns:
         Agent: 配置好的 Analyzer Agent
@@ -125,51 +242,62 @@ def create_analyzer_agent(
     config = get_config()
     region = region or config.region
 
-    # 配置 Memory Session Manager
-    try:
-        from bedrock_agentcore.memory.integrations.strands import (
-            AgentCoreMemorySessionManager,
-            AgentCoreMemoryConfig,
-            RetrievalConfig,
-        )
+    # 如果没有指定 actor_id，使用 task_id
+    # 建议在生产环境中使用 AWS 账户 ID 作为 actor_id 以关联同账户的修复经验
+    actor_id = actor_id or f"task-{task_id}"
 
-        memory_config = AgentCoreMemoryConfig(
-            memory_id=memory_id,
-            actor_id=f"task-{task_id}",
-            session_id=f"session-task-{task_id}",
-            retrieval_config={
-                # 搜索相似修复经验
-                "remediation/{controlId}": RetrievalConfig(
+    # 配置 Memory Session Manager
+    session_manager = None
+
+    if not memory_id:
+        logger.warning("AGENTCORE_MEMORY_ID 未配置，将跳过 Memory 功能")
+        logger.warning("请运行 'python setup_memory.py create' 创建 Memory 资源")
+    else:
+        try:
+            from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
+            from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig, RetrievalConfig
+
+            # 构建检索配置 - 命名空间需要匹配实际存储路径
+            # Reflections 存储在 /remediation/actors/{actorId}/ 下
+            retrieval_namespaces = {}
+            if actor_id:
+                retrieval_namespaces[f"/remediation/actors/{actor_id}/"] = RetrievalConfig(
                     top_k=5,
                     relevance_score=0.5
                 )
-            }
-        )
 
-        session_manager = AgentCoreMemorySessionManager(
-            agentcore_memory_config=memory_config,
-            region_name=region
-        )
+            memory_config = AgentCoreMemoryConfig(
+                memory_id=memory_id,
+                actor_id=actor_id,
+                session_id=session_id,  # 使用传入的 session_id
+                retrieval_config=retrieval_namespaces if retrieval_namespaces else None
+            )
 
-        # 设置全局 memory session 供工具使用
-        set_memory_session(session_manager.get_session())
+            session_manager = AgentCoreMemorySessionManager(
+                agentcore_memory_config=memory_config,
+                region_name=region
+            )
 
-        logger.info(f"Initialized Memory session for task {task_id}")
+            # 设置全局 memory session 供工具使用
+            # 传入 session_manager，会自动从中提取 memory_client 和 config
+            set_memory_session(session_manager)
 
-    except ImportError:
-        logger.warning("AgentCore Memory SDK not available, running without memory")
-        session_manager = None
-    except Exception as e:
-        logger.warning(f"Failed to initialize Memory session: {e}")
-        session_manager = None
+            logger.info(f"已初始化 Memory session: session_id={session_id}, actor_id={actor_id}")
+
+        except ImportError:
+            logger.warning("AgentCore Memory SDK 未安装，将跳过 Memory 功能")
+        except Exception as e:
+            logger.warning(f"初始化 Memory session 失败: {e}")
 
     # 配置 LLM
+    # streaming=False 用于绕过 strands SDK 1.24.0 中的流式处理 bug
+    # 该 bug 在处理包含整数值的 JSON 工具输入时会失败
     model = BedrockModel(
         model_id=ANALYZER_MODEL_CONFIG.model_id,
         temperature=ANALYZER_MODEL_CONFIG.temperature,
         max_tokens=ANALYZER_MODEL_CONFIG.max_tokens,
-        top_p=ANALYZER_MODEL_CONFIG.top_p,
-        region_name=region
+        region_name=region,
+        streaming=False
     )
 
     # 创建 Agent
@@ -177,13 +305,10 @@ def create_analyzer_agent(
         model=model,
         system_prompt=ANALYZER_SYSTEM_PROMPT,
         tools=[
+            get_resource_config,  # 第一个必须调用的工具
             fetch_asr_playbook,
             search_similar_findings,
-            save_analysis_result,
-            get_s3_bucket_info,
-            get_security_group_rules,
-            get_iam_role_info,
-            get_rds_instance_info,
+            save_analysis_result,  # 保存分析结果供 Phase 2 使用
         ],
         session_manager=session_manager,
     )
@@ -211,6 +336,11 @@ def run_analyzer(
     """
     import json
 
+    # 提取资源信息供 prompt 使用
+    resources = finding.get('Resources', [{}])
+    resource_arn = resources[0].get('Id', '') if resources else ''
+    resource_type = resources[0].get('Type', '') if resources else ''
+
     prompt = f"""
 Analyze this Security Hub Finding and generate a remediation description:
 
@@ -222,15 +352,26 @@ Analyze this Security Hub Finding and generate a remediation description:
 {json.dumps(finding, indent=2, default=str)}
 ```
 
-**Instructions:**
-1. First, fetch the ASR playbook for Control ID: {control_id}
-2. Search for similar past experiences in Memory LTM
-3. Get current resource configuration using the appropriate tool
-4. Assess the risk level
-5. Generate a detailed remediation description (NO CODE)
-6. Save the analysis result using save_analysis_result tool
+**⚠️ 必须按以下顺序执行工具调用:**
 
-Remember: Generate DESCRIPTIONS only, not executable code. Code will be generated in Phase 2 after approval.
+**步骤 1 [强制]: 验证资源存在性**
+立即调用 get_resource_config 工具:
+```
+get_resource_config(
+  resource_arn="{resource_arn}",
+  resource_type="{resource_type}"
+)
+```
+
+**步骤 2: 获取 ASR Playbook**
+调用 fetch_asr_playbook 工具获取 Control ID: {control_id} 的修复方案
+
+**步骤 3: 搜索相似经验**
+调用 search_similar_findings 工具
+
+**步骤 4: 风险评估并生成 JSON 输出**
+
+Remember: Generate DESCRIPTIONS only, not executable code. Return result as JSON format.
 """
 
     logger.info(f"Running Analyzer Agent for task {task_id}, control {control_id}")
@@ -238,15 +379,39 @@ Remember: Generate DESCRIPTIONS only, not executable code. Code will be generate
     try:
         result = agent(prompt)
 
-        # 解析结果
-        response_text = str(result.message) if hasattr(result, 'message') else str(result)
+        # 正确提取响应文本
+        response_text = ""
+        if hasattr(result, 'message'):
+            msg = result.message
+            # Strands Agent 返回的 message 可能是 dict 格式
+            if isinstance(msg, dict):
+                content = msg.get('content', [])
+                if content and isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and 'text' in item:
+                            response_text += item['text']
+                        elif isinstance(item, str):
+                            response_text += item
+            elif isinstance(msg, str):
+                response_text = msg
+            else:
+                response_text = str(msg)
+        else:
+            response_text = str(result)
+
+        # 尝试从响应中提取 JSON 结构
+        analysis_data = _extract_json_from_response(response_text)
 
         logger.info(f"Analyzer completed for task {task_id}")
 
         return {
             "success": True,
             "task_id": task_id,
-            "response": response_text
+            "analysis": analysis_data.get('analysis', {}),
+            "asr_match": analysis_data.get('asr_match', {}),
+            "similar_experiences": analysis_data.get('similar_experiences', []),
+            "remediation": analysis_data.get('remediation', {}),
+            "raw_response": response_text  # 保留原始响应用于调试
         }
 
     except Exception as e:
@@ -256,3 +421,77 @@ Remember: Generate DESCRIPTIONS only, not executable code. Code will be generate
             "task_id": task_id,
             "error": str(e)
         }
+
+
+def _extract_json_from_response(response_text: str) -> dict:
+    """从 Agent 响应中提取 JSON 结构。
+
+    Args:
+        response_text: Agent 的原始响应文本
+
+    Returns:
+        dict: 解析后的 JSON 数据，如果解析失败返回空 dict
+    """
+    import json
+    import re
+
+    # 尝试找到 JSON 代码块 (支持 ```json 或 ``` 开头)
+    json_block_patterns = [
+        r'```json\s*\n?([\s\S]*?)\n?\s*```',
+        r'```\s*\n?(\{[\s\S]*?"analysis"[\s\S]*?\})\n?\s*```',
+    ]
+
+    for pattern in json_block_patterns:
+        json_block_match = re.search(pattern, response_text)
+        if json_block_match:
+            try:
+                json_text = json_block_match.group(1).strip()
+                return json.loads(json_text)
+            except json.JSONDecodeError as e:
+                logger.debug(f"JSON decode failed for pattern {pattern}: {e}")
+                continue
+
+    # 尝试找到包含 "analysis" 的 JSON 对象，使用括号匹配
+    start_idx = response_text.find('{"analysis"')
+    if start_idx == -1:
+        start_idx = response_text.find('{\n  "analysis"')
+    if start_idx == -1:
+        start_idx = response_text.find('{\\n  "analysis"')
+
+    if start_idx >= 0:
+        try:
+            # 从起始位置找到匹配的闭合括号
+            text = response_text[start_idx:]
+            depth = 0
+            end_pos = 0
+            in_string = False
+            escape_next = False
+
+            for i, char in enumerate(text):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        end_pos = i + 1
+                        break
+
+            if end_pos > 0:
+                json_text = text[:end_pos]
+                return json.loads(json_text)
+        except json.JSONDecodeError as e:
+            logger.debug(f"JSON decode failed for bracket matching: {e}")
+
+    logger.warning(f"Could not extract JSON from agent response. First 300 chars: {response_text[:300]}")
+    return {}

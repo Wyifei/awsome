@@ -38,302 +38,148 @@ interface TaskItem {
 
   // GSI Keys
   GSI1PK: string;               // STATUS#<status>
-  GSI1SK: string;               // <createdAt>
+  GSI1SK: string;               // <createdAt> - 用于按时间排序
   GSI2PK: string;               // FINDING#<findingId>
   GSI2SK: string;               // <createdAt>
   GSI3PK: string;               // ACCOUNT#<accountId>
   GSI3SK: string;               // <createdAt>
 
-  // Core Attributes
+  // 核心控制字段
   taskId: string;               // UUID
   findingId: string;            // Security Hub Finding ARN
+  controlId: string;            // Control ID (如 S3.1, SNS.1)
   status: TaskStatus;           // 任务状态
   phase: 'pre_approval' | 'post_approval';  // 当前处理阶段
   severity: 'HIGH' | 'CRITICAL';
-  source: string;               // AWS Config, GuardDuty, etc.
 
-  // Finding Summary
-  findingTitle: string;
-  findingDescription: string;
-  resourceType: string;         // AwsS3Bucket, AwsEc2Instance, etc.
+  // 资源标识
+  resourceType: string;         // AwsS3Bucket, AwsSnsTopic, etc.
   resourceId: string;           // Resource ARN
-  awsAccountId: string;
-  region: string;
+  awsAccountId: string;         // AWS 账户 ID
+  region: string;               // AWS 区域
 
-  // Analysis Results
-  analysis?: {
-    riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-    impactAssessment: string;
-    affectedResources: string[];
-    recommendations: string[];
-    analyzedAt: string;         // ISO8601
-    analyzedBy: string;         // Agent ID
+  // 修复控制
+  canRemediate: boolean;        // 是否可自动修复
+  asrMatch?: {                  // ASR Playbook 匹配结果
+    matched: boolean;
+    playbook_id?: string;       // 匹配的 Playbook ID (如有)
   };
 
-  // Remediation Plan (Phase 1: Analyzer 生成描述)
-  remediation?: {
-    summary: string;             // 修复方案概述
-    description: string;         // 详细修复描述（审批邮件内容）
-    steps: RemediationStep[];    // 修复步骤（文字描述）
-    estimatedImpact: string;     // 预估影响
-    rollbackAvailable: boolean;
-    rollbackPlan?: string[];     // 回滚步骤描述
-    asrPlaybookId?: string;      // 匹配的 ASR Playbook ID (如有)
-    isDestructive?: boolean;     // 是否为破坏性操作
-    generatedAt: string;         // Phase 1 完成时间
-    generatedBy: string;         // analyzer-agent
-  };
+  // Agent 会话
+  memorySessionId: string;      // AgentCore Memory Session ID
+  actorId: string;              // Memory Actor ID (AWS Account ID，用于跨任务经验共享)
 
-  // Generated Code (Phase 2: Remediator 生成代码，审批后)
-  generatedCode?: {
-    type: 'python' | 'aws-cli';
-    content: string;             // 实际执行代码
-    generatedAt: string;         // Phase 2 代码生成时间
-    generatedBy: string;         // remediator-agent
-  };
-
-  // Approval Info
-  approval?: {
-    status: 'pending' | 'approved' | 'rejected' | 'expired';
-    requestedAt: string;
-    expiresAt: string;
-    token: string;              // Hashed token
-    respondedAt?: string;
-    respondedBy?: string;
-    action?: 'approve' | 'reject';
-    reason?: string;
-    notes?: string;
-  };
-
-  // Execution Info
-  execution?: {
-    status: 'pending' | 'running' | 'success' | 'failed' | 'rolled_back';
-    startedAt?: string;
-    completedAt?: string;
-    error?: {
-      code: string;
-      message: string;
-      details?: any;
-    };
-    outputs?: Record<string, any>;
-  };
-
-  // Metadata
+  // 元数据
   createdAt: string;            // ISO8601
   updatedAt: string;            // ISO8601
-  ttl?: number;                 // Unix timestamp for auto-deletion
   version: number;              // Optimistic locking
-
-  // AgentCore Memory
-  memorySessionId?: string;     // Memory session ID for cross-phase context
-
-  // Tracing
-  traceId?: string;
-  spanId?: string;
+  traceId?: string;             // Lambda Request ID
 }
 
 type TaskStatus =
   // Phase 1: Pre-Approval (Analyzer only)
-  | 'pending'              // 初始状态，等待处理
-  | 'analyzing'            // Analyzer Agent 分析中（ASR 匹配、风险评估）
+  | 'analyzing'            // Analyzer Agent 分析中
+  | 'waiting_approval'     // 等待管理员审批
+  | 'not_remediatable'     // 无法自动修复（资源不存在等）
   | 'analysis_failed'      // 分析失败
-  | 'waiting_approval'     // 等待管理员审批（只有描述，无代码）
-  | 'approved'             // 已审批，准备进入 Phase 2
+  | 'approved'             // 已审批
   | 'rejected'             // 审批被拒绝
-  | 'approval_expired'     // 审批超时
   // Phase 2: Post-Approval (Remediator + Validator)
-  | 'generating_code'      // Remediator Agent 生成代码中
-  | 'executing'            // Remediator Agent 执行修复中
+  | 'executing'            // 执行修复中
   | 'execution_failed'     // 执行失败
-  | 'validating'           // Validator Agent 验证中
-  | 'validation_failed'    // 验证失败
-  | 'waiting_feedback'     // 等待用户反馈
+  | 'validating'           // 验证中
   | 'completed'            // 任务完成
-  | 'rolled_back'          // 已回滚
-  | 'cancelled';           // 已取消
-
-interface RemediationStep {
-  order: number;
-  action: string;
-  description: string;
-  service: string;
-  operation: string;
-  parameters?: Record<string, any>;
-  status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
-  result?: any;
-  error?: string;
-}
+  | 'rolled_back';         // 已回滚
 ```
+
+**设计说明：**
+
+1. **只存储控制相关字段** - 分析结果、修复方案等详细信息不存储到 DynamoDB，直接用于发送审批邮件
+2. **GSI*SK 复用 createdAt** - Sort Key 使用创建时间，支持按时间排序查询
+3. **asrMatch 精简** - 只保留 matched 和 playbook_id，不存储完整匹配信息
 
 **示例数据 (Phase 1 - 等待审批状态)：**
 ```json
 {
-  "PK": "TASK#task-12345678-abcd-efgh-ijkl-mnopqrstuvwx",
+  "PK": "TASK#21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
   "SK": "METADATA",
   "GSI1PK": "STATUS#waiting_approval",
-  "GSI1SK": "2025-01-28T10:00:00Z",
-  "GSI2PK": "FINDING#arn:aws:securityhub:us-east-1:123456789012:finding/abc123",
-  "GSI2SK": "2025-01-28T10:00:00Z",
+  "GSI1SK": "2025-01-30T07:31:31.412121+00:00",
+  "GSI2PK": "FINDING#arn:aws:securityhub:ap-northeast-1:123456789012:subscription/aws-foundational-security-best-practices/v/1.0.0/SNS.1/finding/abc123",
+  "GSI2SK": "2025-01-30T07:31:31.412121+00:00",
   "GSI3PK": "ACCOUNT#123456789012",
-  "GSI3SK": "2025-01-28T10:00:00Z",
+  "GSI3SK": "2025-01-30T07:31:31.412121+00:00",
 
-  "taskId": "task-12345678-abcd-efgh-ijkl-mnopqrstuvwx",
-  "findingId": "arn:aws:securityhub:us-east-1:123456789012:finding/abc123",
+  "taskId": "21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
+  "findingId": "arn:aws:securityhub:ap-northeast-1:123456789012:subscription/aws-foundational-security-best-practices/v/1.0.0/SNS.1/finding/abc123",
+  "controlId": "SNS.1",
   "status": "waiting_approval",
   "phase": "pre_approval",
   "severity": "HIGH",
-  "source": "AWS Config",
 
-  "findingTitle": "S3 bucket has public read access",
-  "findingDescription": "S3 bucket 'my-bucket' is configured to allow public read access",
-  "resourceType": "AwsS3Bucket",
-  "resourceId": "arn:aws:s3:::my-bucket",
+  "resourceType": "AwsSnsTopic",
+  "resourceId": "arn:aws:sns:ap-northeast-1:123456789012:my-topic",
   "awsAccountId": "123456789012",
-  "region": "us-east-1",
+  "region": "ap-northeast-1",
 
-  "analysis": {
-    "riskLevel": "HIGH",
-    "impactAssessment": "该 bucket 包含敏感配置文件，公开访问可能导致数据泄露",
-    "affectedResources": ["arn:aws:s3:::my-bucket"],
-    "recommendations": ["启用 Block Public Access", "审查 Bucket Policy"],
-    "analyzedAt": "2025-01-28T10:02:00Z",
-    "analyzedBy": "analyzer-agent"
+  "canRemediate": true,
+  "asrMatch": {
+    "matched": true,
+    "playbook_id": "ASR_SNS_1"
   },
 
-  "remediation": {
-    "summary": "移除 S3 bucket 的公开访问权限",
-    "description": "通过启用 S3 Block Public Access 来阻止所有公共访问。此操作将配置存储桶级别的访问阻止设置，防止任何公共访问策略生效。",
-    "steps": [
-      {
-        "order": 1,
-        "action": "EnableBlockPublicAccess",
-        "description": "启用 Block Public Access 配置",
-        "service": "s3",
-        "operation": "PutPublicAccessBlock",
-        "status": "pending"
-      }
-    ],
-    "estimatedImpact": "LOW",
-    "rollbackAvailable": true,
-    "rollbackPlan": ["恢复原始 Public Access Block 配置"],
-    "asrPlaybookId": "ASR_S3_1",
-    "isDestructive": false,
-    "generatedAt": "2025-01-28T10:04:00Z",
-    "generatedBy": "analyzer-agent"
-  },
+  "memorySessionId": "session-task-21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
+  "actorId": "123456789012",
 
-  "approval": {
-    "status": "pending",
-    "requestedAt": "2025-01-28T10:05:00Z",
-    "expiresAt": "2025-01-29T10:05:00Z",
-    "token": "sha256:abc123..."
-  },
-
-  "memorySessionId": "session-task-12345678",
-
-  "createdAt": "2025-01-28T10:00:00Z",
-  "updatedAt": "2025-01-28T10:05:00Z",
-  "version": 3
+  "createdAt": "2025-01-30T07:31:31.412121+00:00",
+  "updatedAt": "2025-01-30T07:31:57.845146+00:00",
+  "version": 1,
+  "traceId": "da27c4ac-01e8-4f59-9cef-0bdbc0ca7ce5"
 }
 ```
 
-**示例数据 (Phase 2 - 执行修复后)：**
+**示例数据 (Phase 2 - 执行完成)：**
 ```json
 {
-  "taskId": "task-12345678-abcd-efgh-ijkl-mnopqrstuvwx",
+  "PK": "TASK#21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
+  "SK": "METADATA",
+  "GSI1PK": "STATUS#completed",
+  "GSI1SK": "2025-01-30T07:31:31.412121+00:00",
+
+  "taskId": "21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
+  "controlId": "SNS.1",
   "status": "completed",
   "phase": "post_approval",
 
-  "generatedCode": {
-    "type": "python",
-    "content": "import boto3\n\ns3 = boto3.client('s3')\ns3.put_public_access_block(...)",
-    "generatedAt": "2025-01-28T11:00:00Z",
-    "generatedBy": "remediator-agent"
+  "canRemediate": true,
+  "asrMatch": {
+    "matched": true,
+    "playbook_id": "ASR_SNS_1"
   },
 
-  "execution": {
-    "status": "success",
-    "startedAt": "2025-01-28T11:01:00Z",
-    "completedAt": "2025-01-28T11:02:00Z"
-  }
+  "updatedAt": "2025-01-30T08:00:00.000000+00:00"
 }
 ```
 
-### 2.2 Task Events 表
+**注意：** 分析结果、修复方案等详细信息不存储到 DynamoDB，而是直接用于生成审批邮件内容。这样可以大幅减少存储空间和写入成本。
 
-存储任务的事件历史记录。
+### 2.2 Task Events (已废弃)
 
-**表名：** `shara-task-events`
-
-**主键设计：**
-| 键类型 | 属性名 | 类型 | 说明 |
-|--------|--------|------|------|
-| Partition Key | PK | String | `TASK#<taskId>` |
-| Sort Key | SK | String | `EVENT#<timestamp>#<eventId>` |
-
-**属性定义：**
-
-```typescript
-interface TaskEventItem {
-  PK: string;                   // TASK#<taskId>
-  SK: string;                   // EVENT#<timestamp>#<eventId>
-
-  taskId: string;
-  eventId: string;
-  eventType: TaskEventType;
-  timestamp: string;
-
-  actor?: {
-    type: 'system' | 'agent' | 'user' | 'lambda';
-    id: string;
-    name?: string;
-  };
-
-  data?: Record<string, any>;
-
-  metadata?: {
-    traceId?: string;
-    spanId?: string;
-    duration_ms?: number;
-  };
-
-  ttl: number;                  // 90 days retention
-}
-
-type TaskEventType =
-  // Task lifecycle
-  | 'task_created'
-  | 'finding_received'
-  | 'task_cancelled'
-  | 'error_occurred'
-  // Phase 1: Pre-Approval (Analyzer Agent)
-  | 'analysis_started'          // Analyzer Agent 开始分析
-  | 'asr_playbook_matched'      // 匹配到 ASR Playbook
-  | 'analysis_completed'        // 分析完成，生成修复描述
-  | 'analysis_failed'
-  | 'approval_requested'        // 发送审批请求（只包含描述）
-  | 'approval_email_sent'
-  | 'approval_received'         // 收到审批响应
-  | 'approval_expired'
-  // Phase 2: Post-Approval (Remediator + Validator Agents)
-  | 'code_generation_started'   // Remediator 开始生成代码
-  | 'code_generation_completed' // 代码生成完成
-  | 'execution_started'         // 开始执行修复
-  | 'execution_step_completed'
-  | 'execution_completed'
-  | 'execution_failed'
-  | 'validation_started'        // Validator 开始验证
-  | 'validation_completed'
-  | 'validation_failed'
-  | 'finding_updated'           // Security Hub Finding 状态更新
-  | 'experience_saved';         // 修复经验保存到 Memory
-```
+> **注意：** 从 v3.1 开始，Task Events 表已废弃。任务状态变更直接在 Tasks 表的单条记录上进行更新，不再创建独立的事件记录。这简化了数据模型并减少了 DynamoDB 写入成本。
+>
+> 如果需要审计追踪，可通过 CloudWatch Logs 或 DynamoDB Streams 实现。
 
 ### 2.3 Approval Tokens 表
 
 存储审批 Token 信息，用于验证和防止重放攻击。
 
 **表名：** `shara-approval-tokens`
+
+**用途：**
+- 为每个待审批任务生成唯一的 approve/reject token
+- 验证审批请求的有效性
+- 防止 token 重复使用
+- 通过 TTL 自动清理过期 token
 
 **主键设计：**
 | 键类型 | 属性名 | 类型 | 说明 |
@@ -345,24 +191,46 @@ type TaskEventType =
 
 ```typescript
 interface ApprovalTokenItem {
+  // Keys
   PK: string;                   // TOKEN#<sha256Hash>
   SK: string;                   // TASK#<taskId>
 
-  taskId: string;
-  tokenHash: string;            // SHA256 hash of token
+  // Token 信息
+  token: string;                // 原始 token (UUID)
+  token_hash: string;           // SHA256 hash
+  taskId: string;               // 关联的任务 ID
+  action: 'approve' | 'reject'; // Token 类型
 
-  issuedAt: string;
-  expiresAt: string;
+  // 时间信息
+  createdAt: string;            // ISO8601 创建时间
+  expiresAt: string;            // ISO8601 过期时间
+  expires_at: number;           // Unix timestamp (DynamoDB TTL)
 
-  used: boolean;
-  usedAt?: string;
-  usedAction?: 'approve' | 'reject';
-  usedBy?: string;
-  usedFromIp?: string;
-
-  ttl: number;                  // Token expiry + 1 day
+  // 使用状态
+  used: boolean;                // 是否已使用
 }
 ```
+
+**示例数据：**
+```json
+{
+  "PK": "TOKEN#a1b2c3d4e5f6...",
+  "SK": "TASK#21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
+  "token": "550e8400-e29b-41d4-a716-446655440000",
+  "token_hash": "a1b2c3d4e5f6...",
+  "taskId": "21e9b3e3-8913-48e8-8e59-05104e3ae6bd",
+  "action": "approve",
+  "createdAt": "2025-01-30T07:31:57.845146+00:00",
+  "expiresAt": "2025-01-31T07:31:57.845146+00:00",
+  "expires_at": 1738312317,
+  "used": false
+}
+```
+
+**设计说明：**
+1. 每个任务生成两个 token：一个 approve，一个 reject
+2. Token 通过 SHA256 哈希存储，PK 使用哈希值
+3. TTL 使用 `expires_at` 字段，自动清理过期 token
 
 ### 2.4 Rollback Data 表
 
@@ -971,8 +839,7 @@ interface ApprovalRequest {
 | 数据类型 | 保留期限 | 存储位置 | 归档策略 |
 |----------|----------|----------|----------|
 | 活跃任务 | 30 天 | DynamoDB | 完成后 7 天归档 |
-| 任务事件 | 90 天 | DynamoDB (TTL) | 自动删除 |
-| 审批 Token | Token 过期 + 1 天 | DynamoDB (TTL) | 自动删除 |
+| 审批 Token | Token 过期后自动删除 | DynamoDB (TTL) | 自动删除 |
 | 任务报告 | 1 年 | S3 | Glacier 深度归档 |
 | 审计日志 | 7 年 | S3 + CloudTrail | 合规要求 |
 
@@ -984,11 +851,8 @@ if (task.status === 'completed' || task.status === 'cancelled') {
   task.ttl = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60);
 }
 
-// Events 表 - 90 天后删除
-event.ttl = Math.floor(Date.now() / 1000) + (90 * 24 * 60 * 60);
-
-// Tokens 表 - 过期后 1 天删除
-token.ttl = Math.floor(new Date(token.expiresAt).getTime() / 1000) + (24 * 60 * 60);
+// Tokens 表 - 使用 expires_at 字段，token 过期后自动删除
+token.expires_at = Math.floor(new Date(token.expiresAt).getTime() / 1000);
 ```
 
 ### 5.3 S3 生命周期规则
@@ -1035,28 +899,28 @@ token.ttl = Math.floor(new Date(token.expiresAt).getTime() / 1000) + (24 * 60 * 
 
 | 查询场景 | 使用的索引 | 查询条件 |
 |----------|------------|----------|
-| 按任务 ID 查询 | 主键 | PK = TASK#<id> |
+| 按任务 ID 查询 | 主键 | PK = TASK#<id>, SK = METADATA |
 | 按状态查询任务 | GSI1 | GSI1PK = STATUS#<status> |
 | 按 Finding 查询 | GSI2 | GSI2PK = FINDING#<id> |
 | 按账户查询 | GSI3 | GSI3PK = ACCOUNT#<id> |
-| 查询任务事件 | 主键 | PK = TASK#<id>, SK begins_with EVENT# |
+| 查询审批 Token | 主键 | PK = TOKEN#<hash>, SK = TASK#<id> |
 
 ### 6.2 查询示例
 
 ```python
 # 查询所有待审批任务
-response = table.query(
+response = tasks_table.query(
     IndexName='GSI1',
     KeyConditionExpression='GSI1PK = :pk',
     ExpressionAttributeValues={
-        ':pk': 'STATUS#pending_approval'
+        ':pk': 'STATUS#waiting_approval'
     },
     ScanIndexForward=False,  # 最新的优先
     Limit=50
 )
 
 # 查询特定 Finding 的处理历史
-response = table.query(
+response = tasks_table.query(
     IndexName='GSI2',
     KeyConditionExpression='GSI2PK = :pk',
     ExpressionAttributeValues={
@@ -1064,14 +928,22 @@ response = table.query(
     }
 )
 
-# 查询任务的所有事件
-response = events_table.query(
-    KeyConditionExpression='PK = :pk AND begins_with(SK, :sk)',
-    ExpressionAttributeValues={
-        ':pk': f'TASK#{task_id}',
-        ':sk': 'EVENT#'
-    },
-    ScanIndexForward=True  # 按时间顺序
+# 查询单个任务详情
+response = tasks_table.get_item(
+    Key={
+        'PK': f'TASK#{task_id}',
+        'SK': 'METADATA'
+    }
+)
+
+# 验证审批 Token
+import hashlib
+token_hash = hashlib.sha256(token.encode()).hexdigest()
+response = tokens_table.get_item(
+    Key={
+        'PK': f'TOKEN#{token_hash}',
+        'SK': f'TASK#{task_id}'
+    }
 )
 ```
 
@@ -1085,3 +957,4 @@ response = events_table.query(
 | 2.0 | 2025-01-29 | - | 更新任务状态；增加 Rollback Data 数据模型；重构知识库为经验学习模式 |
 | 2.1 | 2025-01-29 | - | 新增 ASR 预置经验数据格式；新增知识库索引 (index.json) 格式；区分 ASR 和用户经验 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段工作流（Phase 1: 审批前仅生成描述；Phase 2: 审批后生成代码执行）；分离 remediation 和 generatedCode；新增 phase 和 memorySessionId 字段 |
+| 3.1 | 2025-01-30 | - | 简化数据模型：废弃 Task Events 表，状态变更直接更新 Tasks 表；Tasks 表只存储控制相关字段，不存储分析结果；更新 Approval Tokens 表结构；优化 DynamoDB 存储空间（记录大小减少约 68%）|

@@ -1,0 +1,735 @@
+#!/usr/bin/env python3
+"""
+SHARA Memory 资源创建脚本
+
+创建 AgentCore Memory 资源，配置：
+- STM (Short-Term Memory): 用于三个智能体在同一任务中共享信息
+- LTM (Long-Term Memory): 使用 Episodic 策略存储修复经验
+
+使用 Built-in Strategy with Override 模式，自定义 Extraction/Consolidation/Reflection prompts
+"""
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+from typing import Optional
+
+import boto3
+from botocore.exceptions import ClientError
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+DEFAULT_REGION = "ap-northeast-1"
+DEFAULT_MEMORY_NAME = "shara_remediation_memory"
+DEFAULT_EVENT_EXPIRY_DAYS = 30
+
+# Model for extraction/consolidation/reflection
+# 不同区域可能需要使用不同的模型 ID 或 inference profile
+# us-east-1: 使用基础模型 ID
+# ap-northeast-1: 使用 APAC inference profile
+REGION_MODEL_MAP = {
+    "us-east-1": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "us-west-2": "anthropic.claude-3-sonnet-20240229-v1:0",
+    "ap-northeast-1": "apac.anthropic.claude-3-sonnet-20240229-v1:0",
+    "ap-southeast-1": "apac.anthropic.claude-3-sonnet-20240229-v1:0",
+    "eu-west-1": "anthropic.claude-3-sonnet-20240229-v1:0",
+}
+DEFAULT_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
+
+# Namespace 设计
+# Episodes: /remediation/actors/{actorId}/sessions/{sessionId}/
+# Reflections: /remediation/actors/{actorId}/
+EPISODE_NAMESPACES = ["/remediation/actors/{actorId}/sessions/{sessionId}/"]
+REFLECTION_NAMESPACES = ["/remediation/actors/{actorId}/"]
+
+# ============================================================================
+# Custom Prompts for SHARA Security Remediation
+# ============================================================================
+
+EXTRACTION_APPEND_PROMPT = """
+## SHARA Security Remediation Context
+
+You are extracting security remediation experiences from conversations between SHARA agents (Analyzer, Remediator, Validator) working on AWS Security Hub findings.
+
+### What to Extract
+
+Focus on extracting:
+1. **Finding Analysis**: Control ID (e.g., S3.1, EC2.19), resource type, risk assessment, root cause
+2. **Remediation Approach**: Strategy used, ASR playbook matched, code generated
+3. **Execution Details**: Steps taken, rollback data saved, actual AWS API calls made
+4. **Validation Results**: Checks performed, success/failure indicators, Security Hub status updates
+5. **Lessons Learned**: What worked well, edge cases encountered, timing considerations
+
+### Extraction Rules
+
+- Extract information from ALL agent messages (Analyzer, Remediator, Validator)
+- Capture specific technical details: Control IDs, resource ARNs, boto3 API calls
+- Preserve code snippets that represent successful remediation patterns
+- Note any errors encountered and how they were resolved
+- If a remediation failed, capture the failure reason for future reference
+- Pay attention to Phase 1 (analysis) and Phase 2 (execution) context
+
+### Context Handling
+
+- Use prior conversation history to understand the full remediation context
+- Connect Phase 1 analysis with Phase 2 execution results
+- Link validation outcomes back to the original finding
+- Note the relationship between ASR playbooks and actual execution
+
+IMPORTANT: Focus on information valuable for future similar security findings. Extract patterns that could help remediate similar issues faster and more reliably.
+"""
+
+CONSOLIDATION_APPEND_PROMPT = """
+## SHARA Security Remediation Knowledge Management
+
+You are consolidating security remediation experiences into a knowledge base that helps SHARA agents handle future similar AWS Security Hub findings more effectively.
+
+### Decision Guidelines for Security Knowledge
+
+#### AddMemory (New Remediation Pattern)
+Add when:
+- New Control ID or resource type combination not seen before
+- New remediation approach for an existing control (e.g., different boto3 API sequence)
+- Unique edge case or error scenario with resolution
+- Different environment conditions affecting remediation (cross-region, encryption, etc.)
+- New failure mode with successful resolution
+
+Example:
+- Existing: "S3.1 remediation: Enable Block Public Access on bucket using put_public_access_block"
+- New: "S3.1 remediation failed due to bucket policy conflict, resolved by removing AllowPublicRead statement first then enabling Block Public Access"
+- Action: AddMemory (new failure pattern with resolution)
+
+#### UpdateMemory (Enhance Existing Knowledge)
+Update when:
+- Adding complementary technical details to existing remediation approach
+- Recording success rate or reliability information
+- Adding validation criteria or timing considerations (e.g., propagation delays)
+- Enhancing with specific API parameters that improved success rate
+
+Example:
+- Existing: "EC2.19 remediation: Restrict security group inbound rules from 0.0.0.0/0"
+- New: "EC2.19 remediation successful, validation should wait 30 seconds for security group propagation"
+- Action: UpdateMemory to add timing insight
+
+#### SkipMemory
+Skip when:
+- Information already exists with sufficient detail
+- Routine successful remediation with no new insights
+- Duplicate of recent remediation for same Control ID
+
+### Key Principles for Security Knowledge
+
+1. **Preserve Technical Specificity**: Keep exact Control IDs, resource ARNs, API parameters, error codes
+2. **Maintain Code Patterns**: Don't summarize away working boto3 code - preserve complete patterns
+3. **Capture Failure Modes**: Failed remediations are valuable learning - always record them
+4. **Link Cause and Effect**: Connect findings to successful remediation approaches
+5. **Track Temporal Patterns**: Note if remediation approaches need updates due to AWS API changes
+6. **Consider Resource Dependencies**: Note when remediation order matters (e.g., policy before access block)
+"""
+
+REFLECTION_APPEND_PROMPT = """
+## SHARA Security Remediation Patterns Analysis
+
+Analyze completed security remediation episodes to extract high-level insights and best practices that improve future SHARA agent performance.
+
+### Analysis Focus Areas
+
+#### 1. Success Patterns by AWS Service
+- Which remediation approaches consistently work for specific Control IDs?
+- What pre-checks improve success rate?
+- Which ASR playbooks have highest reliability?
+- Service-specific patterns (S3.*, EC2.*, IAM.*, RDS.*, etc.)
+
+#### 2. Failure Patterns and Recovery
+- Common failure modes by resource type
+- Error conditions that require special handling
+- When rollback is needed vs. retry
+- Dependency failures (e.g., KMS key issues, IAM permission issues)
+
+#### 3. Timing and Propagation Insights
+- Which resources need propagation delays before validation?
+- Optimal retry intervals for eventually consistent operations
+- When to use waiter patterns vs. polling
+
+#### 4. Risk and Safety Patterns
+- Which remediations have higher rollback rates?
+- Destructive operations requiring extra caution
+- Dependencies between resources that affect remediation order
+- Multi-region considerations
+
+#### 5. Optimization Opportunities
+- Faster remediation paths discovered
+- Resource-specific optimizations
+- Batch operation possibilities
+- Cost-effective approaches
+
+### Output Guidelines
+
+- Generate actionable insights that directly improve future remediation success rate
+- Identify patterns across Control IDs within the same service family
+- Note environmental factors (region, account type, resource scale)
+- Highlight when human approval led to better outcomes
+- Track which ASR playbooks need updates based on failure patterns
+
+### Example Insights Format
+
+"For S3 Block Public Access findings (S3.1, S3.2, S3.3), enabling all four block settings simultaneously via put_public_access_block is more reliable than incremental changes. Validation should wait 15-30 seconds for propagation. If bucket has existing public policy, remove conflicting statements first."
+
+"EC2 Security Group remediations (EC2.19, EC2.18) should verify no dependent resources (ELB, RDS) before restricting inbound rules. Use describe_network_interfaces to check for active connections on affected ports."
+"""
+
+# ============================================================================
+# IAM Role Management
+# ============================================================================
+
+MEMORY_EXECUTION_ROLE_NAME = "shara-memory-execution-role"
+
+MEMORY_EXECUTION_ROLE_TRUST_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "bedrock-agentcore.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole",
+            "Condition": {
+                "StringEquals": {
+                    "aws:SourceAccount": "${AWS_ACCOUNT_ID}"
+                },
+                "ArnLike": {
+                    "aws:SourceArn": "arn:aws:bedrock-agentcore:${AWS_REGION}:${AWS_ACCOUNT_ID}:*"
+                }
+            }
+        }
+    ]
+}
+
+MEMORY_EXECUTION_ROLE_POLICY = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "BedrockInvokeModel",
+            "Effect": "Allow",
+            "Action": [
+                "bedrock:InvokeModel",
+                "bedrock:InvokeModelWithResponseStream"
+            ],
+            "Resource": [
+                "arn:aws:bedrock:*::foundation-model/*",
+                "arn:aws:bedrock:*:*:inference-profile/*"
+            ],
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceAccount": "${AWS_ACCOUNT_ID}"
+                }
+            }
+        }
+    ]
+}
+
+
+def get_or_create_execution_role(region: str) -> str:
+    """获取或创建 Memory Execution Role。
+
+    Args:
+        region: AWS Region
+
+    Returns:
+        str: Role ARN
+    """
+    iam = boto3.client('iam', region_name=region)
+    sts = boto3.client('sts', region_name=region)
+
+    account_id = sts.get_caller_identity()['Account']
+    role_arn = f"arn:aws:iam::{account_id}:role/{MEMORY_EXECUTION_ROLE_NAME}"
+
+    # Check if role exists
+    try:
+        response = iam.get_role(RoleName=MEMORY_EXECUTION_ROLE_NAME)
+        logger.info(f"Using existing IAM role: {role_arn}")
+
+        # 更新信任策略以确保包含当前 region
+        # 因为用户可能在不同 region 创建 memory
+        trust_policy = json.loads(
+            json.dumps(MEMORY_EXECUTION_ROLE_TRUST_POLICY)
+            .replace("${AWS_ACCOUNT_ID}", account_id)
+            .replace("${AWS_REGION}", "*")  # 使用通配符支持所有 region
+        )
+
+        try:
+            iam.update_assume_role_policy(
+                RoleName=MEMORY_EXECUTION_ROLE_NAME,
+                PolicyDocument=json.dumps(trust_policy)
+            )
+            logger.info("Updated trust policy for existing role")
+        except Exception as e:
+            logger.warning(f"Could not update trust policy: {e}")
+
+        return response['Role']['Arn']
+    except iam.exceptions.NoSuchEntityException:
+        pass
+
+    logger.info(f"Creating IAM role: {MEMORY_EXECUTION_ROLE_NAME}")
+
+    # Update trust policy with account ID and region (use wildcard for region)
+    trust_policy = json.loads(
+        json.dumps(MEMORY_EXECUTION_ROLE_TRUST_POLICY)
+        .replace("${AWS_ACCOUNT_ID}", account_id)
+        .replace("${AWS_REGION}", "*")  # 使用通配符支持所有 region
+    )
+
+    # Update permissions policy with account ID
+    permissions_policy = json.loads(
+        json.dumps(MEMORY_EXECUTION_ROLE_POLICY)
+        .replace("${AWS_ACCOUNT_ID}", account_id)
+    )
+
+    # Create role
+    response = iam.create_role(
+        RoleName=MEMORY_EXECUTION_ROLE_NAME,
+        AssumeRolePolicyDocument=json.dumps(trust_policy),
+        Description="Execution role for SHARA AgentCore Memory to invoke Bedrock models",
+        Tags=[
+            {"Key": "Project", "Value": "SHARA"},
+            {"Key": "Purpose", "Value": "AgentCore Memory Execution"}
+        ]
+    )
+
+    role_arn = response['Role']['Arn']
+
+    # Attach inline policy
+    iam.put_role_policy(
+        RoleName=MEMORY_EXECUTION_ROLE_NAME,
+        PolicyName="BedrockInvokeModelPolicy",
+        PolicyDocument=json.dumps(permissions_policy)
+    )
+
+    logger.info(f"Created IAM role: {role_arn}")
+
+    # Wait for role to propagate
+    logger.info("Waiting for IAM role to propagate...")
+    time.sleep(10)
+
+    return role_arn
+
+
+# ============================================================================
+# Memory Creation
+# ============================================================================
+
+def get_model_id_for_region(region: str, override_model_id: str = None) -> str:
+    """获取指定区域的模型 ID。
+
+    Args:
+        region: AWS Region
+        override_model_id: 用户指定的模型 ID (如果提供则使用此值)
+
+    Returns:
+        str: 模型 ID
+    """
+    if override_model_id:
+        return override_model_id
+    return REGION_MODEL_MAP.get(region, DEFAULT_MODEL_ID)
+
+
+def create_shara_memory(
+    region: str,
+    memory_name: str = DEFAULT_MEMORY_NAME,
+    event_expiry_days: int = DEFAULT_EVENT_EXPIRY_DAYS,
+    model_id: str = None,  # None = 自动选择
+    dry_run: bool = False
+) -> Optional[dict]:
+    """创建 SHARA Memory 资源。
+
+    使用 Episodic Strategy with Override 配置自定义 prompts。
+
+    Args:
+        region: AWS Region
+        memory_name: Memory 名称
+        event_expiry_days: 事件过期天数 (STM)
+        model_id: 用于 extraction/consolidation/reflection 的模型 (None = 自动根据区域选择)
+        dry_run: 仅打印配置，不实际创建
+
+    Returns:
+        dict: 创建的 Memory 信息
+    """
+    # 自动选择区域对应的模型
+    actual_model_id = get_model_id_for_region(region, model_id)
+
+    # Get or create execution role
+    execution_role_arn = get_or_create_execution_role(region)
+
+    # Build memory strategy configuration
+    memory_strategies = [
+        {
+            "customMemoryStrategy": {
+                "name": "SecurityRemediationEpisodic",
+                "description": "Episodic memory strategy for AWS Security Hub remediation experiences with custom prompts",
+                "namespaces": EPISODE_NAMESPACES,
+                "configuration": {
+                    "episodicOverride": {
+                        "extraction": {
+                            "appendToPrompt": EXTRACTION_APPEND_PROMPT,
+                            "modelId": actual_model_id
+                        },
+                        "consolidation": {
+                            "appendToPrompt": CONSOLIDATION_APPEND_PROMPT,
+                            "modelId": actual_model_id
+                        },
+                        "reflection": {
+                            "appendToPrompt": REFLECTION_APPEND_PROMPT,
+                            "modelId": actual_model_id,
+                            "namespaces": REFLECTION_NAMESPACES
+                        }
+                    }
+                }
+            }
+        }
+    ]
+
+    # Build request
+    request = {
+        "name": memory_name,
+        "description": "SHARA Security Hub Auto-Remediation Agent Memory - Stores remediation experiences using Episodic strategy with custom prompts for security-specific extraction, consolidation, and reflection.",
+        "eventExpiryDuration": event_expiry_days,
+        "memoryExecutionRoleArn": execution_role_arn,
+        "memoryStrategies": memory_strategies,
+        "tags": {
+            "Project": "SHARA",
+            "Purpose": "SecurityRemediation",
+            "StrategyType": "EpisodicOverride"
+        }
+    }
+
+    if dry_run:
+        logger.info("Dry run mode - printing configuration:")
+        print(json.dumps(request, indent=2))
+        return None
+
+    # Create memory using boto3
+    client = boto3.client('bedrock-agentcore-control', region_name=region)
+
+    logger.info(f"Creating Memory resource: {memory_name}")
+    logger.info(f"Region: {region}")
+    logger.info(f"Event Expiry: {event_expiry_days} days")
+    logger.info(f"Model ID: {actual_model_id}")
+    logger.info(f"Execution Role: {execution_role_arn}")
+
+    try:
+        response = client.create_memory(**request)
+        memory = response.get('memory', {})
+
+        memory_id = memory.get('id')
+        memory_arn = memory.get('arn')
+        status = memory.get('status')
+
+        logger.info(f"Memory creation initiated!")
+        logger.info(f"  ID: {memory_id}")
+        logger.info(f"  ARN: {memory_arn}")
+        logger.info(f"  Status: {status}")
+
+        # Wait for memory to be ready
+        if status != 'ACTIVE':
+            logger.info("Waiting for memory to become ACTIVE...")
+            memory = wait_for_memory_active(client, memory_id)
+
+        return memory
+
+    except ClientError as e:
+        error_code = e.response['Error']['Code']
+        error_message = e.response['Error']['Message']
+
+        if error_code == 'ConflictException':
+            logger.warning(f"Memory '{memory_name}' already exists. Fetching existing memory...")
+            return get_memory_by_name(client, memory_name)
+        else:
+            logger.error(f"Failed to create memory: {error_code} - {error_message}")
+            raise
+
+
+def wait_for_memory_active(client, memory_id: str, timeout: int = 300) -> dict:
+    """等待 Memory 变为 ACTIVE 状态。
+
+    Args:
+        client: boto3 client
+        memory_id: Memory ID
+        timeout: 超时时间（秒）
+
+    Returns:
+        dict: Memory 信息
+    """
+    start_time = time.time()
+
+    while time.time() - start_time < timeout:
+        response = client.get_memory(memoryId=memory_id)
+        memory = response.get('memory', {})
+        status = memory.get('status')
+
+        if status == 'ACTIVE':
+            logger.info("Memory is now ACTIVE!")
+            return memory
+        elif status == 'FAILED':
+            failure_reason = memory.get('failureReason', 'Unknown')
+            raise Exception(f"Memory creation failed: {failure_reason}")
+
+        logger.info(f"Memory status: {status}, waiting...")
+        time.sleep(10)
+
+    raise Exception(f"Timeout waiting for memory to become ACTIVE")
+
+
+def get_memory_by_name(client, memory_name: str) -> Optional[dict]:
+    """通过名称获取 Memory。
+
+    Args:
+        client: boto3 client
+        memory_name: Memory 名称
+
+    Returns:
+        dict: Memory 信息
+    """
+    try:
+        response = client.list_memories()
+        memories = response.get('memories', [])
+
+        for mem in memories:
+            if mem.get('name') == memory_name:
+                # Get full details
+                detail_response = client.get_memory(memoryId=mem['id'])
+                return detail_response.get('memory', {})
+
+        return None
+    except Exception as e:
+        logger.error(f"Failed to list memories: {e}")
+        return None
+
+
+def list_memories(region: str):
+    """列出所有 Memory 资源。"""
+    client = boto3.client('bedrock-agentcore-control', region_name=region)
+
+    try:
+        response = client.list_memories()
+        memories = response.get('memories', [])
+
+        if not memories:
+            print("No memories found.")
+            return
+
+        print(f"\nFound {len(memories)} memory resource(s):\n")
+        print("-" * 80)
+
+        for mem in memories:
+            print(f"Name: {mem.get('name')}")
+            print(f"  ID: {mem.get('id')}")
+            print(f"  ARN: {mem.get('arn')}")
+            print(f"  Status: {mem.get('status')}")
+            print(f"  Created: {mem.get('createdAt')}")
+            print("-" * 80)
+
+    except Exception as e:
+        logger.error(f"Failed to list memories: {e}")
+        sys.exit(1)
+
+
+def get_memory_info(region: str, memory_id: str):
+    """获取 Memory 详情。"""
+    client = boto3.client('bedrock-agentcore-control', region_name=region)
+
+    try:
+        response = client.get_memory(memoryId=memory_id)
+        memory = response.get('memory', {})
+
+        print(f"\nMemory Details:")
+        print("-" * 80)
+        print(f"Name: {memory.get('name')}")
+        print(f"ID: {memory.get('id')}")
+        print(f"ARN: {memory.get('arn')}")
+        print(f"Description: {memory.get('description')}")
+        print(f"Status: {memory.get('status')}")
+        print(f"Event Expiry: {memory.get('eventExpiryDuration')} days")
+        print(f"Execution Role: {memory.get('memoryExecutionRoleArn')}")
+        print(f"Created: {memory.get('createdAt')}")
+        print(f"Updated: {memory.get('updatedAt')}")
+
+        strategies = memory.get('strategies', [])
+        if strategies:
+            print(f"\nStrategies ({len(strategies)}):")
+            for strat in strategies:
+                print(f"  - Name: {strat.get('name')}")
+                print(f"    ID: {strat.get('strategyId')}")
+                print(f"    Type: {strat.get('type')}")
+                print(f"    Status: {strat.get('status')}")
+                print(f"    Namespaces: {strat.get('namespaces')}")
+
+        print("-" * 80)
+
+    except Exception as e:
+        logger.error(f"Failed to get memory: {e}")
+        sys.exit(1)
+
+
+def delete_memory(region: str, memory_id: str, force: bool = False):
+    """删除 Memory 资源。"""
+    client = boto3.client('bedrock-agentcore-control', region_name=region)
+
+    if not force:
+        confirm = input(f"Are you sure you want to delete memory {memory_id}? (yes/no): ")
+        if confirm.lower() != 'yes':
+            print("Cancelled.")
+            return
+
+    try:
+        client.delete_memory(memoryId=memory_id)
+        logger.info(f"Memory {memory_id} deleted successfully.")
+    except Exception as e:
+        logger.error(f"Failed to delete memory: {e}")
+        sys.exit(1)
+
+
+def print_env_config(memory: dict):
+    """打印环境变量配置。"""
+    memory_id = memory.get('id')
+    memory_arn = memory.get('arn')
+
+    print("\n" + "=" * 80)
+    print("SHARA Memory 创建成功!")
+    print("=" * 80)
+    print("\n请将以下环境变量添加到你的配置中:\n")
+    print(f"export AGENTCORE_MEMORY_ID={memory_id}")
+    print(f"export AGENTCORE_MEMORY_ARN={memory_arn}")
+    print("\n或者更新 agents/shared/config.py 中的默认值。")
+    print("\n" + "=" * 80)
+
+    # Print strategy info
+    strategies = memory.get('strategies', [])
+    if strategies:
+        print("\nLTM Strategy 配置:")
+        for strat in strategies:
+            print(f"  - {strat.get('name')}: {strat.get('type')}")
+            print(f"    Namespaces: {strat.get('namespaces')}")
+
+    print("\n" + "=" * 80)
+
+
+# ============================================================================
+# Main
+# ============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="SHARA AgentCore Memory 资源管理",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # 创建 Memory (使用默认配置)
+  python create_shara_memory.py create
+
+  # 创建 Memory (指定区域和名称)
+  python create_shara_memory.py create --region us-east-1 --name my-shara-memory
+
+  # 仅打印配置，不实际创建
+  python create_shara_memory.py create --dry-run
+
+  # 列出所有 Memory
+  python create_shara_memory.py list --region ap-northeast-1
+
+  # 获取 Memory 详情
+  python create_shara_memory.py info --region ap-northeast-1 <memory_id>
+
+  # 删除 Memory
+  python create_shara_memory.py delete --region ap-northeast-1 <memory_id>
+"""
+    )
+
+    subparsers = parser.add_subparsers(dest='command', help='命令')
+
+    # Common argument for region (add to each subparser)
+    region_kwargs = {
+        'default': os.environ.get('AWS_REGION', DEFAULT_REGION),
+        'help': f'AWS Region (default: {DEFAULT_REGION})'
+    }
+
+    # create command
+    create_parser = subparsers.add_parser('create', help='创建 SHARA Memory 资源')
+    create_parser.add_argument('--region', **region_kwargs)
+    create_parser.add_argument(
+        '--name',
+        default=DEFAULT_MEMORY_NAME,
+        help=f'Memory 名称 (default: {DEFAULT_MEMORY_NAME})'
+    )
+    create_parser.add_argument(
+        '--expiry-days',
+        type=int,
+        default=DEFAULT_EVENT_EXPIRY_DAYS,
+        help=f'STM 事件过期天数 (default: {DEFAULT_EVENT_EXPIRY_DAYS})'
+    )
+    create_parser.add_argument(
+        '--model-id',
+        default=None,
+        help='LTM 处理模型 ID (默认: 根据区域自动选择, us-*使用基础模型, ap-*使用APAC inference profile)'
+    )
+    create_parser.add_argument(
+        '--dry-run',
+        action='store_true',
+        help='仅打印配置，不实际创建'
+    )
+
+    # list command
+    list_parser = subparsers.add_parser('list', help='列出所有 Memory 资源')
+    list_parser.add_argument('--region', **region_kwargs)
+
+    # info command
+    info_parser = subparsers.add_parser('info', help='获取 Memory 详情')
+    info_parser.add_argument('--region', **region_kwargs)
+    info_parser.add_argument('memory_id', help='Memory ID')
+
+    # delete command
+    delete_parser = subparsers.add_parser('delete', help='删除 Memory 资源')
+    delete_parser.add_argument('--region', **region_kwargs)
+    delete_parser.add_argument('memory_id', help='Memory ID')
+    delete_parser.add_argument('--force', action='store_true', help='跳过确认')
+
+    args = parser.parse_args()
+
+    if args.command == 'create':
+        memory = create_shara_memory(
+            region=args.region,
+            memory_name=args.name,
+            event_expiry_days=args.expiry_days,
+            model_id=args.model_id,
+            dry_run=args.dry_run
+        )
+        if memory:
+            print_env_config(memory)
+
+    elif args.command == 'list':
+        list_memories(args.region)
+
+    elif args.command == 'info':
+        get_memory_info(args.region, args.memory_id)
+
+    elif args.command == 'delete':
+        delete_memory(args.region, args.memory_id, args.force)
+
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

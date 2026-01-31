@@ -207,17 +207,26 @@ SHARA 采用 **Lambda 调度 + Agent 执行** 的两阶段混合架构：
 │  │                                                      ├─ 生成修复代码    │ │
 │  │                                                      └─ 执行修复        │ │
 │  │                                                            │            │ │
+│  │                                                      (A2A Protocol)     │ │
+│  │                                                            │            │ │
 │  │                                                            ▼            │ │
 │  │                                                    Validator Agent      │ │
 │  │                                                      │                  │ │
-│  │                                                      ├─ 验证修复效果    │ │
+│  │                                                      ├─ 审查修复代码    │ │
+│  │                                                      ├─ 验证执行结果    │ │
 │  │                                                      ├─ 更新 Finding    │ │
-│  │                                                      └─ 保存经验到 LTM  │ │
+│  │                                                      ├─ 保存经验到 LTM  │ │
+│  │                                                      └─ 触发结果邮件    │ │
+│  │                                                            │            │ │
+│  │                                                            ▼            │ │
+│  │                                                 Lambda (Result Email)   │ │
+│  │                                                 (含 Rollback 链接)      │ │
 │  └────────────────────────────────────────────────────────────────────────┘ │
 │                                                                              │
 │   Context Sharing: AgentCore Memory (Session for STM, LTM for experiences)  │
 │   State Persistence: DynamoDB (task metadata)                               │
-│   Communication: Lambda invokes Agent via AgentCore Runtime                 │
+│   Agent Communication: A2A Protocol (Remediator → Validator)                │
+│   Lambda Invocation: AgentCore Runtime API                                  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -272,7 +281,7 @@ def handler(event, context):
 **职责：**
 - 处理审批回调
 - 审批通过后调用 Remediator Agent（生成代码并执行）
-- Remediator 完成后自动调用 Validator Agent
+- Remediator 通过 A2A 协议自动调用 Validator Agent
 
 **伪代码：**
 ```python
@@ -293,30 +302,24 @@ def handler(event, context):
         # 更新状态为 Phase 2
         update_task_status(task_id, 'generating_code', phase='post_approval')
 
-        # 1. 调用 Remediator Agent (Phase 2)
+        # 调用 Remediator Agent (Phase 2)
         # Remediator 会：
         # - 从 Memory 获取 Phase 1 分析结果
         # - 生成修复代码
         # - 执行修复
         # - 保存回滚数据
+        # - 通过 A2A 协议调用 Validator Agent
+        #   - Validator 审查代码安全性
+        #   - Validator 验证执行结果
+        #   - Validator 更新 Security Hub Finding
+        #   - Validator 保存经验到 Memory LTM
+        #   - Validator 触发 Lambda 发送结果邮件
         execution_result = invoke_remediator_agent(
             task_id=task_id,
             memory_session_id=memory_session_id
         )
 
-        # 2. Remediator 成功后调用 Validator Agent
-        if execution_result['status'] == 'success':
-            # Validator 会：
-            # - 验证修复效果
-            # - 更新 Security Hub Finding
-            # - 保存经验到 Memory LTM
-            validation_result = invoke_validator_agent(
-                task_id=task_id,
-                memory_session_id=memory_session_id
-            )
-
-            # 3. 发送结果邮件 (含 认可/不认可 链接)
-            send_result_email(task_id, validation_result)
+        # 注：结果邮件由 Validator Agent 触发 Lambda 发送，不在此处理
 
     elif action == 'reject':
         update_task_status(task_id, 'rejected')
@@ -328,8 +331,9 @@ def handler(event, context):
 ##### Feedback Handler Lambda
 
 **职责：**
-- 处理用户反馈回调
+- 处理用户反馈回调（Rollback 链接点击）
 - 触发回滚操作（如用户不认可修复结果）
+- 回滚后由 Validator 验证并发送结果邮件（不含 Rollback 链接）
 
 **伪代码：**
 ```python
@@ -347,19 +351,34 @@ def handler(event, context):
 
     elif action == 'rollback':
         # 1. 调用 Remediator Agent 执行回滚
+        # Remediator 会：
+        # - 获取保存的回滚数据
+        # - 执行回滚代码
+        # - 通过 A2A 调用 Validator 验证回滚结果
+        #   - Validator 验证资源状态已恢复
+        #   - Validator 触发 Lambda 发送回滚结果邮件（无 Rollback 链接）
         rollback_result = invoke_remediator_rollback(
             task_id=task_id,
-            memory_session_id=memory_session_id
+            memory_session_id=memory_session_id,
+            is_rollback=True  # 标记为回滚操作
         )
 
         # 2. 更新任务状态
         update_task_status(task_id, 'rolled_back')
 
-        # 3. 发送回滚完成通知
-        send_rollback_notification(task_id, rollback_result)
+        # 注：回滚结果邮件由 Validator 触发 Lambda 发送，邮件不含 Rollback 链接
 
     return redirect_to_result_page()
 ```
+
+**回滚流程详细说明：**
+1. 用户点击结果邮件中的 Rollback 链接
+2. Feedback Handler Lambda 调用 Remediator Agent（回滚模式）
+3. Remediator Agent 执行回滚代码
+4. Remediator 通过 A2A 调用 Validator Agent 验证回滚结果
+5. Validator Agent 触发 Lambda 发送回滚结果邮件
+6. 回滚结果邮件**不包含** Rollback 链接（防止循环回滚）
+7. 如果回滚失败，邮件中提醒用户手动处理
 
 #### 2.2.3 Analyzer Agent (Phase 1)
 
@@ -425,6 +444,7 @@ ANALYZER_TOOLS = [
 - **生成修复代码**（基于分析结果和 ASR Playbook）
 - 保存当前资源状态（用于回滚）
 - 通过 Code Interpreter 执行修复代码
+- **通过 A2A 协议调用 Validator Agent** 进行代码审查和结果验证
 - 执行回滚操作（当用户不认可修复结果时）
 
 **输入：**
@@ -435,6 +455,12 @@ ANALYZER_TOOLS = [
 - 生成的修复代码
 - 执行结果
 - 回滚数据
+- Validator 验证结果
+
+**A2A 通信：**
+Remediator 执行完毕后，通过 A2A 协议调用 Validator Agent：
+- 发送：生成的代码、执行结果、资源状态
+- 接收：代码审查结果、验证结果、邮件发送状态
 
 **工具集：**
 ```python
@@ -448,6 +474,9 @@ REMEDIATOR_TOOLS = [
     # 状态管理
     "save_rollback_data",        # 保存资源状态到 DynamoDB (用于回滚)
     "get_rollback_data",         # 获取保存的回滚数据
+
+    # A2A 通信
+    "invoke_validator_agent",    # 通过 A2A 协议调用 Validator Agent
 
     # S3 修复
     "s3:PutBucketPolicy",
@@ -469,26 +498,45 @@ REMEDIATOR_TOOLS = [
 
 #### 2.2.5 Validator Agent (Phase 2)
 
-**触发时机：** Remediator Agent 执行成功后，由 Approval Handler Lambda 调用
+**触发时机：** Remediator Agent 执行完成后，通过 A2A 协议调用
 
 **核心职责：**
-- 验证修复效果（检查资源状态是否符合预期）
-- 运行合规检查
-- 更新 Security Hub Finding 状态
-- **保存修复经验到 Memory LTM**（供未来相似 Finding 参考）
+1. **代码安全审查**：检查 Remediator 生成的代码是否存在安全风险
+   - 危险代码检测（如删除操作、权限提升）
+   - 环境破坏风险评估
+   - 敏感信息泄露检查
+2. **执行结果验证**：检查资源状态是否符合预期
+   - 验证修复效果
+   - 运行合规检查
+3. **更新 Security Hub Finding 状态**
+4. **保存修复经验到 Memory LTM**（供未来相似 Finding 参考）
+5. **触发结果邮件发送**：调用 Lambda 发送结果邮件（含 Rollback 链接）
 
-**输入：**
+**A2A 通信：**
+- 被 Remediator Agent 通过 A2A 协议调用
+- 接收：生成的代码、执行结果、资源 ARN、任务 ID
+- 返回：代码审查结果、验证结果、邮件发送状态
+
+**输入（通过 A2A）：**
+- Task ID
 - Memory Session ID
-- 修复执行结果
+- 生成的修复代码
+- 代码执行结果
+- 资源 ARN 和类型
 
 **输出：**
+- 代码审查结果（通过/风险警告/拒绝）
 - 验证结果（通过/失败）
 - Security Hub Finding 更新状态
 - 经验保存结果
+- 邮件发送状态
 
 **工具集：**
 ```python
 VALIDATOR_TOOLS = [
+    # 代码安全审查
+    "review_code_security",      # 审查代码安全性
+
     # 状态验证
     "verify_resource_state",     # 验证资源配置状态
     "verify_s3_configuration",
@@ -503,6 +551,9 @@ VALIDATOR_TOOLS = [
 
     # Memory 操作
     "save_experience",           # 保存修复经验到 Memory LTM
+
+    # 邮件触发
+    "trigger_result_email",      # 调用 Lambda 发送结果邮件（含 Rollback 链接）
 ]
 ```
 
@@ -634,49 +685,67 @@ Analyzer Agent 内部流程:
 ### 3.2 Phase 2: 修复执行流程（审批后）
 
 ```
-┌──────────────────────────────────────────────────────────────────────────────────────┐
-│                         Phase 2: Remediation Execution Flow                           │
-│                                                                                       │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
-│  │API      │  │Lambda   │  │Remediator│  │Validator│  │Memory   │  │Security │       │
-│  │Gateway  │  │Approval │  │Agent     │  │Agent    │  │(STM+LTM)│  │Hub      │       │
-│  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬────┘  └────┬────┘  └────┬────┘       │
-│       │            │            │             │            │            │             │
-│       │ 1.Approve  │            │             │            │            │             │
-│       │───────────▶│            │             │            │            │             │
-│       │            │            │             │            │            │             │
-│       │            │ 2.Get Phase 1 Context    │            │            │             │
-│       │            │────────────────────────────────────────────────────▶│            │
-│       │            │            │             │            │            │             │
-│       │            │ 3.Invoke Remediator      │            │            │             │
-│       │            │───────────▶│             │            │            │             │
-│       │            │            │             │            │            │             │
-│       │            │            │ 4.Get       │            │            │             │
-│       │            │            │   Analysis  │            │            │             │
-│       │            │            │────────────────────────▶│            │             │
-│       │            │            │◀────────────────────────│            │             │
-│       │            │            │             │            │            │             │
-│       │            │            │ 5.Generate Code & Execute             │             │
-│       │            │            │ (via Code Interpreter)  │            │             │
-│       │            │            │             │            │            │             │
-│       │            │ 6.Invoke Validator       │            │            │             │
-│       │            │─────────────────────────▶│            │            │             │
-│       │            │            │             │            │            │             │
-│       │            │            │             │ 7.Verify   │            │             │
-│       │            │            │             │   State    │            │             │
-│       │            │            │             │            │            │             │
-│       │            │            │             │ 8.Update   │            │             │
-│       │            │            │             │   Finding  │            │             │
-│       │            │            │             │───────────────────────▶│             │
-│       │            │            │             │            │            │             │
-│       │            │            │             │ 9.Save Experience to LTM             │
-│       │            │            │             │───────────▶│            │             │
-│       │            │            │             │            │            │             │
-│       │            │ 10.Send Result Email     │            │            │             │
-│       │            │─────────────▶ SES        │            │            │             │
-│       │            │            │             │            │            │             │
-│  └────┴────┘  └────┴────┘  └────┴─────┘  └────┴────┘  └────┴────┘  └────┴────┘       │
-└──────────────────────────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────────────────────┐
+│                          Phase 2: Remediation Execution Flow                               │
+│                                                                                            │
+│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────┐  │
+│  │API      │  │Lambda   │  │Remediator│  │Validator│  │Memory   │  │Security │  │Lambda│  │
+│  │Gateway  │  │Approval │  │Agent     │  │Agent    │  │(STM+LTM)│  │Hub      │  │Email │  │
+│  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬────┘  └────┬────┘  └────┬────┘  └──┬──┘  │
+│       │            │            │             │            │            │           │      │
+│       │ 1.Approve  │            │             │            │            │           │      │
+│       │───────────▶│            │             │            │            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │ 2.Invoke   │             │            │            │           │      │
+│       │            │  Remediator│             │            │            │           │      │
+│       │            │───────────▶│             │            │            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │ 3.Get       │            │            │           │      │
+│       │            │            │   Analysis  │            │            │           │      │
+│       │            │            │   Context   │            │            │           │      │
+│       │            │            │────────────────────────▶│            │           │      │
+│       │            │            │◀────────────────────────│            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │ 4.Generate  │            │            │           │      │
+│       │            │            │   Code &    │            │            │           │      │
+│       │            │            │   Execute   │            │            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │ 5.A2A Call  │            │            │           │      │
+│       │            │            │   Validator │            │            │           │      │
+│       │            │            │ (code+result)            │            │           │      │
+│       │            │            │────────────▶│            │            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │             │ 6.Review   │            │           │      │
+│       │            │            │             │   Code     │            │           │      │
+│       │            │            │             │  Security  │            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │             │ 7.Verify   │            │           │      │
+│       │            │            │             │   Result   │            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │             │ 8.Update   │            │           │      │
+│       │            │            │             │   Finding  │            │           │      │
+│       │            │            │             │───────────────────────▶│           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │             │ 9.Save Experience to LTM            │      │
+│       │            │            │             │───────────▶│            │           │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │             │ 10.Trigger │            │           │      │
+│       │            │            │             │   Result   │            │           │      │
+│       │            │            │             │   Email    │            │           │      │
+│       │            │            │             │──────────────────────────────────▶│      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │             │            │            │    (SES)  │      │
+│       │            │            │             │            │            │ 11.Send   │      │
+│       │            │            │             │            │            │  Email    │      │
+│       │            │            │             │            │            │ (含Rollback│      │
+│       │            │            │             │            │            │  链接)    │      │
+│       │            │            │             │            │            │           │      │
+│       │            │            │◀───────────│            │            │           │      │
+│       │            │            │ 12.Return  │            │            │           │      │
+│       │            │            │    Result  │            │            │           │      │
+│       │            │            │             │            │            │           │      │
+│  └────┴────┘  └────┴────┘  └────┴─────┘  └────┴────┘  └────┴────┘  └────┴────┘  └──┴──┘  │
+└───────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### 3.3 审批流程
@@ -747,7 +816,194 @@ Analyzer Agent 内部流程:
 └────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.4 AgentCore Memory 集成
+### 3.4 结果邮件与回滚流程
+
+#### 3.4.1 结果邮件流程
+
+Validator Agent 完成验证后，触发 Lambda 发送结果邮件：
+
+```
+┌───────────────────────────────────────────────────────────────────────────────┐
+│                         Result Email Flow                                      │
+│                                                                                │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐             │
+│  │Validator│  │Lambda   │  │DynamoDB │  │SES      │  │User     │             │
+│  │Agent    │  │Email    │  │         │  │         │  │         │             │
+│  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘  └────┬────┘             │
+│       │            │            │            │            │                   │
+│       │ 1.Trigger  │            │            │            │                   │
+│       │   Email    │            │            │            │                   │
+│       │   Lambda   │            │            │            │                   │
+│       │───────────▶│            │            │            │                   │
+│       │   (task_id,│            │            │            │                   │
+│       │    result, │            │            │            │                   │
+│       │    is_rollback=false)   │            │            │                   │
+│       │            │            │            │            │                   │
+│       │            │ 2.Get Task │            │            │                   │
+│       │            │   Details  │            │            │                   │
+│       │            │───────────▶│            │            │                   │
+│       │            │◀───────────│            │            │                   │
+│       │            │            │            │            │                   │
+│       │            │ 3.Generate │            │            │                   │
+│       │            │   Rollback │            │            │                   │
+│       │            │   Token    │            │            │                   │
+│       │            │            │            │            │                   │
+│       │            │ 4.Send     │            │            │                   │
+│       │            │   Email    │            │            │                   │
+│       │            │   (含      │            │            │                   │
+│       │            │   Rollback │            │            │                   │
+│       │            │   链接)    │            │            │                   │
+│       │            │───────────────────────▶│            │                   │
+│       │            │            │            │            │                   │
+│       │            │            │            │ 5.Deliver  │                   │
+│       │            │            │            │───────────▶│                   │
+│       │            │            │            │            │                   │
+│  └────┴────┘  └────┴────┘  └────┴────┘  └────┴────┘  └────┴────┘             │
+└───────────────────────────────────────────────────────────────────────────────┘
+
+结果邮件内容：
+┌────────────────────────────────────────────────────────────────┐
+│ Subject: [SHARA] 修复完成 - S3.8 Block Public Access           │
+├────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ Finding: S3 bucket should have public access blocked            │
+│ 资源: arn:aws:s3:::my-bucket                                    │
+│ 状态: ✅ 修复成功                                               │
+│                                                                 │
+│ ─────────────────────────────────────────────────────────────── │
+│                                                                 │
+│ 代码审查结果: ✅ 通过                                           │
+│ - 无危险操作                                                    │
+│ - 无敏感信息泄露风险                                            │
+│                                                                 │
+│ 执行结果验证: ✅ 通过                                           │
+│ - Block Public Access 已启用                                    │
+│ - 配置符合预期                                                  │
+│                                                                 │
+│ Security Hub Finding: 已更新为 RESOLVED                         │
+│                                                                 │
+│ ─────────────────────────────────────────────────────────────── │
+│                                                                 │
+│ 如果此修复导致问题，您可以回滚：                                │
+│                                                                 │
+│ [回滚修复]                                                      │
+│                                                                 │
+│ 回滚链接有效期：24小时                                          │
+└────────────────────────────────────────────────────────────────┘
+```
+
+#### 3.4.2 回滚流程
+
+用户点击回滚链接后触发回滚：
+
+```
+┌───────────────────────────────────────────────────────────────────────────────────────┐
+│                              Rollback Flow                                             │
+│                                                                                        │
+│  ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │
+│  │User     │  │API      │  │Lambda    │  │Remediator│  │Validator│  │Lambda   │       │
+│  │         │  │Gateway  │  │Feedback  │  │Agent     │  │Agent    │  │Email    │       │
+│  └────┬────┘  └────┬────┘  └────┬─────┘  └────┬─────┘  └────┬────┘  └────┬────┘       │
+│       │            │            │             │             │            │             │
+│       │ 1.Click    │            │             │             │            │             │
+│       │  Rollback  │            │             │             │            │             │
+│       │───────────▶│            │             │             │            │             │
+│       │            │            │             │             │            │             │
+│       │            │ 2.Callback │             │             │            │             │
+│       │            │───────────▶│             │             │            │             │
+│       │            │            │             │             │            │             │
+│       │            │            │ 3.Validate  │             │            │             │
+│       │            │            │   Token     │             │            │             │
+│       │            │            │             │             │            │             │
+│       │            │            │ 4.Invoke    │             │            │             │
+│       │            │            │  Remediator │             │            │             │
+│       │            │            │ (rollback   │             │            │             │
+│       │            │            │  mode)      │             │            │             │
+│       │            │            │────────────▶│             │            │             │
+│       │            │            │             │             │            │             │
+│       │            │            │             │ 5.Get       │            │             │
+│       │            │            │             │   Rollback  │            │             │
+│       │            │            │             │   Data      │            │             │
+│       │            │            │             │             │            │             │
+│       │            │            │             │ 6.Execute   │            │             │
+│       │            │            │             │   Rollback  │            │             │
+│       │            │            │             │   Code      │            │             │
+│       │            │            │             │             │            │             │
+│       │            │            │             │ 7.A2A Call  │            │             │
+│       │            │            │             │  Validator  │            │             │
+│       │            │            │             │ (is_rollback│            │             │
+│       │            │            │             │  =true)     │            │             │
+│       │            │            │             │────────────▶│            │             │
+│       │            │            │             │             │            │             │
+│       │            │            │             │             │ 8.Verify   │             │
+│       │            │            │             │             │  Rollback  │             │
+│       │            │            │             │             │  Result    │             │
+│       │            │            │             │             │            │             │
+│       │            │            │             │             │ 9.Trigger  │             │
+│       │            │            │             │             │  Rollback  │             │
+│       │            │            │             │             │  Email     │             │
+│       │            │            │             │             │ (无Rollback│             │
+│       │            │            │             │             │  链接)     │             │
+│       │            │            │             │             │───────────▶│             │
+│       │            │            │             │             │            │             │
+│       │            │            │             │             │            │ 10.Send     │
+│       │            │            │             │             │            │   Rollback  │
+│       │            │            │             │             │            │   Result    │
+│       │            │            │             │             │            │   Email     │
+│       │            │            │             │             │            │  (via SES)  │
+│       │            │            │             │             │            │             │
+│  └────┴────┘  └────┴────┘  └────┴─────┘  └────┴─────┘  └────┴────┘  └────┴────┘       │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+
+回滚结果邮件内容：
+┌────────────────────────────────────────────────────────────────┐
+│ Subject: [SHARA] 回滚完成 - S3.8 Block Public Access           │
+├────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ Finding: S3 bucket should have public access blocked            │
+│ 资源: arn:aws:s3:::my-bucket                                    │
+│ 状态: ⚠️ 已回滚                                                 │
+│                                                                 │
+│ ─────────────────────────────────────────────────────────────── │
+│                                                                 │
+│ 回滚验证结果: ✅ 通过                                           │
+│ - 资源配置已恢复到修复前状态                                    │
+│                                                                 │
+│ Security Hub Finding: 已更新为 NEW                              │
+│                                                                 │
+│ ─────────────────────────────────────────────────────────────── │
+│                                                                 │
+│ 注意: 回滚后原有安全问题可能重新出现，请评估风险。              │
+│ 如需重新修复，请等待系统重新检测或手动处理。                    │
+│                                                                 │
+│ （此邮件不包含回滚链接）                                        │
+└────────────────────────────────────────────────────────────────┘
+
+回滚失败时的邮件：
+┌────────────────────────────────────────────────────────────────┐
+│ Subject: [SHARA] ⚠️ 回滚失败 - S3.8 Block Public Access        │
+├────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│ Finding: S3 bucket should have public access blocked            │
+│ 资源: arn:aws:s3:::my-bucket                                    │
+│ 状态: ❌ 回滚失败                                               │
+│                                                                 │
+│ ─────────────────────────────────────────────────────────────── │
+│                                                                 │
+│ 错误信息: AccessDenied - ...                                    │
+│                                                                 │
+│ ─────────────────────────────────────────────────────────────── │
+│                                                                 │
+│ ⚠️ 请手动处理:                                                  │
+│ 1. 登录 AWS 控制台                                              │
+│ 2. 检查资源状态                                                 │
+│ 3. 根据需要手动恢复配置                                         │
+│                                                                 │
+│ （此邮件不包含回滚链接）                                        │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 3.5 AgentCore Memory 集成
 
 SHARA 使用 AgentCore Memory 实现跨阶段上下文传递和经验积累：
 
@@ -1157,3 +1413,4 @@ def retrieve_similar_experiences(control_id: str, finding: dict) -> list:
 | 1.1 | 2025-01-29 | - | 新增"经验学习与知识库"章节，重构知识库为向量化存储 |
 | 2.0 | 2025-01-29 | - | 重构架构：移除 Orchestrator Agent，Lambda 负责调度；增加 Feedback Handler Lambda；Analyzer 负责生成修复/回滚方案；增加回滚机制 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段架构（Phase 1: 审批前分析; Phase 2: 审批后执行）；审批邮件只包含描述不含代码；新增 AgentCore Memory 集成；更新任务状态机和数据流图 |
+| 4.0 | 2025-01-31 | - | A2A 协议重构：Remediator 通过 A2A 协议调用 Validator；Validator 增强职责（代码安全审查、结果验证、触发结果邮件）；新增结果邮件和回滚流程；结果邮件含 Rollback 链接；回滚邮件不含 Rollback 链接 |

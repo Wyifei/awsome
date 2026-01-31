@@ -7,9 +7,9 @@ This package contains the AI agents for automated security remediation:
 - Validator Agent (Phase 2): Validates fixes and saves experiences
 """
 
-from agents.analyzer.agent import create_analyzer_agent
-from agents.remediator.agent import create_remediator_agent
-from agents.validator.agent import create_validator_agent
+from analyzer.agent import create_analyzer_agent
+from remediator.agent import create_remediator_agent
+from validator.agent import create_validator_agent
 
 __all__ = [
     'create_analyzer_agent',
