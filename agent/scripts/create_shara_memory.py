@@ -48,145 +48,358 @@ REGION_MODEL_MAP = {
 DEFAULT_MODEL_ID = "anthropic.claude-3-sonnet-20240229-v1:0"
 
 # Namespace 设计
-# Episodes: /remediation/actors/{actorId}/sessions/{sessionId}/
-# Reflections: /remediation/actors/{actorId}/
-EPISODE_NAMESPACES = ["/remediation/actors/{actorId}/sessions/{sessionId}/"]
+# 重要：使用 actor 级别而非 session 级别存储 Episodes
+# 这样同一 actor (AWS 账户) 的所有修复经验可以跨 session 检索
+#
+# 原配置 (存在问题):
+#   Episodes: /remediation/actors/{actorId}/sessions/{sessionId}/
+#   问题: 每个 session 的经验被隔离，无法跨 session 检索
+#
+# 新配置 (推荐):
+#   Episodes: /remediation/actors/{actorId}/
+#   好处: 同一 actor 的所有 session 的 episodes 存储在同一 namespace，可共享检索
+#
+# 参考 AWS 文档:
+# https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/episodic-memory-strategy.html
+# "Store all episodes at the actor level. Episodes that come from different sessions,
+#  but that belong to the same actor, are stored in the same namespace."
+EPISODE_NAMESPACES = ["/remediation/actors/{actorId}/"]
 REFLECTION_NAMESPACES = ["/remediation/actors/{actorId}/"]
 
 # ============================================================================
 # Custom Prompts for SHARA Security Remediation
 # ============================================================================
+#
+# SHARA (Security Hub Auto-Remediation Agent) 系统架构:
+#
+# 1. 工作流程 (两阶段):
+#    Phase 1 (分析): Security Hub Finding → Analyzer Agent → 审批邮件 → 人工审批
+#    Phase 2 (执行): 审批通过 → Remediator Agent → Validator Agent → 结果邮件
+#
+# 2. 三个 Agent 的职责:
+#    - Analyzer: 分析 Finding，匹配 ASR Playbook，生成修复方案描述，评估风险
+#    - Remediator: 生成 boto3 修复代码，保存回滚数据，执行修复
+#    - Validator: 代码安全审查，验证修复结果，更新 Security Hub 状态
+#
+# 3. Memory 用途:
+#    - STM: 同一任务中三个 Agent 共享信息 (分析结果、回滚数据、执行结果)
+#    - LTM: 跨任务存储修复经验，供 Analyzer 在新任务中检索相似经验
+#
+# 4. 关键数据结构:
+#    - Control ID: Security Hub 控制 ID (如 S3.1, EC2.19, IAM.4)
+#    - Resource Type: AWS 资源类型 (如 AwsS3Bucket, AwsEc2SecurityGroup)
+#    - ASR Playbook: 预定义的自动化修复方案
+#    - Finding: ASFF 格式的安全发现
+#
+# ============================================================================
 
 EXTRACTION_APPEND_PROMPT = """
-## SHARA Security Remediation Context
+## SHARA Security Remediation Episode Extraction
 
-You are extracting security remediation experiences from conversations between SHARA agents (Analyzer, Remediator, Validator) working on AWS Security Hub findings.
+You are extracting security remediation episodes from SHARA agent conversations. SHARA is a Security Hub Auto-Remediation Agent system with three agents working in two phases.
 
-### What to Extract
+### System Context
 
-Focus on extracting:
-1. **Finding Analysis**: Control ID (e.g., S3.1, EC2.19), resource type, risk assessment, root cause
-2. **Remediation Approach**: Strategy used, ASR playbook matched, code generated
-3. **Execution Details**: Steps taken, rollback data saved, actual AWS API calls made
-4. **Validation Results**: Checks performed, success/failure indicators, Security Hub status updates
-5. **Lessons Learned**: What worked well, edge cases encountered, timing considerations
+**Phase 1 (Analysis):**
+- Analyzer Agent receives Security Hub Finding
+- Matches ASR (Automated Security Response) Playbook
+- Searches LTM for similar past experiences
+- Generates remediation description (no code)
+- Sends approval email to administrator
 
-### Extraction Rules
+**Phase 2 (Execution - after human approval):**
+- Remediator Agent generates boto3 remediation code
+- Saves rollback data (pre_state + rollback_code) to Memory
+- Executes remediation code via Code Interpreter
+- Validator Agent reviews code security
+- Validator verifies remediation success
+- Validator updates Security Hub finding status
 
-- Extract information from ALL agent messages (Analyzer, Remediator, Validator)
-- Capture specific technical details: Control IDs, resource ARNs, boto3 API calls
-- Preserve code snippets that represent successful remediation patterns
-- Note any errors encountered and how they were resolved
-- If a remediation failed, capture the failure reason for future reference
-- Pay attention to Phase 1 (analysis) and Phase 2 (execution) context
+### Episode Detection
 
-### Context Handling
+An episode is COMPLETE when you observe:
+1. A Security Hub Finding was processed (has Control ID and resource info)
+2. Analysis was performed (risk assessment, ASR matching)
+3. Remediation was attempted (code generated and executed)
+4. Validation occurred (success/failure determined)
 
-- Use prior conversation history to understand the full remediation context
-- Connect Phase 1 analysis with Phase 2 execution results
-- Link validation outcomes back to the original finding
-- Note the relationship between ASR playbooks and actual execution
+Mark episode as INCOMPLETE if:
+- Only Phase 1 analysis exists (waiting for approval)
+- Execution started but no validation result yet
+- Conversation ends abruptly without clear outcome
 
-IMPORTANT: Focus on information valuable for future similar security findings. Extract patterns that could help remediate similar issues faster and more reliably.
+### Episodic Structure to Extract
+
+**Scenario (What happened):**
+- Control ID (e.g., S3.1, EC2.19, SNS.1)
+- Resource Type (e.g., AwsS3Bucket, AwsEc2SecurityGroup)
+- Resource ARN
+- Finding severity and title
+- Current resource state before remediation
+
+**Intent (What was the goal):**
+- Specific compliance requirement being addressed
+- Expected resource state after remediation
+- ASR Playbook matched (if any)
+
+**Actions (What was done):**
+- Remediation approach description
+- AWS APIs called (boto3 methods)
+- Key code patterns used
+- Rollback data saved (yes/no)
+- Pre-checks performed
+
+**Outcomes (What was the result):**
+- Execution result (success/failure)
+- Validation result (RESOLVED/FAILED)
+- Security Hub status update
+- Error messages (if failed)
+- Rollback triggered (if any)
+
+### Extraction Priority
+
+HIGH PRIORITY (always extract):
+- Control ID and resource type combination
+- Successful remediation code patterns
+- Error messages and how they were resolved
+- Timing/propagation delay insights
+
+MEDIUM PRIORITY:
+- ASR Playbook effectiveness
+- Pre-check recommendations
+- Resource dependency discoveries
+
+LOW PRIORITY:
+- Routine successful remediations with no new insights
+- Duplicate Control ID patterns already well-documented
+
+### Key Identifiers to Preserve
+
+Always preserve exact values for:
+- Control IDs: S3.1, EC2.19, IAM.4, RDS.2, etc.
+- Resource ARNs: arn:aws:s3:::bucket-name, etc.
+- boto3 API calls: put_public_access_block, revoke_security_group_ingress, etc.
+- Error codes: AccessDenied, InvalidParameterValue, etc.
 """
 
 CONSOLIDATION_APPEND_PROMPT = """
-## SHARA Security Remediation Knowledge Management
+## SHARA Security Remediation Knowledge Consolidation
 
-You are consolidating security remediation experiences into a knowledge base that helps SHARA agents handle future similar AWS Security Hub findings more effectively.
+You are consolidating security remediation episodes into a knowledge base for SHARA agents. This knowledge helps Analyzer Agent provide better recommendations and helps Remediator Agent generate more reliable code.
 
-### Decision Guidelines for Security Knowledge
+### Knowledge Base Purpose
 
-#### AddMemory (New Remediation Pattern)
-Add when:
-- New Control ID or resource type combination not seen before
-- New remediation approach for an existing control (e.g., different boto3 API sequence)
-- Unique edge case or error scenario with resolution
-- Different environment conditions affecting remediation (cross-region, encryption, etc.)
-- New failure mode with successful resolution
+The consolidated knowledge is used by:
+1. **Analyzer Agent**: Searches LTM when analyzing new findings to find similar past experiences
+2. **Remediator Agent**: References successful code patterns for similar Control IDs
+3. **Validator Agent**: Knows common failure modes to watch for
 
-Example:
-- Existing: "S3.1 remediation: Enable Block Public Access on bucket using put_public_access_block"
-- New: "S3.1 remediation failed due to bucket policy conflict, resolved by removing AllowPublicRead statement first then enabling Block Public Access"
-- Action: AddMemory (new failure pattern with resolution)
+### Consolidation Decision Matrix
 
-#### UpdateMemory (Enhance Existing Knowledge)
-Update when:
-- Adding complementary technical details to existing remediation approach
-- Recording success rate or reliability information
-- Adding validation criteria or timing considerations (e.g., propagation delays)
-- Enhancing with specific API parameters that improved success rate
+#### AddMemory - New Knowledge
 
-Example:
-- Existing: "EC2.19 remediation: Restrict security group inbound rules from 0.0.0.0/0"
-- New: "EC2.19 remediation successful, validation should wait 30 seconds for security group propagation"
-- Action: UpdateMemory to add timing insight
+**Add when discovering:**
+- First successful remediation for a Control ID
+- New resource type variant (e.g., S3.1 on bucket with versioning enabled)
+- Novel error scenario with resolution
+- Cross-region or cross-account specific handling
+- New pre-check that improved success rate
+- Timing insight (propagation delay discovered)
 
-#### SkipMemory
-Skip when:
-- Information already exists with sufficient detail
-- Routine successful remediation with no new insights
-- Duplicate of recent remediation for same Control ID
+**Example - Add:**
+```
+Existing: (none for S3.8)
+New Episode: S3.8 remediation for bucket with SSE-KMS encryption
+Action: AddMemory - first pattern for this control
+```
 
-### Key Principles for Security Knowledge
+#### UpdateMemory - Enhance Existing
 
-1. **Preserve Technical Specificity**: Keep exact Control IDs, resource ARNs, API parameters, error codes
-2. **Maintain Code Patterns**: Don't summarize away working boto3 code - preserve complete patterns
-3. **Capture Failure Modes**: Failed remediations are valuable learning - always record them
-4. **Link Cause and Effect**: Connect findings to successful remediation approaches
-5. **Track Temporal Patterns**: Note if remediation approaches need updates due to AWS API changes
-6. **Consider Resource Dependencies**: Note when remediation order matters (e.g., policy before access block)
+**Update when:**
+- Adding complementary approach to existing Control ID
+- Recording validation timing requirements
+- Adding error handling for edge case
+- Improving code pattern based on new success
+
+**Example - Update:**
+```
+Existing: "S3.1: Use put_public_access_block to enable all four settings"
+New Episode: "S3.1 failed when bucket has public policy, need to remove policy first"
+Action: UpdateMemory - add prerequisite step
+```
+
+#### SkipMemory - No Action Needed
+
+**Skip when:**
+- Routine successful remediation matching existing pattern exactly
+- Same Control ID + resource type with no new insights
+- Failed remediation due to transient issue (timeout, throttling)
+
+### Knowledge Quality Guidelines
+
+**Preserve:**
+- Complete boto3 code snippets that work
+- Exact API parameter combinations
+- Error message → resolution mappings
+- Validation wait times
+
+**Summarize:**
+- Verbose log output
+- Repeated status checks
+- Standard success confirmations
+
+**Never Discard:**
+- Failed remediation root causes
+- Rollback scenarios and triggers
+- Resource dependency requirements
+- Security implications noted
+
+### Service Family Grouping
+
+Group related Control IDs for pattern recognition:
+- S3.*: Bucket security (S3.1-S3.20)
+- EC2.*: Compute security (EC2.1-EC2.30)
+- IAM.*: Identity security (IAM.1-IAM.25)
+- RDS.*: Database security (RDS.1-RDS.25)
+- Lambda.*: Serverless security
+- EKS/ECS.*: Container security
+
+### Index Keywords
+
+Ensure these are prominently included for search retrieval:
+- Control ID (exact match needed)
+- Resource Type (for type-specific code)
+- "remediation", "fix", "resolve" (for intent matching)
+- AWS service name (S3, EC2, IAM, etc.)
 """
 
 REFLECTION_APPEND_PROMPT = """
-## SHARA Security Remediation Patterns Analysis
+## SHARA Security Remediation Cross-Episode Reflection
 
-Analyze completed security remediation episodes to extract high-level insights and best practices that improve future SHARA agent performance.
+Analyze multiple remediation episodes to extract high-level insights that improve SHARA system performance. Reflections help agents make better decisions by learning from accumulated experience.
 
-### Analysis Focus Areas
+### Reflection Purpose
 
-#### 1. Success Patterns by AWS Service
-- Which remediation approaches consistently work for specific Control IDs?
-- What pre-checks improve success rate?
-- Which ASR playbooks have highest reliability?
-- Service-specific patterns (S3.*, EC2.*, IAM.*, RDS.*, etc.)
+Reflections are retrieved when:
+1. Analyzer encounters a new finding and wants strategic guidance
+2. Remediator needs to choose between multiple approaches
+3. Validator assesses risk level of a remediation
 
-#### 2. Failure Patterns and Recovery
-- Common failure modes by resource type
-- Error conditions that require special handling
-- When rollback is needed vs. retry
-- Dependency failures (e.g., KMS key issues, IAM permission issues)
+### Analysis Dimensions
 
-#### 3. Timing and Propagation Insights
-- Which resources need propagation delays before validation?
-- Optimal retry intervals for eventually consistent operations
-- When to use waiter patterns vs. polling
+#### 1. Control ID Success Patterns
 
-#### 4. Risk and Safety Patterns
-- Which remediations have higher rollback rates?
-- Destructive operations requiring extra caution
-- Dependencies between resources that affect remediation order
-- Multi-region considerations
+For each AWS service family, identify:
+- Which Control IDs have highest success rate?
+- Which require special handling?
+- Common failure modes by Control ID?
 
-#### 5. Optimization Opportunities
-- Faster remediation paths discovered
-- Resource-specific optimizations
-- Batch operation possibilities
-- Cost-effective approaches
+**Output Format:**
+```
+Service: S3
+High Success: S3.1, S3.2, S3.5 (95%+ success with standard approach)
+Moderate: S3.8, S3.9 (may need KMS key handling)
+Complex: S3.11 (requires lifecycle policy changes)
+```
 
-### Output Guidelines
+#### 2. Resource Type Patterns
 
-- Generate actionable insights that directly improve future remediation success rate
-- Identify patterns across Control IDs within the same service family
-- Note environmental factors (region, account type, resource scale)
-- Highlight when human approval led to better outcomes
-- Track which ASR playbooks need updates based on failure patterns
+Identify resource-specific considerations:
+- AwsS3Bucket: Check for public policies before modifying access blocks
+- AwsEc2SecurityGroup: Verify no dependent ENIs before rule changes
+- AwsIamRole: Consider trust policy implications
+- AwsRdsDbInstance: Account for maintenance windows
 
-### Example Insights Format
+#### 3. Code Pattern Reliability
 
-"For S3 Block Public Access findings (S3.1, S3.2, S3.3), enabling all four block settings simultaneously via put_public_access_block is more reliable than incremental changes. Validation should wait 15-30 seconds for propagation. If bucket has existing public policy, remove conflicting statements first."
+Rank remediation code patterns:
+- Which boto3 API sequences are most reliable?
+- Which parameter combinations work best?
+- When is waiter pattern needed vs. simple polling?
 
-"EC2 Security Group remediations (EC2.19, EC2.18) should verify no dependent resources (ELB, RDS) before restricting inbound rules. Use describe_network_interfaces to check for active connections on affected ports."
+**Example:**
+```
+Pattern: put_public_access_block with all four settings = True
+Reliability: HIGH (98% success across 50+ remediations)
+Note: Always verify bucket exists first, handle NoSuchBucket gracefully
+```
+
+#### 4. Failure Mode Catalog
+
+Document common failures and resolutions:
+```
+Failure: AccessDenied on put_public_access_block
+Cause: Bucket has conflicting bucket policy with public read
+Resolution: Remove s3:GetObject Allow for * principal first
+Prevention: Pre-check bucket policy for public statements
+```
+
+#### 5. Timing Insights
+
+Document propagation and consistency delays:
+- S3 Block Public Access: 10-30 seconds before validation
+- Security Group rules: 15-60 seconds for ENI propagation
+- IAM policy changes: Up to 60 seconds for global propagation
+- RDS parameter groups: May require instance restart
+
+#### 6. Rollback Patterns
+
+Identify when rollbacks are needed:
+- High rollback rate Control IDs
+- Common rollback triggers
+- Successful rollback approaches
+
+### Reflection Output Guidelines
+
+**Be Actionable:**
+- "For S3.1, always check bucket policy for public access statements before applying Block Public Access"
+- NOT: "S3.1 can sometimes fail"
+
+**Be Specific:**
+- "Wait 30 seconds after put_public_access_block before validation"
+- NOT: "Some operations need time to propagate"
+
+**Be Quantified:**
+- "EC2.19 has 15% failure rate when security group has more than 50 rules"
+- NOT: "Large security groups may have issues"
+
+### Cross-Episode Pattern Recognition
+
+Look for patterns across episodes:
+1. Same Control ID, different resource states → variant handling
+2. Same error, different Control IDs → common root cause
+3. Same resource type, different controls → shared prerequisites
+4. Sequential failures → systemic issues
+
+### Strategic Recommendations
+
+Generate recommendations for system improvement:
+- ASR Playbook updates needed
+- New pre-checks to add
+- Validation timing adjustments
+- Risk level reclassifications
+
+**Example Reflection Output:**
+```
+## S3 Service Family Insights
+
+### Success Pattern
+S3.1/S3.2/S3.3 Block Public Access findings resolve reliably with:
+1. Pre-check: get_public_access_block (handle NoSuchPublicAccessBlockConfiguration)
+2. Pre-check: get_bucket_policy (identify public statements)
+3. If public policy exists: delete_bucket_policy or modify to remove public access
+4. Apply: put_public_access_block with all four settings True
+5. Validate: Wait 20 seconds, then get_public_access_block to confirm
+
+### Failure Pattern
+When bucket has Object Lock enabled, Block Public Access may fail.
+Resolution: Use get_object_lock_configuration first, adjust approach if enabled.
+
+### Timing Insight
+S3 Block Public Access changes are eventually consistent.
+Recommended validation delay: 20-30 seconds.
+Retry validation up to 3 times with 10-second intervals.
+```
 """
 
 # ============================================================================

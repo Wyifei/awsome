@@ -377,11 +377,24 @@ def _invoke_runtime_http(
             response_data = str(response_body)
 
         logger.info(f"AgentCore Runtime boto3 response received for task {task_id}")
+        logger.info(f"Response content-type: {content_type}")
+        logger.debug(f"Raw response data (first 500 chars): {response_data[:500] if response_data else 'EMPTY'}")
+
+        # 检查响应是否为空
+        if not response_data or response_data.strip() == '':
+            logger.error(f"Task {task_id}: Empty response from AgentCore Runtime")
+            return {
+                'success': False,
+                'task_id': task_id,
+                'error': 'Empty response from AgentCore Runtime'
+            }
 
         # 尝试解析 JSON 响应
         try:
             parsed_response = json.loads(response_data)
-        except json.JSONDecodeError:
+            logger.info(f"Task {task_id}: Parsed response keys: {list(parsed_response.keys()) if isinstance(parsed_response, dict) else 'not a dict'}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Task {task_id}: JSON decode failed: {e}. Raw data: {response_data[:200]}")
             parsed_response = {'output': response_data}
 
         return {
@@ -509,6 +522,16 @@ def update_task_with_analysis(task_id: str, analysis_result: dict):
     except json.JSONDecodeError:
         analysis_data = {'raw_response': response}
 
+    # 验证分析数据是否有效
+    # 如果 analysis 或 remediation 为空，记录警告
+    analysis = analysis_data.get('analysis', {})
+    remediation = analysis_data.get('remediation', {})
+    if not analysis or not analysis.get('control_id'):
+        logger.warning(f"Task {task_id}: analysis data is empty or missing control_id")
+        logger.warning(f"Raw response: {str(response)[:500]}")
+    if not remediation:
+        logger.warning(f"Task {task_id}: remediation data is empty")
+
     # 检查是否可以自动修复
     can_remediate = analysis_data.get('remediation', {}).get('can_remediate', True)
 
@@ -546,6 +569,13 @@ def update_task_with_analysis(task_id: str, analysis_result: dict):
     )
 
     # 发送审批邮件（使用完整的 analysis_data，不存储到 DynamoDB）
+    # 验证 analysis_data 是否有效，避免发送全 N/A 的邮件
+    if not analysis.get('control_id') and not analysis.get('finding_type'):
+        logger.error(f"Task {task_id}: Skipping email - analysis data is invalid or empty")
+        logger.error(f"analysis_data keys: {list(analysis_data.keys()) if analysis_data else 'None'}")
+        # 仍然更新任务状态，但不发送邮件
+        return
+
     email_sent = send_approval_email(task_id, {'response': analysis_data})
     if email_sent:
         logger.info(f"Approval email sent for task {task_id}")
@@ -724,6 +754,47 @@ def send_approval_email(task_id: str, analysis_result: dict) -> bool:
         return False
 
 
+def get_display_width(s: str) -> int:
+    """计算字符串的显示宽度（考虑中文字符和 emoji）
+
+    中文字符和大多数 emoji 占用 2 个显示宽度，ASCII 字符占用 1 个。
+
+    Args:
+        s: 输入字符串
+
+    Returns:
+        int: 显示宽度
+    """
+    import unicodedata
+    width = 0
+    for char in s:
+        # emoji 和中文字符占 2 个宽度
+        if unicodedata.east_asian_width(char) in ('F', 'W'):
+            width += 2
+        elif ord(char) >= 0x1F300:  # emoji 范围
+            width += 2
+        else:
+            width += 1
+    return width
+
+
+def pad_to_width(s: str, target_width: int) -> str:
+    """将字符串填充到指定的显示宽度
+
+    Args:
+        s: 输入字符串
+        target_width: 目标显示宽度
+
+    Returns:
+        str: 填充后的字符串
+    """
+    current_width = get_display_width(s)
+    padding = target_width - current_width
+    if padding > 0:
+        return s + ' ' * padding
+    return s
+
+
 def format_approval_email(
     task_id: str,
     analysis_data: dict,
@@ -890,13 +961,15 @@ def format_approval_email(
                 else:
                     lines.append(f'    {i}. {step}')
 
+    # 构建影响评估框（使用 HTML 表格样式更清晰）
+    box_width = 56  # 内容区域宽度
     lines.extend([
         '',
-        '  ┌' + '─' * 60 + '┐',
-        f'  │  预计影响:     {impact_display:<45}│',
-        f'  │  可回滚:       {rollback_display:<45}│',
-        f'  │  破坏性操作:   {destructive_display:<45}│',
-        '  └' + '─' * 60 + '┘',
+        '  ┌' + '─' * box_width + '┐',
+        '  │' + pad_to_width(f'  预计影响:     {impact_display}', box_width) + '│',
+        '  │' + pad_to_width(f'  可回滚:       {rollback_display}', box_width) + '│',
+        '  │' + pad_to_width(f'  破坏性操作:   {destructive_display}', box_width) + '│',
+        '  └' + '─' * box_width + '┘',
     ])
 
     # 特别注意事项
@@ -956,24 +1029,31 @@ def format_approval_email(
         '─' * 70,
     ])
 
-    # 相似经验
+    # 相似经验 - 简洁显示
     if similar_experiences:
         lines.append(f'  找到 {len(similar_experiences)} 条相关历史经验:')
-        lines.append('')
         for i, exp in enumerate(similar_experiences, 1):
             relevance = exp.get('relevance', exp.get('similarity_score', 0))
             relevance_pct = int(relevance * 100) if relevance <= 1 else relevance
-            exp_id = exp.get('experience_id', exp.get('type', 'unknown'))
-            lines.append(f'  {i}. [相关度 {relevance_pct}%] {exp_id}')
-            if exp.get('summary'):
-                lines.append(f'     摘要: {exp["summary"]}')
-            # 可参考经验
-            insights = exp.get('applicable_insights', [])
-            if insights:
-                lines.append('     可参考经验:')
-                for insight in insights:
-                    lines.append(f'       • {insight}')
-            lines.append('')
+
+            # 从 content 中提取标题或摘要
+            content = exp.get('content', '')
+            title = ''
+            if isinstance(content, str) and content.startswith('{'):
+                try:
+                    content_data = json.loads(content)
+                    # 尝试获取 title 或 situation 的前 60 个字符
+                    title = content_data.get('title', '') or content_data.get('situation', '')[:60]
+                except:
+                    pass
+            if not title:
+                title = exp.get('type', 'experience')
+
+            # 截断过长的标题
+            if len(title) > 50:
+                title = title[:47] + '...'
+
+            lines.append(f'  • [{relevance_pct}%] {title}')
     else:
         lines.append('  暂无相关历史修复经验')
 

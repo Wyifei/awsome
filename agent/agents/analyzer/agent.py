@@ -45,6 +45,7 @@ ANALYZER_SYSTEM_PROMPT = """# 角色
 - Control ID (如 SNS.1, S3.1)
 - Resources[].Id (完整 ARN)
 - Resources[].Type (如 AwsSnsTopic, AwsS3Bucket)
+- Region
 - Severity
 
 ## 步骤 2: 【强制】验证资源存在性
@@ -87,9 +88,18 @@ get_resource_config(
 save_analysis_result(
   task_id="<任务 ID>",
   analysis=<分析结果 JSON 对象>,
-  remediation_description="<修复方案描述>"
+  remediation_description="<修复方案描述>",
+  finding=<原始 Finding 数据>,  # 完整的 ASFF 格式 Finding
+  asr_playbook=<fetch_asr_playbook 的返回结果>,  # 如果有匹配
+  top_experience=<search_similar_findings 返回的第一条结果>  # 如果有结果
 )
 ```
+
+**重要**: 必须传递完整的 `finding` 数据，Remediator 需要从中提取：
+- Region: 资源所在的 AWS 区域
+- Resources[].Id: 资源 ARN
+- Resources[].Type: 资源类型
+- 其他修复所需的上下文信息
 
 # 输出格式
 必须返回以下结构的 JSON 对象：
@@ -242,9 +252,14 @@ def create_analyzer_agent(
     config = get_config()
     region = region or config.region
 
-    # 如果没有指定 actor_id，使用 task_id
-    # 建议在生产环境中使用 AWS 账户 ID 作为 actor_id 以关联同账户的修复经验
-    actor_id = actor_id or f"task-{task_id}"
+    # 使用 AWS 账户 ID 作为 actor_id
+    # 这样同一账户的所有修复经验可以跨 session 共享检索
+    # actor_id 应该从 Lambda event 传入 (通常是 AWS 账户 ID)
+    # 如果没有传入，则使用 task_id 的前缀 (不推荐)
+    if not actor_id:
+        logger.warning("actor_id not provided, using task_id as fallback. "
+                      "For better LTM retrieval, pass AWS account ID as actor_id.")
+        actor_id = f"task-{task_id}"
 
     # 配置 Memory Session Manager
     session_manager = None
@@ -365,11 +380,23 @@ get_resource_config(
 
 **步骤 2: 获取 ASR Playbook**
 调用 fetch_asr_playbook 工具获取 Control ID: {control_id} 的修复方案
+**保存返回结果**，步骤 5 需要用到
 
 **步骤 3: 搜索相似经验**
 调用 search_similar_findings 工具
+**保存返回结果中分数最高的那条**，步骤 5 需要用到
 
 **步骤 4: 风险评估并生成 JSON 输出**
+如果步骤 3 返回了相似经验，参考其中的修复方法和经验教训
+
+**步骤 5 [强制]: 保存分析结果**
+调用 save_analysis_result 工具:
+- task_id: {task_id}
+- analysis: 步骤 4 生成的分析 JSON
+- remediation_description: 修复方案描述
+- finding: 传递完整的原始 Finding 数据 (上面的 ASFF JSON)
+- asr_playbook: **步骤 2 的 fetch_asr_playbook 返回结果** (如果 matched=true)
+- top_experience: **步骤 3 返回的第一条（最高分）经验** (如果有结果)
 
 Remember: Generate DESCRIPTIONS only, not executable code. Return result as JSON format.
 """

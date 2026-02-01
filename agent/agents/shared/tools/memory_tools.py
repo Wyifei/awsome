@@ -5,9 +5,11 @@ Memory Tools - AgentCore Memory 交互工具
 - STM: 三个智能体 (Analyzer, Remediator, Validator) 在同一任务中共享信息
 - LTM: 存储修复经验，使用 Episodic 结构 (scenario → intent → actions → outcomes)
 
-Namespace 结构:
-- Episodes: /remediation/actors/{actorId}/sessions/{sessionId}/
+Namespace 结构 (Actor 级别，支持跨 Session 检索):
+- Episodes: /remediation/actors/{actorId}/
 - Reflections: /remediation/actors/{actorId}/
+
+注意：使用 AWS 账户 ID 作为 actorId，这样同一账户的所有修复经验可以共享检索。
 """
 import json
 import logging
@@ -184,6 +186,11 @@ def get_memory_session() -> Optional[MemorySession]:
     return _memory_session
 
 
+# Score 阈值常量
+# 低于此分数的结果将被过滤，认为相关性不足
+MIN_RELEVANCE_SCORE = 0.35
+
+
 @tool
 def search_similar_findings(
     control_id: str,
@@ -197,8 +204,10 @@ def search_similar_findings(
     1. 首先搜索 Reflections (跨任务高级洞察和模式)
     2. 然后搜索 Episodes (具体修复场景)
 
+    结果会按相似度分数过滤，只返回分数 >= MIN_RELEVANCE_SCORE (0.35) 的经验。
+
     Namespace 结构:
-    - Episodes: /remediation/actors/{actorId}/sessions/{sessionId}/
+    - Episodes: /remediation/actors/{actorId}/
     - Reflections: /remediation/actors/{actorId}/
 
     Args:
@@ -226,9 +235,17 @@ def search_similar_findings(
         # 构建语义搜索查询 - 包含关键信息以提高匹配准确度
         query = f"Security remediation for AWS {resource_type}: Control ID {control_id}, Finding: {finding_title}"
 
+        logger.info(f"="*50)
+        logger.info(f"[LTM SEARCH] control_id={control_id}")
+        logger.info(f"[LTM SEARCH] resource_type={resource_type}")
+        logger.info(f"[LTM SEARCH] memory_id={session.memory_id}")
+        logger.info(f"[LTM SEARCH] actor_id={session.actor_id}")
+        logger.info(f"[LTM SEARCH] Query: {query[:100]}...")
+        logger.info(f"="*50)
+
         # 1. 首先搜索 Reflections - 跨任务的高级洞察
         # Reflections 存储在 /remediation/actors/{actorId}/ 下
-        logger.info(f"Searching Reflections with query: {query[:80]}...")
+        logger.info(f"Searching Reflections with namespace_prefix: {REFLECTION_NAMESPACE_PREFIX}")
 
         try:
             reflection_memories = session.search_long_term_memories(
@@ -238,8 +255,14 @@ def search_similar_findings(
             )
 
             for memory in reflection_memories:
-                content = memory.get('content', '')
+                raw_content = memory.get('content', '')
                 score = memory.get('score', 0.0)
+
+                # 处理 content 格式：可能是字符串或 {'text': '...'} 格式
+                if isinstance(raw_content, dict):
+                    content = raw_content.get('text', str(raw_content))
+                else:
+                    content = str(raw_content) if raw_content else ''
 
                 # Reflections 通常包含跨任务的模式和洞察
                 result = {
@@ -255,8 +278,8 @@ def search_similar_findings(
             logger.warning(f"Error searching reflections: {e}")
 
         # 2. 搜索 Episodes - 具体的修复场景
-        # Episodes 存储在 /remediation/actors/{actorId}/sessions/{sessionId}/ 下
-        logger.info(f"Searching Episodes with query: {query[:80]}...")
+        # Episodes 存储在 /remediation/actors/{actorId}/ 下 (Actor 级别)
+        logger.info(f"Searching Episodes with namespace_prefix: {EPISODE_NAMESPACE_PREFIX}")
 
         try:
             episode_memories = session.search_long_term_memories(
@@ -266,8 +289,14 @@ def search_similar_findings(
             )
 
             for memory in episode_memories:
-                content = memory.get('content', '')
+                raw_content = memory.get('content', '')
                 score = memory.get('score', 0.0)
+
+                # 处理 content 格式：可能是字符串或 {'text': '...'} 格式
+                if isinstance(raw_content, dict):
+                    content = raw_content.get('text', str(raw_content))
+                else:
+                    content = str(raw_content) if raw_content else ''
 
                 # Episodes 包含具体的修复场景 (scenario → intent → actions → outcomes)
                 result = {
@@ -282,11 +311,34 @@ def search_similar_findings(
         except Exception as e:
             logger.warning(f"Error searching episodes: {e}")
 
-        # 按相似度分数排序并限制结果数量
+        # 按相似度分数排序
         results.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+
+        # 过滤低分结果 - 只保留相关性足够高的经验
+        total_before_filter = len(results)
+        results = [r for r in results if r.get('similarity_score', 0) >= MIN_RELEVANCE_SCORE]
+        filtered_count = total_before_filter - len(results)
+
+        # 限制结果数量
         results = results[:top_k]
 
-        logger.info(f"Returning {len(results)} total similar experiences")
+        logger.info(f"="*50)
+        logger.info(f"[LTM SEARCH COMPLETE] Total results: {len(results)} (filtered out {filtered_count} low-score results)")
+        logger.info(f"[LTM SEARCH] Min relevance score threshold: {MIN_RELEVANCE_SCORE}")
+        if results:
+            for i, r in enumerate(results):
+                logger.info(f"[LTM RESULT {i+1}] type={r.get('type')}, score={r.get('similarity_score', 0):.3f}")
+                content_preview = str(r.get('content', ''))[:100]
+                logger.info(f"[LTM RESULT {i+1}] content preview: {content_preview}...")
+        else:
+            logger.warning("[LTM SEARCH] No results found - check if:")
+            logger.warning("[LTM SEARCH]   1. Experiences have been saved via save_experience_to_ltm")
+            logger.warning("[LTM SEARCH]   2. LTM extraction has completed (async, may take minutes)")
+            logger.warning("[LTM SEARCH]   3. Namespace prefix matches storage namespace")
+            logger.warning("[LTM SEARCH]   4. Actor ID matches between save and search")
+            if filtered_count > 0:
+                logger.warning(f"[LTM SEARCH]   5. All {filtered_count} results were below score threshold {MIN_RELEVANCE_SCORE}")
+        logger.info(f"="*50)
         return results
 
     except Exception as e:
@@ -383,7 +435,10 @@ def _parse_episode_structure(content: str) -> dict:
 def save_analysis_result(
     task_id: str,
     analysis: dict,
-    remediation_description: str
+    remediation_description: str,
+    finding: dict = None,
+    asr_playbook: dict = None,
+    top_experience: dict = None
 ) -> dict:
     """保存分析结果到 Memory Session (供 Phase 2 使用)。
 
@@ -394,6 +449,9 @@ def save_analysis_result(
         task_id: 任务 ID
         analysis: 分析结果，包含风险评估等信息
         remediation_description: 修复方案的文字描述
+        finding: 原始 Finding 数据 (ASFF 格式)，包含完整的资源和 Region 信息
+        asr_playbook: ASR Playbook 信息 (可选)
+        top_experience: 最相关的历史修复经验 (可选)
 
     Returns:
         dict: 保存结果
@@ -409,7 +467,7 @@ def save_analysis_result(
     try:
         from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
 
-        # 构建要保存的数据
+        # 构建要保存的数据 - 保存完整上下文供 Remediator 自主使用
         data = {
             "type": "phase1_analysis",
             "task_id": task_id,
@@ -417,6 +475,45 @@ def save_analysis_result(
             "remediation_description": remediation_description,
             "saved_at": datetime.now(timezone.utc).isoformat()
         }
+
+        # 保存完整的 Finding 数据 - Remediator 可从中提取所需信息
+        # 包括: Region, Resources[].Id (ARN), Resources[].Type, Severity 等
+        if finding:
+            data["finding"] = finding
+
+        # 如果有 ASR playbook，保存代码模板供 Remediator 使用
+        if asr_playbook and asr_playbook.get('matched'):
+            data["asr_playbook"] = {
+                "matched": True,
+                "playbook_id": asr_playbook.get('playbook_id'),
+                "code_template": asr_playbook.get('code_template'),  # 经过验证的代码模板
+                "ssm_document": asr_playbook.get('playbook', {}).get('ssm_document'),
+                "parameters": asr_playbook.get('playbook', {}).get('parameters', [])
+            }
+            logger.info(f"Including ASR code_template for {asr_playbook.get('playbook_id')}")
+
+        # 如果有历史经验，保存最相关的那条供 Remediator 参考
+        if top_experience and top_experience.get('similarity_score', 0) >= MIN_RELEVANCE_SCORE:
+            # 从 content 中提取有用信息
+            content = top_experience.get('content', '')
+            experience_data = {}
+
+            if isinstance(content, str) and content.startswith('{'):
+                try:
+                    experience_data = json.loads(content)
+                except:
+                    experience_data = {"raw_content": content[:500]}
+            elif content:
+                experience_data = {"raw_content": str(content)[:500]}
+
+            data["top_experience"] = {
+                "similarity_score": top_experience.get('similarity_score'),
+                "type": top_experience.get('type'),
+                "title": experience_data.get('title', ''),
+                "situation": experience_data.get('situation', '')[:300] if experience_data.get('situation') else '',
+                "key_insights": experience_data.get('use_cases', '') or experience_data.get('key_insights', ''),
+            }
+            logger.info(f"Including top experience with score {top_experience.get('similarity_score'):.2f}")
 
         # 保存为对话记录
         session.add_turns([
@@ -458,7 +555,10 @@ def get_analysis_context(task_id: str) -> dict:
 
     try:
         # 获取最近的对话记录
-        turns = session.get_last_k_turns(k=10)
+        # 增加到 30 以确保能找到 Phase 1 保存的分析结果
+        turns = session.get_last_k_turns(k=30)
+
+        logger.info(f"Retrieved {len(turns)} turns from Memory for analysis context search")
 
         # 查找 Phase 1 分析结果
         for turn in reversed(turns):
@@ -468,11 +568,23 @@ def get_analysis_context(task_id: str) -> dict:
                     data = json.loads(content)
                     if data.get('type') == 'phase1_analysis' and data.get('task_id') == task_id:
                         logger.info(f"Retrieved Phase 1 analysis for task {task_id}")
-                        return {
+                        # 返回完整的上下文数据，让 Remediator 自主提取所需信息
+                        result = {
                             "success": True,
+                            "task_id": task_id,
                             "analysis": data.get('analysis', {}),
-                            "remediation_description": data.get('remediation_description', '')
+                            "remediation_description": data.get('remediation_description', ''),
                         }
+                        # 返回完整的 Finding 数据 - 包含 Region, Resources, Severity 等
+                        if data.get('finding'):
+                            result['finding'] = data.get('finding')
+                        # 如果有 ASR playbook，也返回
+                        if data.get('asr_playbook'):
+                            result['asr_playbook'] = data.get('asr_playbook')
+                        # 如果有历史经验，也返回
+                        if data.get('top_experience'):
+                            result['top_experience'] = data.get('top_experience')
+                        return result
                 except json.JSONDecodeError:
                     continue
 
@@ -482,6 +594,297 @@ def get_analysis_context(task_id: str) -> dict:
     except Exception as e:
         logger.exception(f"Error getting analysis context: {e}")
         return {"success": False, "error": str(e)}
+
+
+@tool
+def save_rollback_to_memory(
+    task_id: str,
+    resource_arn: str,
+    resource_type: str,
+    pre_state: dict,
+    rollback_code: str
+) -> dict:
+    """保存回滚数据到 Memory STM。
+
+    在执行修复操作前，保存：
+    1. 资源的当前配置状态 (pre_state)
+    2. 预生成的回滚代码 (rollback_code)
+
+    这样回滚时可以直接执行保存的代码，而不需要 LLM 重新生成。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+        resource_type: 资源类型 (如 AwsS3Bucket)
+        pre_state: 当前资源配置状态
+        rollback_code: 预生成的回滚代码 (Python/boto3)
+
+    Returns:
+        dict: 保存结果
+            - success: bool - 是否成功
+            - task_id: str - 任务 ID
+            - resource_arn: str - 资源 ARN
+            - error: str - 错误信息 (如有)
+    """
+    session = get_memory_session()
+    if not session:
+        logger.error("Memory session not initialized")
+        return {"success": False, "error": "Memory session not initialized"}
+
+    try:
+        from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
+
+        # 构建回滚数据
+        data = {
+            "type": "rollback_data",
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "resource_type": resource_type,
+            "pre_state": pre_state,
+            "rollback_code": rollback_code,
+            "saved_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # 保存到 Memory STM
+        session.add_turns([
+            ConversationalMessage(
+                json.dumps(data),
+                MessageRole.ASSISTANT
+            )
+        ])
+
+        logger.info(f"="*50)
+        logger.info(f"[ROLLBACK DATA SAVED] task_id={task_id}")
+        logger.info(f"[ROLLBACK DATA SAVED] resource_arn={resource_arn}")
+        logger.info(f"[ROLLBACK DATA SAVED] rollback_code length={len(rollback_code)} chars")
+        logger.info(f"="*50)
+        return {
+            "success": True,
+            "task_id": task_id,
+            "resource_arn": resource_arn
+        }
+
+    except Exception as e:
+        logger.exception(f"Error saving rollback data to Memory: {e}")
+        return {
+            "success": False,
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "error": str(e)
+        }
+
+
+@tool
+def get_rollback_from_memory(task_id: str, resource_arn: str) -> dict:
+    """从 Memory STM 获取回滚数据。
+
+    获取之前保存的回滚数据，包括：
+    - pre_state: 修复前的资源状态
+    - rollback_code: 预生成的回滚代码
+
+    回滚时直接执行 rollback_code 即可，无需 LLM 重新生成。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+
+    Returns:
+        dict: 回滚数据
+            - success: bool - 是否成功获取
+            - pre_state: dict - 资源修复前的状态
+            - rollback_code: str - 预生成的回滚代码
+            - resource_type: str - 资源类型
+            - error: str - 错误信息 (如有)
+    """
+    session = get_memory_session()
+    if not session:
+        logger.error("Memory session not initialized")
+        return {"success": False, "error": "Memory session not initialized"}
+
+    try:
+        # 获取最近的对话记录
+        # 增加到 50 以确保能找到较早保存的回滚数据
+        # (原来 k=20 可能不够，因为 Remediator 和 Validator 会产生很多 Memory events)
+        turns = session.get_last_k_turns(k=50)
+
+        logger.info(f"Retrieved {len(turns)} turns from Memory for rollback search")
+
+        # 查找匹配的回滚数据
+        for turn in reversed(turns):
+            content = turn.get('content', '')
+            if isinstance(content, str) and 'rollback_data' in content:
+                try:
+                    data = json.loads(content)
+                    if (data.get('type') == 'rollback_data' and
+                        data.get('task_id') == task_id and
+                        data.get('resource_arn') == resource_arn):
+                        logger.info(f"Retrieved rollback data from Memory for task {task_id}")
+                        return {
+                            "success": True,
+                            "task_id": task_id,
+                            "resource_arn": resource_arn,
+                            "pre_state": data.get('pre_state', {}),
+                            "rollback_code": data.get('rollback_code', ''),
+                            "resource_type": data.get('resource_type', ''),
+                            "saved_at": data.get('saved_at', '')
+                        }
+                except json.JSONDecodeError:
+                    continue
+
+        logger.warning(f"Rollback data not found in Memory for task {task_id}, resource {resource_arn}")
+        logger.warning(f"Searched {len(turns)} turns, found rollback_data entries but none matched task_id={task_id} and resource_arn={resource_arn}")
+        # 记录找到的 rollback_data 条目以便调试
+        for turn in turns:
+            content = turn.get('content', '')
+            if isinstance(content, str) and 'rollback_data' in content:
+                try:
+                    data = json.loads(content)
+                    if data.get('type') == 'rollback_data':
+                        logger.warning(f"Found rollback_data: task_id={data.get('task_id')}, resource_arn={data.get('resource_arn')}")
+                except:
+                    pass
+        return {
+            "success": False,
+            "error": "Rollback data not found in Memory"
+        }
+
+    except Exception as e:
+        logger.exception(f"Error getting rollback data from Memory: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@tool
+def save_remediation_result(
+    task_id: str,
+    resource_arn: str,
+    generated_code: str,
+    execution_result: dict
+) -> dict:
+    """保存修复代码和执行结果到 Memory STM。
+
+    Remediator 在执行代码后调用此工具，将生成的代码和执行结果保存到 Memory，
+    供 Validator 从 Memory 中获取（而不是通过 A2A 参数传递）。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+        generated_code: 生成的修复/回滚代码
+        execution_result: 代码执行结果 (exit_code, stdout, stderr)
+
+    Returns:
+        dict: 保存结果
+            - success: bool - 是否成功
+            - task_id: str - 任务 ID
+            - error: str - 错误信息 (如有)
+    """
+    session = get_memory_session()
+    if not session:
+        logger.error("Memory session not initialized")
+        return {"success": False, "error": "Memory session not initialized"}
+
+    try:
+        from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
+
+        # 构建修复结果数据
+        data = {
+            "type": "remediation_result",
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "generated_code": generated_code,
+            "execution_result": execution_result,
+            "saved_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # 保存到 Memory STM
+        session.add_turns([
+            ConversationalMessage(
+                json.dumps(data),
+                MessageRole.ASSISTANT
+            )
+        ])
+
+        logger.info(f"Saved remediation result to Memory for task {task_id}")
+        return {
+            "success": True,
+            "task_id": task_id,
+            "resource_arn": resource_arn
+        }
+
+    except Exception as e:
+        logger.exception(f"Error saving remediation result to Memory: {e}")
+        return {
+            "success": False,
+            "task_id": task_id,
+            "error": str(e)
+        }
+
+
+@tool
+def get_remediation_result(task_id: str, resource_arn: str) -> dict:
+    """从 Memory STM 获取修复代码和执行结果。
+
+    Validator 调用此工具从 Memory 获取 Remediator 保存的代码和执行结果，
+    用于代码安全审查和结果验证。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN
+
+    Returns:
+        dict: 修复结果数据
+            - success: bool - 是否成功获取
+            - generated_code: str - 生成的修复代码
+            - execution_result: dict - 代码执行结果
+            - error: str - 错误信息 (如有)
+    """
+    session = get_memory_session()
+    if not session:
+        logger.error("Memory session not initialized")
+        return {"success": False, "error": "Memory session not initialized"}
+
+    try:
+        # 获取最近的对话记录
+        # 增加到 50 以确保能找到较早保存的修复结果
+        turns = session.get_last_k_turns(k=50)
+
+        logger.info(f"Retrieved {len(turns)} turns from Memory for remediation result search")
+
+        # 查找匹配的修复结果
+        for turn in reversed(turns):
+            content = turn.get('content', '')
+            if isinstance(content, str) and 'remediation_result' in content:
+                try:
+                    data = json.loads(content)
+                    if (data.get('type') == 'remediation_result' and
+                        data.get('task_id') == task_id and
+                        data.get('resource_arn') == resource_arn):
+                        logger.info(f"Retrieved remediation result from Memory for task {task_id}")
+                        return {
+                            "success": True,
+                            "task_id": task_id,
+                            "resource_arn": resource_arn,
+                            "generated_code": data.get('generated_code', ''),
+                            "execution_result": data.get('execution_result', {}),
+                            "saved_at": data.get('saved_at', '')
+                        }
+                except json.JSONDecodeError:
+                    continue
+
+        logger.warning(f"Remediation result not found in Memory for task {task_id}")
+        return {
+            "success": False,
+            "error": "Remediation result not found in Memory"
+        }
+
+    except Exception as e:
+        logger.exception(f"Error getting remediation result from Memory: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 @tool
@@ -500,8 +903,12 @@ def save_experience_to_ltm(
 
     当修复成功且经过验证后，将此次修复经验保存为 Episodic 格式的 event。
     AgentCore Memory 的 Episodic Strategy 会自动从 events 中提取:
-    - Episodes (scenario → intent → actions → outcomes) 存储在 /remediation/actors/{actorId}/sessions/{sessionId}/
-    - Reflections (跨任务模式分析) 存储在 /remediation/actors/{actorId}/
+    - Episodes (scenario → intent → actions → outcomes) 存储在 /remediation/actors/{actorId}/
+    - Reflections (跨任务模式分析) 也存储在 /remediation/actors/{actorId}/
+
+    使用 Actor 级别 namespace 的好处:
+    - 同一 Actor (AWS 账户) 的所有修复经验可以跨 Session 检索
+    - Reflections 会分析同一 Actor 的所有 Episodes，生成有用的洞察
 
     注意：LTM 提取是异步的，保存后可能需要几分钟才能在 LTM 中检索到。
 
@@ -589,25 +996,43 @@ def save_experience_to_ltm(
 """
 
         # 保存为 event，Episodic Strategy 会自动:
-        # 1. 提取 Episode 到 /remediation/actors/{actorId}/sessions/{sessionId}/
+        # 1. 提取 Episode 到 /remediation/actors/{actorId}/ (Actor 级别)
         # 2. 生成 Reflection 到 /remediation/actors/{actorId}/
+        # 注意: 必须使用 JSON 格式，否则 AgentCoreMemorySessionManager
+        # 在恢复会话时会因为 JSON 解析失败而报错
+        experience_data = {
+            "type": "ltm_experience",
+            "experience_id": experience_id,
+            "control_id": control_id,
+            "task_id": task_id,
+            "finding_title": finding_title,
+            "resource_type": resource_type,
+            "content": experience_content,  # Markdown 内容作为字符串字段
+            "saved_at": datetime.now(timezone.utc).isoformat()
+        }
         session.add_turns([
             ConversationalMessage(
-                experience_content,
+                json.dumps(experience_data),
                 MessageRole.ASSISTANT
             )
         ])
 
-        logger.info(f"Saved remediation experience for {control_id} in Episodic format")
-        logger.info(f"Episode will be stored in /remediation/actors/{{actorId}}/sessions/{{sessionId}}/")
-        logger.info(f"Reflection will be stored in /remediation/actors/{{actorId}}/")
+        logger.info(f"="*50)
+        logger.info(f"[LTM EXPERIENCE SAVED] control_id={control_id}")
+        logger.info(f"[LTM EXPERIENCE SAVED] experience_id={experience_id}")
+        logger.info(f"[LTM EXPERIENCE SAVED] Episode namespace: /remediation/actors/{{actorId}}/")
+        logger.info(f"[LTM EXPERIENCE SAVED] actor_id={session.actor_id}")
+        logger.info(f"[LTM EXPERIENCE SAVED] session_id={session.session_id}")
+        logger.info(f"[LTM EXPERIENCE SAVED] content length={len(experience_content)} chars")
+        logger.info(f"="*50)
 
         return {
             "saved": True,
             "experience_id": experience_id,
             "control_id": control_id,
-            "episode_namespace": "/remediation/actors/{actorId}/sessions/{sessionId}/",
+            "episode_namespace": "/remediation/actors/{actorId}/",
             "reflection_namespace": "/remediation/actors/{actorId}/",
+            "actor_id": session.actor_id,
             "note": "Episodic LTM extraction is asynchronous, may take a few minutes to be searchable"
         }
 

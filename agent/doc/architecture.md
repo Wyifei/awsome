@@ -457,42 +457,37 @@ ANALYZER_TOOLS = [
 - 回滚数据
 - Validator 验证结果
 
-**A2A 通信：**
-Remediator 执行完毕后，通过 A2A 协议调用 Validator Agent：
-- 发送：生成的代码、执行结果、资源状态
-- 接收：代码审查结果、验证结果、邮件发送状态
+**数据共享（通过 Memory）：**
+Remediator 将数据保存到 Memory，Validator 从 Memory 获取：
+- 保存到 Memory：生成的代码、执行结果（使用 `save_remediation_result`）
+- A2A 调用：只传递元数据（task_id, resource_arn 等），不传递代码和执行结果
+- Validator 从 Memory 获取代码和执行结果（使用 `get_remediation_result`）
+
+**回滚数据存储：**
+- 使用 Memory STM 存储回滚数据（不使用 DynamoDB）
+- 回滚代码在修复时预生成并通过 dry-run 验证
+- 回滚时直接执行保存的回滚代码，无需 LLM 重新生成
 
 **工具集：**
 ```python
 REMEDIATOR_TOOLS = [
     # Memory 操作
     "get_analysis_context",      # 从 Memory Session 获取 Phase 1 分析结果
+    "save_rollback_to_memory",   # 保存回滚数据到 Memory (pre_state + rollback_code)
+    "get_rollback_from_memory",  # 从 Memory 获取回滚数据
+    "save_remediation_result",   # 保存代码和执行结果到 Memory (供 Validator 获取)
+
+    # 代码安全检查
+    "pre_execution_check",       # 执行前快速安全检查 (Dry-Run)
 
     # 代码执行
     "execute_code",              # 通过 Code Interpreter 执行代码
 
-    # 状态管理
-    "save_rollback_data",        # 保存资源状态到 DynamoDB (用于回滚)
-    "get_rollback_data",         # 获取保存的回滚数据
-
     # A2A 通信
-    "invoke_validator_agent",    # 通过 A2A 协议调用 Validator Agent
+    "invoke_validator_agent",    # 通过 A2A 协议调用 Validator (只传元数据)
 
-    # S3 修复
-    "s3:PutBucketPolicy",
-    "s3:DeleteBucketPolicy",
-    "s3:PutPublicAccessBlock",
-    "s3:PutBucketEncryption",
-
-    # EC2/网络修复
-    "ec2:AuthorizeSecurityGroupIngress",
-    "ec2:RevokeSecurityGroupIngress",
-    "ec2:ModifyInstanceAttribute",
-
-    # IAM 修复
-    "iam:UpdateAssumeRolePolicy",
-    "iam:PutRolePolicy",
-    "iam:DeleteRolePolicy",
+    # 资源信息
+    "get_resource_config",       # 获取资源当前配置
 ]
 ```
 
@@ -512,17 +507,17 @@ REMEDIATOR_TOOLS = [
 4. **保存修复经验到 Memory LTM**（供未来相似 Finding 参考）
 5. **触发结果邮件发送**：调用 Lambda 发送结果邮件（含 Rollback 链接）
 
-**A2A 通信：**
+**数据获取（从 Memory）：**
 - 被 Remediator Agent 通过 A2A 协议调用
-- 接收：生成的代码、执行结果、资源 ARN、任务 ID
+- A2A 只传递元数据（task_id, resource_arn 等）
+- 从 Memory 获取：生成的代码、执行结果（使用 `get_remediation_result`）
 - 返回：代码审查结果、验证结果、邮件发送状态
 
-**输入（通过 A2A）：**
-- Task ID
-- Memory Session ID
-- 生成的修复代码
-- 代码执行结果
-- 资源 ARN 和类型
+**输入（通过 A2A 元数据 + Memory）：**
+- Task ID, Resource ARN, Control ID (A2A 传递)
+- Memory Session ID, Actor ID (A2A 传递)
+- 生成的修复代码 (从 Memory 获取)
+- 代码执行结果 (从 Memory 获取)
 
 **输出：**
 - 代码审查结果（通过/风险警告/拒绝）
@@ -534,23 +529,21 @@ REMEDIATOR_TOOLS = [
 **工具集：**
 ```python
 VALIDATOR_TOOLS = [
+    # Memory 操作 (从 Remediator 获取数据)
+    "get_remediation_result",    # 从 Memory 获取代码和执行结果
+
     # 代码安全审查
     "review_code_security",      # 审查代码安全性
 
     # 状态验证
     "verify_resource_state",     # 验证资源配置状态
-    "verify_s3_configuration",
-    "verify_security_group",
-    "verify_iam_policy",
+    "get_resource_config",       # 获取资源当前配置
 
     # Security Hub 更新
-    "securityhub:BatchUpdateFindings",
+    "update_security_hub_finding",
 
-    # 安全扫描
-    "config:StartConfigRulesEvaluation",
-
-    # Memory 操作
-    "save_experience",           # 保存修复经验到 Memory LTM
+    # Memory 操作 (保存经验)
+    "save_experience_to_ltm",    # 保存修复经验到 Memory LTM
 
     # 邮件触发
     "trigger_result_email",      # 调用 Lambda 发送结果邮件（含 Rollback 链接）
@@ -1005,7 +998,7 @@ Validator Agent 完成验证后，触发 Lambda 发送结果邮件：
 
 ### 3.5 AgentCore Memory 集成
 
-SHARA 使用 AgentCore Memory 实现跨阶段上下文传递和经验积累：
+SHARA 使用 AgentCore Memory 实现跨阶段上下文传递和经验积累。
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -1014,55 +1007,38 @@ SHARA 使用 AgentCore Memory 实现跨阶段上下文传递和经验积累：
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                     Memory Session (STM - 短期记忆)                     │  │
 │  │                                                                        │  │
-│  │   用途: 单个任务的上下文传递 (Phase 1 → Phase 2)                       │  │
-│  │   生命周期: 任务开始 → 任务完成                                        │  │
-│  │   Session ID: session-task-{taskId}                                   │  │
-│  │                                                                        │  │
 │  │   存储内容:                                                            │  │
-│  │   ├─ Phase 1 分析结果                                                 │  │
-│  │   │  ├─ Finding 解析                                                  │  │
-│  │   │  ├─ ASR Playbook 匹配结果                                         │  │
-│  │   │  ├─ 风险评估                                                      │  │
-│  │   │  └─ 修复描述                                                      │  │
+│  │   ├─ phase1_analysis (Analyzer → Remediator)                          │  │
+│  │   │  ├─ finding: 完整 ASFF 数据 (含 Region, Resources, Severity)      │  │
+│  │   │  ├─ analysis: 风险评估、修复描述                                   │  │
+│  │   │  ├─ asr_playbook: ASR 代码模板 (如匹配)                           │  │
+│  │   │  └─ top_experience: 最相关历史经验 (如有)                         │  │
 │  │   │                                                                    │  │
-│  │   └─ Phase 2 执行上下文                                               │  │
-│  │      ├─ 生成的代码                                                    │  │
-│  │      ├─ 执行结果                                                      │  │
-│  │      └─ 验证结果                                                      │  │
+│  │   ├─ rollback_data: pre_state + 预生成回滚代码                        │  │
+│  │   └─ remediation_result: 生成的代码 + 执行结果                        │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                     Memory LTM (长期记忆 - 语义搜索)                    │  │
 │  │                                                                        │  │
-│  │   用途: 存储和检索修复经验                                             │  │
-│  │   生命周期: 永久                                                       │  │
+│  │   搜索机制: 向量嵌入 + 余弦相似度                                       │  │
+│  │   相似度阈值: MIN_RELEVANCE_SCORE = 0.35                               │  │
+│  │   分数范围: 0.7+ 非常相似 | 0.5-0.7 较相似 | 0.35-0.5 有一定相关性     │  │
 │  │                                                                        │  │
-│  │   Namespace 结构:                                                      │  │
-│  │   /remediation/                                                        │  │
-│  │   ├─ /remediation/{controlId}/                  # 按 Control ID 分类  │  │
-│  │   │  ├─ /remediation/S3.1/user-123             # 用户验证的经验       │  │
-│  │   │  ├─ /remediation/S3.1/user-456             │  │
-│  │   │  └─ ...                                                            │  │
-│  │   └─ /remediation/{resourceType}/               # 按资源类型分类      │  │
-│  │      ├─ /remediation/AwsS3Bucket/...                                  │  │
-│  │      └─ /remediation/AwsEc2SecurityGroup/...                          │  │
-│  │                                                                        │  │
-│  │   搜索场景:                                                            │  │
-│  │   - Analyzer Agent 搜索相似 Finding 的修复经验                        │  │
-│  │   - 基于 Control ID + Finding 描述进行语义搜索                        │  │
+│  │   Namespace: /remediation/actors/{actorId}/                            │  │
 │  └───────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Memory 使用流程:**
+**Memory 数据流:**
 
 | 阶段 | Agent | 操作 | 说明 |
 |------|-------|------|------|
-| Phase 1 | Analyzer | `search_long_term_memories()` | 搜索相似修复经验 |
-| Phase 1 | Analyzer | `add_turns()` | 保存分析结果到 Session |
-| Phase 2 | Remediator | `get_last_k_turns()` | 获取 Phase 1 分析结果 |
-| Phase 2 | Remediator | `add_turns()` | 保存执行结果到 Session |
-| Phase 2 | Validator | `save_experience()` | 保存验证通过的经验到 LTM |
+| Phase 1 | Analyzer | `search_similar_findings` | 从 LTM 搜索，返回 score >= 0.35 的结果 |
+| Phase 1 | Analyzer | `save_analysis_result` | 保存完整 finding + 分析结果到 STM |
+| Phase 2 | Remediator | `get_analysis_context` | 获取完整上下文，自主提取所需信息 |
+| Phase 2 | Remediator | `execute_code` | 传递 `target_region` 参数，沙盒设置 AWS_REGION |
+| Phase 2 | Validator | `save_experience_to_ltm` | 保存成功经验到 LTM |
 
 ---
 
@@ -1414,3 +1390,5 @@ def retrieve_similar_experiences(control_id: str, finding: dict) -> list:
 | 2.0 | 2025-01-29 | - | 重构架构：移除 Orchestrator Agent，Lambda 负责调度；增加 Feedback Handler Lambda；Analyzer 负责生成修复/回滚方案；增加回滚机制 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段架构（Phase 1: 审批前分析; Phase 2: 审批后执行）；审批邮件只包含描述不含代码；新增 AgentCore Memory 集成；更新任务状态机和数据流图 |
 | 4.0 | 2025-01-31 | - | A2A 协议重构：Remediator 通过 A2A 协议调用 Validator；Validator 增强职责（代码安全审查、结果验证、触发结果邮件）；新增结果邮件和回滚流程；结果邮件含 Rollback 链接；回滚邮件不含 Rollback 链接 |
+| 5.0 | 2025-01-31 | - | Memory 数据共享重构：Agent 间数据全部通过 Memory STM 共享；移除 A2A 参数传递代码和执行结果；回滚数据存储从 DynamoDB 迁移到 Memory；回滚代码在修复时预生成并 dry-run 验证；新增 pre_execution_check 快速安全检查 |
+| 6.0 | 2025-02-01 | - | LTM 搜索优化：修复 content 格式问题 (dict vs string)；新增相似度阈值 MIN_RELEVANCE_SCORE=0.35；Memory 存储完整 finding 数据；execute_code 支持 target_region 参数；新增 ReAct 重试机制 (最多 2 次) |

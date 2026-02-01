@@ -326,6 +326,41 @@ resource "aws_iam_role_policy" "agentcore_logs" {
   })
 }
 
+# Agent-to-Agent Communication Policy (for Remediator -> Validator A2A calls)
+# IMPORTANT: In AgentCore Runtime, agents must use InvokeAgentRuntime API for A2A communication
+# Direct HTTP calls between agents are not supported in AgentCore Runtime
+resource "aws_iam_role_policy" "agentcore_a2a" {
+  name = "${local.name_prefix}-agentcore-a2a"
+  role = aws_iam_role.agentcore_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "InvokeAgentRuntime"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:InvokeAgentRuntime"
+        ]
+        Resource = "arn:aws:bedrock-agentcore:${local.region}:${local.account_id}:runtime/*"
+      },
+      {
+        Sid    = "GetWorkloadAccessToken"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:GetWorkloadAccessToken",
+          "bedrock-agentcore:GetWorkloadAccessTokenForJWT",
+          "bedrock-agentcore:GetWorkloadAccessTokenForUserId"
+        ]
+        Resource = [
+          "arn:aws:bedrock-agentcore:${local.region}:${local.account_id}:workload-identity-directory/default",
+          "arn:aws:bedrock-agentcore:${local.region}:${local.account_id}:workload-identity-directory/default/workload-identity/*"
+        ]
+      }
+    ]
+  })
+}
+
 # Cloud Control API Policy (for resource verification)
 resource "aws_iam_role_policy" "agentcore_cloudcontrol" {
   name = "${local.name_prefix}-agentcore-cloudcontrol"
@@ -350,6 +385,28 @@ resource "aws_iam_role_policy" "agentcore_cloudcontrol" {
 resource "aws_iam_role_policy_attachment" "agentcore_readonly" {
   role       = aws_iam_role.agentcore_runtime.name
   policy_arn = "arn:aws:iam::aws:policy/ReadOnlyAccess"
+}
+
+# Lambda Invoke Policy (for Validator Agent to send result emails)
+resource "aws_iam_role_policy" "agentcore_lambda_invoke" {
+  name = "${local.name_prefix}-agentcore-lambda-invoke"
+  role = aws_iam_role.agentcore_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LambdaInvoke"
+        Effect = "Allow"
+        Action = [
+          "lambda:InvokeFunction"
+        ]
+        Resource = [
+          "arn:aws:lambda:${local.region}:${local.account_id}:function:${local.name_prefix}-*"
+        ]
+      }
+    ]
+  })
 }
 
 # AWS Resource Remediation Policy (for Remediator Agent)

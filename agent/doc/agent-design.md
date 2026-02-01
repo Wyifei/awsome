@@ -133,54 +133,45 @@ SHARA 采用 **Lambda 调度 + Agent 执行** 的两阶段混合架构：
 | 类型 | 用途 | 生命周期 |
 |------|------|----------|
 | **Session (STM)** | Phase 1 → Phase 2 上下文传递 | 任务周期 |
-| **LTM** | 存储和检索修复经验 | 永久 |
+| **LTM** | 存储和检索修复经验（语义搜索） | 永久 |
 
-### 4.2 Session (STM) 设计
-
-每个任务创建一个独立的 Memory Session，用于跨阶段传递上下文：
+### 4.2 STM 数据结构
 
 ```python
-# Session ID 命名规则
-session_id = f"session-task-{task_id}"
-
-# Session 内容
+# phase1_analysis 存储内容
 {
-    "phase1_analysis": {
-        "finding_summary": "...",
-        "control_id": "S3.1",
-        "asr_playbook_matched": true,
-        "risk_assessment": {...},
-        "remediation_description": "..."
-    },
-    "phase2_execution": {
-        "generated_code": "...",
-        "execution_result": {...},
-        "rollback_data": {...}
-    }
+    "type": "phase1_analysis",
+    "task_id": "xxx",
+    "finding": {...},              # 完整 ASFF 数据 (含 Region, Resources)
+    "analysis": {...},             # 风险评估结果
+    "remediation_description": "...",
+    "asr_playbook": {...},         # ASR 代码模板 (如匹配)
+    "top_experience": {...}        # 最相关历史经验 (如有)
 }
 ```
 
-### 4.3 LTM Namespace 设计
+### 4.3 LTM 语义搜索
 
 ```
-/remediation/
-├── /remediation/{controlId}/           # 按 Control ID 分类
-│   ├── /remediation/S3.1/user-123     # 用户验证的经验
-│   └── /remediation/S3.1/user-456
-└── /remediation/{resourceType}/        # 按资源类型分类
-    ├── /remediation/AwsS3Bucket/...
-    └── /remediation/AwsEc2SecurityGroup/...
+搜索流程:
+Query → Embedding Model → Vector A
+                                  ↘
+                                   Cosine Similarity → Score
+                                  ↗
+Memory → Embedding Model → Vector B
+
+相似度阈值: MIN_RELEVANCE_SCORE = 0.35
+分数解读: 0.7+ 非常相似 | 0.5-0.7 较相似 | 0.35-0.5 有一定相关性
 ```
 
 ### 4.4 Memory 操作流程
 
-| 阶段 | Agent | 操作 | API |
-|------|-------|------|-----|
-| Phase 1 | Analyzer | 搜索相似经验 | `search_long_term_memories()` |
-| Phase 1 | Analyzer | 保存分析结果 | `add_turns()` |
-| Phase 2 | Remediator | 获取 Phase 1 结果 | `get_last_k_turns()` |
-| Phase 2 | Remediator | 保存执行结果 | `add_turns()` |
-| Phase 2 | Validator | 保存经验到 LTM | Memory LTM API |
+| 阶段 | Agent | 操作 | 说明 |
+|------|-------|------|------|
+| Phase 1 | Analyzer | `search_similar_findings` | 从 LTM 搜索，过滤 score < 0.35 |
+| Phase 1 | Analyzer | `save_analysis_result` | 保存完整 finding + 分析结果 |
+| Phase 2 | Remediator | `get_analysis_context` | 获取完整上下文 |
+| Phase 2 | Validator | `save_experience_to_ltm` | 保存成功经验 |
 
 ---
 
@@ -344,7 +335,10 @@ def search_similar_findings(
 def save_analysis_result(
     task_id: str,
     analysis: dict,
-    remediation_description: str
+    remediation_description: str,
+    finding: dict = None,        # 完整 ASFF 数据
+    asr_playbook: dict = None,   # ASR 代码模板
+    top_experience: dict = None  # 最相关历史经验
 ) -> dict:
     """保存分析结果到 Memory Session (供 Phase 2 使用)。
 
@@ -352,23 +346,28 @@ def save_analysis_result(
         task_id: 任务 ID
         analysis: 分析结果
         remediation_description: 修复方案描述
+        finding: 完整 Finding 数据 (ASFF 格式)
+        asr_playbook: ASR Playbook (如匹配)
+        top_experience: 最相关历史经验 (如有)
 
     Returns:
         保存结果
     """
-    from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
+    data = {
+        "type": "phase1_analysis",
+        "task_id": task_id,
+        "analysis": analysis,
+        "remediation_description": remediation_description
+    }
+    if finding:
+        data["finding"] = finding  # 包含 Region, Resources 等
+    if asr_playbook:
+        data["asr_playbook"] = asr_playbook
+    if top_experience:
+        data["top_experience"] = top_experience
 
-    # 保存为对话记录
     memory_session.add_turns([
-        ConversationalMessage(
-            json.dumps({
-                "type": "phase1_analysis",
-                "task_id": task_id,
-                "analysis": analysis,
-                "remediation_description": remediation_description
-            }),
-            MessageRole.ASSISTANT
-        )
+        ConversationalMessage(json.dumps(data), MessageRole.ASSISTANT)
     ])
 
     return {"success": True, "task_id": task_id}
@@ -543,12 +542,12 @@ def create_analyzer_agent(task_id: str, memory_id: str) -> Agent:
 
 | 职责 | 描述 |
 |------|------|
-| **获取 Phase 1 上下文** | 从 Memory Session 读取分析结果 |
-| **生成修复代码** | 基于分析结果生成 Python/Boto3 代码 |
-| **保存回滚数据** | 执行前保存资源当前状态 |
-| **执行修复** | 通过 Code Interpreter 执行代码 |
-| **调用 Validator** | 通过 A2A 协议调用 Validator Agent 进行代码审查和结果验证 |
-| **执行回滚** | 当用户点击回滚链接时执行回滚操作 |
+| **获取 Phase 1 上下文** | 从 Memory 获取完整 finding 数据，自主提取所需信息 |
+| **生成修复代码** | 基于 ASR 模板或历史经验生成代码 |
+| **保存回滚数据** | 执行前保存 pre_state + 预生成回滚代码 |
+| **执行修复** | 通过 Code Interpreter 执行，传递 `target_region` |
+| **错误重试** | ReAct 模式：分析错误 → 修复代码 → 重试（最多 2 次） |
+| **调用 Validator** | 通过 A2A 协议调用 Validator Agent |
 
 ### 6.2 System Prompt
 
@@ -625,12 +624,11 @@ def get_analysis_context(task_id: str) -> dict:
         task_id: 任务 ID
 
     Returns:
-        Phase 1 分析结果，包含修复描述和 ASR 匹配信息
+        完整上下文，包含 finding、analysis、asr_playbook、top_experience
+        LLM 可从中自主提取所需信息 (Region, Resources, 代码模板等)
     """
-    # 获取最近的对话记录
     turns = memory_session.get_last_k_turns(k=10)
 
-    # 查找 Phase 1 分析结果
     for turn in reversed(turns):
         content = turn.get('content', '')
         if isinstance(content, str) and 'phase1_analysis' in content:
@@ -638,8 +636,11 @@ def get_analysis_context(task_id: str) -> dict:
             if data.get('type') == 'phase1_analysis':
                 return {
                     "success": True,
+                    "finding": data.get('finding'),        # 完整 ASFF 数据
                     "analysis": data.get('analysis'),
-                    "remediation_description": data.get('remediation_description')
+                    "remediation_description": data.get('remediation_description'),
+                    "asr_playbook": data.get('asr_playbook'),    # ASR 代码模板
+                    "top_experience": data.get('top_experience') # 历史经验
                 }
 
     return {"success": False, "error": "Phase 1 analysis not found"}
@@ -684,26 +685,30 @@ def save_rollback_data(
 
 
 @tool
-def execute_code(code: str, timeout_seconds: int = 300) -> dict:
+def execute_code(code: str, timeout_seconds: int = 300, target_region: str = None) -> dict:
     """通过 Code Interpreter 执行 Python 代码。
 
     Args:
         code: 要执行的 Python 代码
         timeout_seconds: 执行超时时间
+        target_region: 目标 AWS Region (从 finding.Region 提取)
 
     Returns:
         执行结果，包含输出和错误信息
     """
-    # 使用 AgentCore Code Interpreter
     from bedrock_agentcore.tools import CodeInterpreterClient
 
-    client = CodeInterpreterClient()
+    # 使用 target_region 或默认值
+    region = target_region or os.environ.get("AWS_REGION", "us-east-1")
 
+    client = CodeInterpreterClient()
     result = client.execute(
         code=code,
         timeout=timeout_seconds,
         environment={
-            "AWS_REGION": os.environ.get("AWS_REGION", "us-east-1")
+            "AWS_REGION": region,
+            "AWS_DEFAULT_REGION": region,
+            "TARGET_REGION": region  # 代码中使用 os.environ.get('TARGET_REGION')
         }
     )
 
@@ -711,8 +716,7 @@ def execute_code(code: str, timeout_seconds: int = 300) -> dict:
         "status": "success" if result.exit_code == 0 else "failed",
         "exit_code": result.exit_code,
         "stdout": result.stdout,
-        "stderr": result.stderr,
-        "execution_time_ms": result.execution_time_ms
+        "stderr": result.stderr
     }
 
 
@@ -1541,3 +1545,5 @@ agent = Agent(
 | 2.1 | 2025-01-29 | - | 新增知识库设计章节 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段架构；集成 Strands SDK 和 AgentCore Memory；Analyzer 只生成描述，Remediator 生成代码；使用 @tool 装饰器；新增 Code Interpreter 集成 |
 | 4.0 | 2025-01-31 | - | A2A 协议重构：Remediator 通过 A2A 调用 Validator；新增 invoke_validator_agent 工具；Validator 增强职责：代码安全审查 (review_code_security)、触发结果邮件 (trigger_result_email)；结果邮件含 Rollback 链接，回滚邮件不含 |
+| 5.0 | 2025-01-31 | - | Memory 数据共享重构：所有 Agent 间数据通过 Memory STM 共享；A2A 调用只传元数据；回滚数据从 DynamoDB 迁移到 Memory；回滚代码预生成+dry-run 验证；新增 pre_execution_check 快速安全检查；新增 save_remediation_result/get_remediation_result 工具 |
+| 6.0 | 2025-02-01 | - | 自主 Agent 设计：save_analysis_result 保存完整 finding 数据；get_analysis_context 返回完整上下文；LLM 自主提取所需信息；LTM 搜索添加相似度阈值 (0.35)；execute_code 支持 target_region；新增 ReAct 重试机制 |

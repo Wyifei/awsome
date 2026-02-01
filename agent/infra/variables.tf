@@ -184,6 +184,12 @@ variable "sender_email" {
   default     = ""
 }
 
+variable "result_email" {
+  description = "Email address to receive result notifications (defaults to approval_email if not set)"
+  type        = string
+  default     = ""
+}
+
 variable "approval_expiry_hours" {
   description = "Hours until approval token expires"
   type        = number

@@ -26,6 +26,13 @@ services:
       - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
       # LLM
       - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      # Agent Type
+      - AGENT_TYPE=remediator
+      # A2A: Validator Agent Configuration
+      # NOTE: In local dev, we use direct HTTP (VALIDATOR_RUNTIME_URL)
+      # In AgentCore Runtime, we use InvokeAgentRuntime API (VALIDATOR_RUNTIME_ARN)
+      # The a2a_tools.py automatically detects which mode to use
+      - VALIDATOR_RUNTIME_URL=http://validator:8080
       # Logging
       - LOG_LEVEL=INFO
       - STAGE=dev
@@ -39,6 +46,9 @@ services:
     volumes:
       # Mount AWS credentials for local development (optional)
       - ~/.aws:/root/.aws:ro
+    depends_on:
+      validator:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/ping"]
       interval: 30s
@@ -54,15 +64,23 @@ services:
     ports:
       - "8080:8080"
     environment:
+      # AWS Configuration
       - AWS_REGION=${AWS_REGION:-ap-northeast-1}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # DynamoDB Tables
       - TASKS_TABLE=${TASKS_TABLE:-shara-dev-tasks}
       - TOKENS_TABLE=${TOKENS_TABLE:-shara-dev-approval-tokens}
+      # S3 Buckets
       - ASR_PLAYBOOKS_BUCKET=${ASR_PLAYBOOKS_BUCKET:-shara-dev-asr-playbooks-870414140965}
+      # AgentCore Memory
       - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
+      # LLM
       - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      # Agent Type
+      - AGENT_TYPE=analyzer
+      # Logging
       - LOG_LEVEL=INFO
       - STAGE=dev
       # OpenTelemetry Observability (disabled for local dev, enable in AWS deployment)
@@ -89,15 +107,27 @@ services:
     ports:
       - "8082:8080"
     environment:
+      # AWS Configuration
       - AWS_REGION=${AWS_REGION:-ap-northeast-1}
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
       - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # DynamoDB Tables
       - TASKS_TABLE=${TASKS_TABLE:-shara-dev-tasks}
       - TOKENS_TABLE=${TOKENS_TABLE:-shara-dev-approval-tokens}
+      # S3 Buckets
       - ASR_PLAYBOOKS_BUCKET=${ASR_PLAYBOOKS_BUCKET:-shara-dev-asr-playbooks-870414140965}
+      # AgentCore Memory
       - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
+      # LLM
       - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
+      # Agent Type
+      - AGENT_TYPE=validator
+      # Result Email Lambda (本地和 AWS 都通过 Lambda 发邮件)
+      - APPROVAL_HANDLER_ARN=${APPROVAL_HANDLER_ARN:-arn:aws:lambda:ap-northeast-1:870414140965:function:shara-dev-approval-handler}
+      # API Gateway URL (for rollback links in result emails)
+      - API_GATEWAY_URL=${API_GATEWAY_URL:-https://z3kkl2opj0.execute-api.ap-northeast-1.amazonaws.com/dev}
+      # Logging
       - LOG_LEVEL=INFO
       - STAGE=dev
       # OpenTelemetry Observability (disabled for local dev, enable in AWS deployment)

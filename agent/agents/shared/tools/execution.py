@@ -260,7 +260,8 @@ def _rollback_security_group(resource_arn: str, pre_state: dict, region: str) ->
 @tool
 def execute_code(
     code: str,
-    timeout_seconds: int = 300
+    timeout_seconds: int = 300,
+    target_region: str = None
 ) -> dict:
     """通过 Code Interpreter 在沙盒环境中执行 Python 代码。
 
@@ -270,6 +271,9 @@ def execute_code(
     Args:
         code: 要执行的 Python 代码
         timeout_seconds: 执行超时时间（秒），默认 300 秒
+        target_region: 目标 AWS Region (如 ap-northeast-1)，用于修复代码执行。
+                       如果不指定，则使用默认 region。
+                       建议从 get_analysis_context 获取 finding_region 并传入此参数。
 
     Returns:
         dict: 执行结果
@@ -286,8 +290,15 @@ def execute_code(
 
     config = get_config()
 
-    logger.info(f"Executing code via Code Interpreter (timeout: {timeout_seconds}s)")
-    logger.info(f"Code to execute:\n{code[:500]}...")  # 打印前 500 字符
+    # 使用 target_region 如果提供，否则使用 config.region
+    execution_region = target_region or config.region
+
+    logger.info(f"="*50)
+    logger.info(f"[EXECUTE_CODE CALLED] timeout={timeout_seconds}s")
+    logger.info(f"[EXECUTE_CODE] Target region: {execution_region} (from {'parameter' if target_region else 'config'})")
+    logger.info(f"[EXECUTE_CODE] Code length: {len(code)} chars")
+    logger.info(f"[EXECUTE_CODE] First 300 chars:\n{code[:300]}...")
+    logger.info(f"="*50)
 
     try:
         # 尝试使用 AgentCore Code Interpreter
@@ -301,8 +312,9 @@ def execute_code(
             code=code,
             timeout=timeout_seconds,
             environment={
-                "AWS_REGION": config.region,
-                "AWS_DEFAULT_REGION": config.region
+                "AWS_REGION": execution_region,
+                "AWS_DEFAULT_REGION": execution_region,
+                "TARGET_REGION": execution_region  # 额外提供 TARGET_REGION 方便代码使用
             }
         )
 
@@ -323,7 +335,7 @@ def execute_code(
         logger.warning("AgentCore Code Interpreter SDK not available, using direct boto3 execution")
         # Fallback: 使用 boto3 直接执行
         # 这是临时方案，生产环境应使用 Code Interpreter
-        return _execute_with_boto3(code, timeout_seconds, config.region)
+        return _execute_with_boto3(code, timeout_seconds, execution_region)
 
     except Exception as e:
         logger.exception(f"Code execution failed: {e}")

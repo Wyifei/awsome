@@ -148,6 +148,10 @@ resource "aws_lambda_function" "approval_handler" {
       REMEDIATOR_RUNTIME_ARN   = var.remediator_runtime_arn
       STAGE                    = var.stage
       LOG_LEVEL                = var.stage == "prod" ? "INFO" : "DEBUG"
+      # Email Configuration
+      SENDER_EMAIL             = var.sender_email
+      RESULT_EMAIL             = coalesce(var.result_email, var.approval_email)
+      API_GATEWAY_URL          = "https://${aws_api_gateway_rest_api.main.id}.execute-api.${var.aws_region}.amazonaws.com/${var.stage}/"
     }
   }
 

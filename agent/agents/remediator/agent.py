@@ -10,10 +10,17 @@ from strands import Agent
 from strands.models import BedrockModel
 
 from shared.config import get_config, REMEDIATOR_MODEL_CONFIG
-from shared.tools.memory_tools import get_analysis_context, set_memory_session
-from shared.tools.execution import save_rollback_data, get_rollback_data, execute_code, save_task_event
+from shared.tools.memory_tools import (
+    get_analysis_context,
+    set_memory_session,
+    save_rollback_to_memory,
+    get_rollback_from_memory,
+    save_remediation_result,
+)
+from shared.tools.execution import execute_code, save_task_event
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.a2a_tools import invoke_validator_agent
+from shared.tools.code_check import pre_execution_check
 
 logger = logging.getLogger(__name__)
 
@@ -39,32 +46,83 @@ REMEDIATOR_SYSTEM_PROMPT = """# 角色
 prerequisites 和 post_actions 是给人工处理的，不在你的职责范围内。
 
 # 执行流程
-严格按以下步骤执行：
+严格按以下步骤执行，**不要跳过任何步骤**：
 
-1. **获取第一阶段上下文**: 使用 get_analysis_context 工具获取第一阶段的分析结果
-2. **识别 agent_actions**: 从分析结果的 remediation.agent_actions 中提取需要执行的步骤
-3. **获取当前状态**: 使用 get_resource_config 工具获取当前资源配置
-   - resource_arn: 直接使用任务中的完整资源 ARN
-   - resource_type: 直接使用任务中的资源类型 (如 AwsS3Bucket, AwsSnsTopic)
-4. **保存回滚数据**: 在任何更改前使用 save_rollback_data 工具保存当前状态
-5. **生成代码**: 仅针对 agent_actions 中的步骤创建 Python/Boto3 修复代码
-6. **执行代码**: 使用 execute_code 工具执行生成的代码
-7. **调用 Validator**: 使用 invoke_validator_agent 工具通过 A2A 协议调用 Validator Agent
-   - 传递: task_id, resource_arn, resource_type, control_id, finding_id
-   - 传递: 生成的代码 (generated_code), 执行结果 (execution_result)
-   - 传递: memory_session_id, actor_id (用于 Memory 共享)
-   - 传递: is_rollback=False (正常修复)
-8. **报告结果**: 返回执行状态和 Validator 验证结果
+## Phase A: 准备
+1. **获取分析上下文**: 使用 get_analysis_context 工具
+   - 返回值包含完整的 Finding 数据、分析结果、ASR Playbook、历史经验等
+   - 你需要从中提取修复所需的信息（Region、资源 ARN、配置等）
+2. **获取当前状态**: 使用 get_resource_config 工具获取 pre_state
+
+## Phase B: 代码生成 (两个代码都必须生成)
+3. **生成修复代码**:
+   - **优先使用 ASR 代码模板**: 如果 get_analysis_context 返回了 asr_playbook.code_template，
+     **必须基于该模板生成代码**，只需根据实际资源信息调整参数
+   - 如果没有 ASR 模板，则根据 agent_actions 创建 Python/Boto3 代码
+4. **[必须] 生成回滚代码**: 根据 pre_state 生成能恢复原始状态的代码
+   - **不执行回滚代码**，只生成备用
+
+## Phase C: 保存回滚数据 (执行前必须完成)
+5. **[必须] 保存回滚数据**: 使用 save_rollback_to_memory 工具
+   - task_id, resource_arn, resource_type, pre_state, rollback_code
+   - **如果跳过此步骤，用户无法回滚！**
+
+## Phase D: 执行修复 (含错误重试机制)
+6. **验证修复代码**: 使用 pre_execution_check 工具
+7. **执行修复代码**: 使用 execute_code 工具
+   - 从 Finding 中提取 Region，传递给 `target_region` 参数
+   - 沙盒环境会设置 AWS_REGION 和 TARGET_REGION 环境变量
+8. **[重要] 错误分析与重试** (最多重试 2 次):
+   如果 execute_code 返回 exit_code != 0:
+   a. **分析错误原因**: 仔细阅读 stderr 中的错误信息
+   b. **诊断问题**: 常见问题包括:
+      - 变量作用域问题 (如 `name 'xxx' is not defined`)
+      - 导入缺失
+      - API 参数错误
+      - 权限不足
+   c. **修复代码**: 根据错误原因修改代码
+   d. **重新执行**: 再次调用 execute_code
+
+   **重试示例**:
+   ```
+   第一次执行失败: "name 'region' is not defined"
+   → 分析: 变量 region 在函数内部使用但定义在外部，作用域问题
+   → 修复: 将 region 定义移到函数内部，或使用 global 声明
+   → 重新执行修复后的代码
+   ```
+
+## Phase E: 保存和通知 (无论成功失败都执行)
+9. **保存修复结果**: 使用 save_remediation_result 工具
+10. **调用 Validator**: 使用 invoke_validator_agent 工具
 
 # 代码生成指南
+
+## ⭐ ASR 代码模板优先
+如果 get_analysis_context 返回的数据中包含 `asr_playbook.code_template`：
+- **这是经过 AWS 验证的标准修复代码**
+- **必须以此模板为基础**，只替换资源标识符（如 bucket name、ARN 等）
+- 不要从头重写，只做必要的参数调整
+
+## 📖 参考历史经验
+如果 get_analysis_context 返回的数据中包含 `top_experience`：
+- 这是之前成功修复类似问题的经验
+- 参考其中的 `situation` 了解类似场景
+- 参考其中的 `key_insights` 获取修复经验教训
+- 避免重复之前遇到的问题
+
+## 通用指南
 - 所有 AWS 操作使用 boto3
 - 包含适当的 try/except 错误处理
 - 添加注释说明每个步骤
 - 尽可能使代码具有幂等性
-- 使用环境变量配置区域 (AWS_REGION)
 - 代码最后必须打印 JSON 格式的结果
 - 记录重要操作以便调试
 - **重要**: 生成的代码会被发送给 Validator 进行安全审查
+
+## 🔧 代码健壮性要求 (避免执行失败)
+- **变量定义在函数内部**: 所有变量（包括 region、资源名称等）都应在函数内部定义，避免作用域问题
+- **导入语句在顶部**: 确保所有需要的模块都已导入
+- **避免全局变量**: 沙盒环境可能有变量作用域限制
 
 # 代码模板
 ```python
@@ -72,11 +130,11 @@ import boto3
 import os
 import json
 
-# 配置
-region = os.environ.get('AWS_REGION', 'ap-northeast-1')
-
 def remediate():
     \"\"\"执行修复\"\"\"
+    # Region 从环境变量获取 (execute_code 的 target_region 参数会设置这些变量)
+    region = os.environ.get('AWS_REGION', 'ap-northeast-1')
+
     # 初始化客户端
     client = boto3.client('service_name', region_name=region)
 
@@ -103,6 +161,13 @@ result = remediate()
 print(json.dumps(result, default=str))
 ```
 
+**环境变量说明**:
+- `execute_code(code, target_region="ap-northeast-1")` 会在沙盒中设置:
+  - `AWS_REGION` = target_region
+  - `AWS_DEFAULT_REGION` = target_region
+  - `TARGET_REGION` = target_region
+- 代码中使用 `os.environ.get('AWS_REGION')` 获取
+
 # 输出格式
 返回以下结构的 JSON 对象：
 
@@ -120,6 +185,11 @@ print(json.dumps(result, default=str))
   "generated_code": {
     "language": "python",
     "code": "import boto3..."
+  },
+  "pre_execution_check": {
+    "safe_to_execute": true,
+    "blocked_reasons": [],
+    "warnings": []
   },
   "execution": {
     "status": "success",
@@ -148,6 +218,8 @@ print(json.dumps(result, default=str))
 
 # 重要安全规则
 - 绝不在保存回滚数据之前执行 execute_code
+- **绝不在 pre_execution_check 通过之前执行 execute_code**
+- 如果 pre_execution_check 返回 safe_to_execute=False，必须停止并重新生成代码
 - 遇到任何错误立即停止 - 不要继续进行部分更改
 - 记录所有操作以便审计
 - 如果第一阶段上下文表明操作具有破坏性，需要额外确认
@@ -179,7 +251,11 @@ def create_remediator_agent(
     region = region or config.region
 
     # 使用与 Analyzer 相同的 actor_id
-    actor_id = actor_id or f"task-{task_id}"
+    # actor_id 应该是 AWS 账户 ID，以便跨 session 共享修复经验
+    if not actor_id:
+        logger.warning("actor_id not provided, using task_id as fallback. "
+                      "For better LTM retrieval, pass AWS account ID as actor_id.")
+        actor_id = f"task-{task_id}"
 
     # 复用 Phase 1 创建的 Memory Session
     session_manager = None
@@ -229,8 +305,10 @@ def create_remediator_agent(
         system_prompt=REMEDIATOR_SYSTEM_PROMPT,
         tools=[
             get_analysis_context,
-            save_rollback_data,
-            get_rollback_data,
+            save_rollback_to_memory,  # 保存回滚数据到 Memory
+            get_rollback_from_memory,  # 从 Memory 获取回滚数据
+            save_remediation_result,  # 保存修复代码和执行结果到 Memory (供 Validator 获取)
+            pre_execution_check,  # 执行前快速安全检查
             execute_code,  # Code Interpreter 执行
             save_task_event,
             get_resource_config,
@@ -290,25 +368,59 @@ Execute ROLLBACK for task {task_id}:
 This is a ROLLBACK operation. The user has requested to revert the remediation.
 
 **Instructions:**
-1. Get rollback data using get_rollback_data tool
-2. Generate Python/boto3 rollback code to restore the resource to its pre-remediation state
-3. Execute the rollback code using execute_code tool
-4. Call Validator Agent using invoke_validator_agent tool with:
+
+**PHASE A: Get Rollback Data**
+1. Get rollback data using get_rollback_from_memory tool with:
+   - task_id: {task_id}
+   - resource_arn: {resource_arn}
+   - This should return pre_state and pre-generated rollback_code
+
+2. **CHECK THE RESULT**: If get_rollback_from_memory returns success=False:
+   - Call invoke_validator_agent with is_rollback=true and rollback_failed=true
+   - Return an error response indicating rollback data was not found
+   - Do NOT proceed with the remaining steps
+
+**PHASE B: Execute Rollback (if data found)**
+3. If rollback data was found (success=True):
+   - 获取 finding 的 Region (从 get_analysis_context 或回滚数据中)
+   - **直接执行预生成的回滚代码** - 使用 execute_code 工具执行 rollback_code
+   - 传递 target_region 参数给 execute_code
+   - 回滚代码在修复时已经生成并验证过，直接执行即可
+   - **不需要重新生成代码**
+   - Record the execution result (success or failure)
+
+**PHASE C: Save and Notify (ALWAYS execute, even if rollback execution failed)**
+4. Save rollback execution result to Memory using save_remediation_result tool:
+   - task_id: {task_id}
+   - resource_arn: {resource_arn}
+   - generated_code: the rollback_code from step 1
+   - execution_result: the result from execute_code (include error info if failed)
+   - **IMPORTANT**: Save even if execution failed
+
+5. **[ALWAYS]** Call Validator Agent using invoke_validator_agent tool with:
    - task_id: {task_id}
    - resource_arn: {resource_arn}
    - resource_type: {resource_type}
    - control_id: {control_id}
    - finding_id: {finding_id}
-   - generated_code: the rollback code you generated
-   - execution_result: the result from execute_code
    - memory_session_id: {memory_session_id}
    - actor_id: {actor_id}
    - is_rollback: true (IMPORTANT: this ensures the result email does NOT have a rollback link)
+   - **CRITICAL**: ALWAYS call Validator regardless of execution result
+   - If execution failed, Validator will send failure notification email to user
 
-IMPORTANT:
-- This is a rollback, so use get_rollback_data to get the pre-remediation state
-- The rollback email should NOT contain a rollback link
-- If rollback fails, Validator will alert the user to handle manually
+**CHECKLIST before finishing:**
+- [ ] Did you get rollback data from Memory? (Step 1)
+- [ ] Did you execute rollback code? (Step 3)
+- [ ] Did you save execution result to Memory? (Step 4 - even if failed)
+- [ ] Did you call invoke_validator_agent? (Step 5 - ALWAYS, even if failed)
+
+**IMPORTANT**:
+- Use get_rollback_from_memory (NOT get_rollback_data) to get the saved rollback data
+- The rollback_code was pre-generated during remediation - execute it directly
+- Do NOT generate new rollback code - use the saved one
+- **Even if rollback execution fails, you MUST still call Validator**
+- The user needs to be notified of the result via email
 
 Return a JSON summary with the rollback execution result and validator response.
 """
@@ -321,38 +433,90 @@ Execute remediation for task {task_id}:
 **Control ID:** {control_id}
 **Finding ID:** {finding_id}
 
+**CRITICAL: You MUST complete ALL steps in order. Do NOT skip any step.**
+
 **Instructions:**
-1. Get Phase 1 analysis context from Memory using get_analysis_context tool
-2. Get current resource state using get_resource_config tool with resource_arn and resource_type
-3. Save rollback data using save_rollback_data tool (CRITICAL - do this before any changes)
-4. Generate Python/boto3 remediation code based on the Phase 1 analysis
-5. Execute the generated code using execute_code tool
-6. Call Validator Agent using invoke_validator_agent tool with:
+
+**PHASE A: Preparation**
+1. Get Phase 1 analysis context using get_analysis_context tool
+   - 返回值包含: finding (完整 ASFF 数据), analysis, remediation_description, asr_playbook, top_experience
+   - 从 finding 中提取 Region、资源 ARN 等修复所需信息
+2. Get current resource state (pre_state) using get_resource_config tool
+   - resource_arn: {resource_arn}
+   - resource_type: {resource_type}
+
+**PHASE B: Code Generation (BOTH codes required)**
+3. Generate Python/boto3 REMEDIATION code based on the Phase 1 analysis
+4. Generate Python/boto3 ROLLBACK code based on pre_state
+   - Rollback code should restore the resource to the state from step 2
+   - **Do NOT execute rollback code** - only generate it
+
+**PHASE C: Save Rollback Data (MANDATORY - do this BEFORE executing)**
+5. **[MANDATORY]** Save rollback data using save_rollback_to_memory tool:
+   - task_id: {task_id}
+   - resource_arn: {resource_arn}
+   - resource_type: {resource_type}
+   - pre_state: the state from step 2
+   - rollback_code: the code from step 4
+   - **If you skip this step, user CANNOT rollback!**
+
+**PHASE D: Execute Remediation (with retry on failure)**
+6. Validate remediation code using pre_execution_check tool
+   - If safe_to_execute=False, regenerate code and repeat step 6
+7. Execute remediation code using execute_code tool:
+   - 从 finding.Region 提取 region，传递给 target_region 参数
+   - 沙盒环境会自动设置 AWS_REGION 环境变量
+8. **[IMPORTANT] If execution fails (exit_code != 0), RETRY up to 2 times:**
+   a. **Analyze the error**: Read stderr carefully to understand the root cause
+      - Common errors: variable scope issues, import errors, API errors
+      - Example: "name 'region' is not defined" → variable defined outside function
+   b. **Fix the code**: Modify the code to address the specific error
+      - Move variable definitions inside the function
+      - Add missing imports
+      - Fix API parameter errors
+   c. **Re-execute**: Call execute_code again with the fixed code
+   d. **Repeat if needed**: If still failing, analyze and fix again (max 2 retries)
+
+   **Retry Example:**
+   ```
+   Attempt 1: Failed - "name 'region' is not defined"
+   → Fix: Move `region = os.environ.get(...)` inside the function
+   Attempt 2: Execute fixed code
+   ```
+
+**PHASE E: Save and Notify (ALWAYS execute after all retries)**
+9. Save remediation result using save_remediation_result tool:
+   - task_id: {task_id}
+   - resource_arn: {resource_arn}
+   - generated_code: the FINAL remediation code (after any fixes)
+   - execution_result: the result from last execution attempt
+   - **IMPORTANT**: Save even if all retries failed
+
+10. **[ALWAYS]** Call Validator using invoke_validator_agent tool:
    - task_id: {task_id}
    - resource_arn: {resource_arn}
    - resource_type: {resource_type}
    - control_id: {control_id}
    - finding_id: {finding_id}
-   - generated_code: the remediation code you generated
-   - execution_result: the result from execute_code
    - memory_session_id: {memory_session_id}
    - actor_id: {actor_id}
    - is_rollback: false
+   - **CRITICAL**: ALWAYS call Validator regardless of execution result
+   - If execution failed, Validator will send failure notification email to user
 
-IMPORTANT:
-- Save rollback data BEFORE generating or executing the remediation code
-- The code should be self-contained and executable
-- Include error handling in the generated code
-- The code must print JSON result at the end
-- ALWAYS call invoke_validator_agent after execute_code, whether execution succeeds or fails
-- Validator will: review code security, verify results, update Security Hub, trigger result email
+**CHECKLIST before finishing:**
+- [ ] Did you call save_rollback_to_memory? (Step 5 - MANDATORY)
+- [ ] Did you pass `target_region` to execute_code? (Step 7)
+- [ ] Did you execute code and retry on failure? (Steps 7-8, up to 2 retries)
+- [ ] Did you call save_remediation_result? (Step 9 - even if all retries failed)
+- [ ] Did you call invoke_validator_agent? (Step 10 - ALWAYS, even if failed)
 
-Return a JSON summary with:
-- phase1_context_retrieved: whether you got the analysis context
-- rollback_data_saved: whether rollback data was saved
-- generated_code: the code you generated
-- execution: the result from execute_code tool
-- validator_response: the response from Validator Agent
+**IMPORTANT**:
+- 从 get_analysis_context 返回的 finding 中提取所需信息（Region、资源 ARN 等）
+- If execution fails, analyze the error and retry with fixed code (up to 2 times)
+- Even if all retries fail, you MUST still call Validator for user notification
+
+Return a JSON summary with rollback_data_saved, execution_result, and validator_response.
 """
 
     logger.info(f"Running Remediator Agent for task {task_id}, is_rollback={is_rollback}")

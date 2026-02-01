@@ -11,6 +11,10 @@ from shared.tools.memory_tools import (
     get_analysis_context,
     save_experience_to_ltm,
     set_memory_session,
+    save_rollback_to_memory,
+    get_rollback_from_memory,
+    save_remediation_result,
+    get_remediation_result,
 )
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.security_hub import (
@@ -31,6 +35,9 @@ from shared.tools.validator_tools import (
     review_code_security,
     trigger_result_email,
 )
+from shared.tools.code_check import (
+    pre_execution_check,
+)
 
 __all__ = [
     # ASR Playbook
@@ -41,6 +48,10 @@ __all__ = [
     'get_analysis_context',
     'save_experience_to_ltm',
     'set_memory_session',
+    'save_rollback_to_memory',
+    'get_rollback_from_memory',
+    'save_remediation_result',
+    'get_remediation_result',
     # AWS Resources
     'get_resource_config',
     # Security Hub
@@ -57,4 +68,6 @@ __all__ = [
     # Validator Tools
     'review_code_security',
     'trigger_result_email',
+    # Pre-execution Check (Remediator)
+    'pre_execution_check',
 ]

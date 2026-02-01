@@ -61,10 +61,12 @@ usage() {
     echo "                - cli: Use agentcore CLI (will rebuild image locally)"
     echo ""
     echo "The following are auto-detected from Terraform outputs or terraform.tfvars:"
-    echo "  - TASKS_TABLE           DynamoDB tasks table"
-    echo "  - TOKENS_TABLE          DynamoDB approval tokens table"
-    echo "  - ASR_PLAYBOOKS_BUCKET  S3 bucket for ASR playbooks"
-    echo "  - AGENTCORE_MEMORY_ID   AgentCore Memory ID for session management"
+    echo "  - TASKS_TABLE              DynamoDB tasks table"
+    echo "  - TOKENS_TABLE             DynamoDB approval tokens table"
+    echo "  - ASR_PLAYBOOKS_BUCKET     S3 bucket for ASR playbooks"
+    echo "  - AGENTCORE_MEMORY_ID      AgentCore Memory ID for session management"
+    echo "  - APPROVAL_HANDLER_ARN     Lambda ARN for result emails (validator only)"
+    echo "  - API_GATEWAY_URL          API Gateway URL for rollback links (validator only)"
     echo ""
     echo "Examples:"
     echo "  $0 analyzer latest              # Deploy analyzer with existing 'latest' image"
@@ -72,6 +74,13 @@ usage() {
     echo "  STAGE=prod $0 all               # Deploy to prod stage"
     echo "  DEPLOY_MODE=cli $0 analyzer     # Deploy with CLI (rebuilds image)"
     echo "  LOG_LEVEL=DEBUG $0 analyzer     # Deploy with DEBUG logging"
+    echo ""
+    echo "Deployment order (important for A2A):"
+    echo "  1. analyzer   - Can be deployed independently"
+    echo "  2. validator  - Must be deployed before remediator (provides URL for remediator)"
+    echo "  3. remediator - Needs VALIDATOR_RUNTIME_URL to call validator"
+    echo ""
+    echo "  When using 'all', agents are deployed in order: analyzer -> validator -> remediator"
 }
 
 # Get AWS account ID
@@ -115,7 +124,7 @@ get_runtime_role_arn() {
 
 # Get ASR Playbooks S3 bucket
 get_asr_playbooks_bucket() {
-    local bucket=$(get_terraform_output "asr_playbooks_bucket_id")
+    local bucket=$(get_terraform_output "asr_playbooks_bucket_name")
 
     if [[ -z "$bucket" ]]; then
         local account_id=$(get_account_id)
@@ -137,6 +146,76 @@ get_memory_id() {
     echo "$memory_id"
 }
 
+# Get Approval Handler Lambda ARN (for validator result emails)
+get_approval_handler_arn() {
+    local arn=$(get_terraform_output "approval_handler_function_arn")
+    echo "$arn"
+}
+
+# Get API Gateway URL (for rollback links in result emails)
+get_api_gateway_url() {
+    local url=$(get_terraform_output "api_gateway_url")
+    echo "$url"
+}
+
+# Get Validator Runtime ARN from AgentCore (for Remediator A2A calls)
+# IMPORTANT: In AgentCore Runtime, agents must use InvokeAgentRuntime API, not direct HTTP
+get_validator_runtime_arn() {
+    local runtime_name="${PROJECT_NAME}_${STAGE}_validator"
+
+    # Use Python to query AgentCore for the validator ARN
+    # Note: API returns 'agentRuntimeName' and 'agentRuntimeArn' (not 'name' and 'arn')
+    python3 << EOF 2>/dev/null
+import sys
+try:
+    from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
+
+    client = BedrockAgentCoreClient("${AWS_REGION}")
+    agents = client.list_agents()
+
+    for agent in agents:
+        if agent.get('agentRuntimeName') == "${runtime_name}":
+            arn = agent.get('agentRuntimeArn', '')
+            if arn:
+                print(arn)
+                sys.exit(0)
+    sys.exit(1)
+except Exception as e:
+    sys.exit(1)
+EOF
+}
+
+# Get Validator Runtime URL from AgentCore (for local development/testing only)
+# NOTE: Direct HTTP calls only work in local development. In AgentCore Runtime, use ARN.
+get_validator_runtime_url() {
+    local runtime_name="${PROJECT_NAME}_${STAGE}_validator"
+
+    # Use Python to query AgentCore for the validator endpoint
+    # Note: API returns 'agentRuntimeName' and 'agentRuntimeId' (not 'name' and 'id')
+    python3 << EOF 2>/dev/null
+import sys
+try:
+    from bedrock_agentcore_starter_toolkit.services.runtime import BedrockAgentCoreClient
+
+    client = BedrockAgentCoreClient("${AWS_REGION}")
+    agents = client.list_agents()
+
+    for agent in agents:
+        if agent.get('agentRuntimeName') == "${runtime_name}":
+            agent_id = agent.get('agentRuntimeId')
+            # Get endpoint
+            details = client.get_agent(agent_id)
+            endpoint = details.get('endpoint', {})
+            url = endpoint.get('url', '')
+            if url:
+                print(url)
+                sys.exit(0)
+    sys.exit(1)
+except Exception as e:
+    sys.exit(1)
+EOF
+}
+
 # Deploy agent using Python API (uses existing ECR image, no rebuild)
 deploy_agent_api() {
     local agent_type="$1"
@@ -144,6 +223,8 @@ deploy_agent_api() {
     local runtime_role_arn="$3"
     local asr_bucket="$4"
     local memory_id="$5"
+    local approval_handler_arn="$6"
+    local api_gateway_url="$7"
     local runtime_name="${PROJECT_NAME}_${STAGE}_${agent_type}"
     local full_image_uri="${ecr_uri}:${IMAGE_TAG}"
 
@@ -164,10 +245,27 @@ deploy_agent_api() {
     if [[ -n "$memory_id" ]]; then
         env_vars_json+=",\"AGENTCORE_MEMORY_ID\": \"${memory_id}\""
     fi
+    # Validator-specific: Lambda ARN for result emails (uses approval-handler Lambda)
+    if [[ "$agent_type" == "validator" && -n "$approval_handler_arn" ]]; then
+        env_vars_json+=",\"APPROVAL_HANDLER_ARN\": \"${approval_handler_arn}\""
+        if [[ -n "$api_gateway_url" ]]; then
+            env_vars_json+=",\"API_GATEWAY_URL\": \"${api_gateway_url}\""
+        fi
+    fi
+    # Remediator-specific: Validator Runtime ARN for A2A calls (AgentCore Runtime mode)
+    # IMPORTANT: In AgentCore Runtime, agents must use InvokeAgentRuntime API, not direct HTTP
+    if [[ "$agent_type" == "remediator" ]]; then
+        local validator_arn=$(get_validator_runtime_arn)
+        if [[ -n "$validator_arn" ]]; then
+            env_vars_json+=",\"VALIDATOR_RUNTIME_ARN\": \"${validator_arn}\""
+            log_info "Validator Runtime ARN: ${validator_arn}"
+        else
+            log_warn "Validator Runtime ARN not found - deploy validator first, then redeploy remediator"
+        fi
+    fi
     # OpenTelemetry configuration for observability
-    env_vars_json+=",\"OTEL_PYTHON_DISTRO\": \"aws_distro\""
-    env_vars_json+=",\"OTEL_PYTHON_CONFIGURATOR\": \"aws_configurator\""
-    env_vars_json+=",\"OTEL_EXPORTER_OTLP_PROTOCOL\": \"http/protobuf\""
+    # Note: AgentCore Runtime auto-configures OTEL_PYTHON_DISTRO, OTEL_PYTHON_CONFIGURATOR, OTEL_EXPORTER_OTLP_PROTOCOL
+    # Only OTEL_RESOURCE_ATTRIBUTES is needed to identify agents in CloudWatch
     env_vars_json+=",\"OTEL_RESOURCE_ATTRIBUTES\": \"service.name=${PROJECT_NAME}-${agent_type}\""
     env_vars_json+="}"
 
@@ -231,6 +329,8 @@ deploy_agent_cli() {
     local runtime_role_arn="$3"
     local asr_bucket="$4"
     local memory_id="$5"
+    local approval_handler_arn="$6"
+    local api_gateway_url="$7"
     # AgentCore requires names with underscores only (no hyphens)
     local runtime_name="${PROJECT_NAME}_${STAGE}_${agent_type}"
 
@@ -269,10 +369,29 @@ deploy_agent_cli() {
         env_args+=(--env "AGENTCORE_MEMORY_ID=${memory_id}")
     fi
 
+    # Validator-specific: Lambda ARN for result emails (uses approval-handler Lambda)
+    if [[ "$agent_type" == "validator" && -n "$approval_handler_arn" ]]; then
+        env_args+=(--env "APPROVAL_HANDLER_ARN=${approval_handler_arn}")
+        if [[ -n "$api_gateway_url" ]]; then
+            env_args+=(--env "API_GATEWAY_URL=${api_gateway_url}")
+        fi
+    fi
+
+    # Remediator-specific: Validator Runtime ARN for A2A calls (AgentCore Runtime mode)
+    # IMPORTANT: In AgentCore Runtime, agents must use InvokeAgentRuntime API, not direct HTTP
+    if [[ "$agent_type" == "remediator" ]]; then
+        local validator_arn=$(get_validator_runtime_arn)
+        if [[ -n "$validator_arn" ]]; then
+            env_args+=(--env "VALIDATOR_RUNTIME_ARN=${validator_arn}")
+            log_info "Validator Runtime ARN: ${validator_arn}"
+        else
+            log_warn "Validator Runtime ARN not found - deploy validator first, then redeploy remediator"
+        fi
+    fi
+
     # Add OpenTelemetry configuration for observability
-    env_args+=(--env "OTEL_PYTHON_DISTRO=aws_distro")
-    env_args+=(--env "OTEL_PYTHON_CONFIGURATOR=aws_configurator")
-    env_args+=(--env "OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf")
+    # Note: AgentCore Runtime auto-configures OTEL_PYTHON_DISTRO, OTEL_PYTHON_CONFIGURATOR, OTEL_EXPORTER_OTLP_PROTOCOL
+    # Only OTEL_RESOURCE_ATTRIBUTES is needed to identify agents in CloudWatch
     env_args+=(--env "OTEL_RESOURCE_ATTRIBUTES=service.name=${PROJECT_NAME}-${agent_type}")
 
     # Deploy agent with environment variables
@@ -296,15 +415,21 @@ deploy_agent() {
     local runtime_role_arn="$3"
     local asr_bucket="$4"
     local memory_id="$5"
+    local approval_handler_arn="$6"
+    local api_gateway_url="$7"
 
     log_info "ASR Bucket: ${asr_bucket}"
     log_info "Memory ID: ${memory_id:-'(not configured)'}"
+    if [[ "$agent_type" == "validator" ]]; then
+        log_info "Approval Handler ARN: ${approval_handler_arn:-'(not configured)'}"
+        log_info "API Gateway URL: ${api_gateway_url:-'(not configured)'}"
+    fi
     log_info "Deploy Mode: ${DEPLOY_MODE}"
 
     if [[ "$DEPLOY_MODE" == "api" ]]; then
-        deploy_agent_api "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id"
+        deploy_agent_api "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url"
     else
-        deploy_agent_cli "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id"
+        deploy_agent_cli "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url"
     fi
 }
 
@@ -328,9 +453,10 @@ main() {
     fi
 
     # Determine which agents to deploy
+    # Note: Order matters for A2A - validator must be deployed before remediator
     case "$AGENT_TYPE" in
         all)
-            agents_to_deploy=(analyzer remediator validator)
+            agents_to_deploy=(analyzer validator remediator)
             ;;
         analyzer|remediator|validator)
             agents_to_deploy=("$AGENT_TYPE")
@@ -373,6 +499,26 @@ main() {
     else
         log_warn "Memory ID: (not configured - Memory features will be disabled)"
     fi
+
+    # Get validator-specific configuration
+    local approval_handler_arn=$(get_approval_handler_arn)
+    local api_gateway_url=$(get_api_gateway_url)
+    if [[ -n "$approval_handler_arn" ]]; then
+        log_info "Approval Handler ARN: ${approval_handler_arn}"
+    else
+        log_warn "Approval Handler ARN: (not configured - Validator result emails will be disabled)"
+    fi
+    if [[ -n "$api_gateway_url" ]]; then
+        log_info "API Gateway URL: ${api_gateway_url}"
+    fi
+
+    # Get existing validator URL (for remediator A2A)
+    local validator_runtime_url=$(get_validator_runtime_url)
+    if [[ -n "$validator_runtime_url" ]]; then
+        log_info "Validator Runtime URL: ${validator_runtime_url}"
+    else
+        log_warn "Validator Runtime URL: (not found - deploy validator first if deploying remediator)"
+    fi
     echo ""
 
     # Deploy each agent
@@ -387,7 +533,7 @@ main() {
 
         ecr_uri=$(get_ecr_uri "$agent")
 
-        if deploy_agent "$agent" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id"; then
+        if deploy_agent "$agent" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url"; then
             success_agents="${success_agents} ${agent}"
             success_count=$((success_count + 1))
         else
