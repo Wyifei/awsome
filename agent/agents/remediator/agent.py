@@ -17,7 +17,7 @@ from shared.tools.memory_tools import (
     get_rollback_from_memory,
     save_remediation_result,
 )
-from shared.tools.execution import execute_code, save_task_event, set_audit_context
+from shared.tools.execution import execute_code, set_audit_context
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.a2a_tools import invoke_validator_agent
 from shared.tools.code_check import pre_execution_check
@@ -328,7 +328,6 @@ def create_remediator_agent(
             save_remediation_result,  # 保存修复代码和执行结果到 Memory (供 Validator 获取)
             pre_execution_check,  # 执行前快速安全检查
             execute_code,  # Code Interpreter 执行
-            save_task_event,
             get_resource_config,
             invoke_validator_agent,  # A2A 调用 Validator Agent
         ],

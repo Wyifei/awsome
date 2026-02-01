@@ -12,7 +12,6 @@ from strands.models import BedrockModel
 from shared.config import get_config, VALIDATOR_MODEL_CONFIG
 from shared.tools.security_hub import update_security_hub_finding, verify_resource_state
 from shared.tools.memory_tools import save_experience_to_ltm, set_memory_session, get_remediation_result, get_rollback_from_memory
-from shared.tools.execution import save_task_event
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.validator_tools import review_code_security, trigger_result_email
 
@@ -259,7 +258,6 @@ def create_validator_agent(
             update_security_hub_finding,
             # Experience & Memory
             save_experience_to_ltm,
-            save_task_event,
             # Result Email (A2A enhanced)
             trigger_result_email,
         ],

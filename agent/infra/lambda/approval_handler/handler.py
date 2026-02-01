@@ -7,7 +7,6 @@ Remediator 通过 A2A 协议直接调用 Validator Agent 完成验证
 import json
 import logging
 import os
-import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -192,7 +191,6 @@ def handle_approve(task: dict, context) -> dict:
 
     # 更新状态为 approved
     update_task_status(task_id, 'approved')
-    save_task_event(task_id, 'approval_received', {'action': 'approve'})
 
     try:
         # 异步调用 Lambda 执行修复（避免 API Gateway 超时）
@@ -332,7 +330,6 @@ def handle_reject(task: dict, context) -> dict:
 
     # 更新状态为 rejected
     update_task_status(task_id, 'rejected')
-    save_task_event(task_id, 'approval_received', {'action': 'reject'})
 
     return {
         'statusCode': 200,
@@ -425,7 +422,6 @@ def handle_rollback(task: dict, context) -> dict:
 
     # 更新状态为 rollback_requested
     update_task_status(task_id, 'rollback_requested')
-    save_task_event(task_id, 'rollback_requested', {'action': 'rollback'})
 
     try:
         # 异步调用 Lambda 执行回滚
@@ -524,7 +520,6 @@ def handle_async_rollback(event: dict, context) -> dict:
             }
 
         update_task_status(task_id, 'rolled_back')
-        save_task_event(task_id, 'rollback_completed')
 
         logger.info(f"Rollback completed for task {task_id}")
 
@@ -633,14 +628,6 @@ def handle_send_result_email(event: dict, context) -> dict:
         )
 
         logger.info(f"Result email sent for task {task_id}")
-
-        # 保存邮件发送事件
-        if task:
-            save_task_event(task_id, 'result_email_sent', {
-                'email_type': email_type,
-                'is_rollback': is_rollback,
-                'include_rollback_link': rollback_url is not None
-            })
 
         return {
             'success': True,
@@ -885,10 +872,8 @@ def run_phase2_remediation(
         # 更新状态
         if is_rollback:
             update_task_status(task_id, 'rollback_started')
-            save_task_event(task_id, 'rollback_started')
         else:
             update_task_status(task_id, 'generating_code')
-            save_task_event(task_id, 'code_generation_started')
 
         # 构建 Agent 输入 (包含所有信息供 Remediator 传递给 Validator)
         agent_input = {
@@ -904,7 +889,6 @@ def run_phase2_remediation(
         }
 
         update_task_status(task_id, 'executing')
-        save_task_event(task_id, 'execution_started')
 
         # 调用 AgentCore Runtime (Remediator 会通过 A2A 调用 Validator)
         response_data = _invoke_runtime(
@@ -913,10 +897,6 @@ def run_phase2_remediation(
             agent_input=agent_input,
             timeout=900  # 增加超时时间，因为包含验证步骤
         )
-
-        save_task_event(task_id, 'execution_completed', {
-            'resource_arn': resource_arn
-        })
 
         return {
             'success': True,
@@ -1140,27 +1120,6 @@ def update_task_status(task_id: str, status: str, extra_data: dict = None):
         ExpressionAttributeValues=expr_values,
         ExpressionAttributeNames=expr_names
     )
-
-
-def save_task_event(task_id: str, event_type: str, data: dict = None):
-    """保存任务事件"""
-    event_id = str(uuid.uuid4())[:8]
-    timestamp = datetime.now(timezone.utc).isoformat()
-    ttl = int(time.time()) + (90 * 24 * 60 * 60)
-
-    item = {
-        'PK': f'TASK#{task_id}',
-        'SK': f'EVENT#{timestamp}#{event_id}',
-        'taskId': task_id,
-        'eventId': event_id,
-        'eventType': event_type,
-        'timestamp': timestamp,
-        'actor': {'type': 'lambda', 'id': 'approval-handler'},
-        'data': data or {},
-        'ttl': ttl
-    }
-
-    tasks_table.put_item(Item=item)
 
 
 def get_approval_status(event: dict) -> dict:

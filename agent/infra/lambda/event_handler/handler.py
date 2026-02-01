@@ -118,6 +118,186 @@ def handle_security_hub_event(event: dict, context) -> dict:
     }
 
 
+def classify_finding(finding: dict) -> dict:
+    """
+    分类 Finding 类型，返回分类信息
+
+    Args:
+        finding: Security Hub Finding (ASFF 格式)
+
+    Returns:
+        dict: 分类信息
+            {
+                "type": "FSBP_CONTROL" | "CONTAINER_CVE" | "EC2_CVE" | "UNSUPPORTED",
+                "control_id": "S3.1" | "CVE-2025-xxxxx" | None,
+                "resource_type": "AwsS3Bucket" | "AwsEcrContainerImage" | "AwsEc2Instance",
+                "can_remediate": True | False,
+                "reason": "..."
+            }
+    """
+    resources = finding.get('Resources', [])
+    resource = resources[0] if resources else {}
+    resource_type = resource.get('Type', '')
+
+    # 检查 ProductName 来识别 Inspector findings
+    product_name = finding.get('ProductName', '')
+    generator_id = finding.get('GeneratorId', '')
+
+    # Inspector CVE findings 的特征
+    is_inspector = 'Inspector' in product_name or 'inspector' in generator_id.lower()
+
+    if is_inspector:
+        # 提取 CVE ID
+        cve_id = None
+        vulnerabilities = finding.get('Vulnerabilities', [])
+        if vulnerabilities:
+            cve_id = vulnerabilities[0].get('Id', '')
+
+        # 如果没有 Vulnerabilities 字段，尝试从 Title 提取
+        if not cve_id:
+            title = finding.get('Title', '')
+            cve_match = re.search(r'(CVE-\d{4}-\d+)', title)
+            if cve_match:
+                cve_id = cve_match.group(1)
+
+        if resource_type == 'AwsEcrContainerImage':
+            return {
+                'type': 'CONTAINER_CVE',
+                'control_id': cve_id,
+                'resource_type': resource_type,
+                'can_remediate': False,
+                'reason': 'Container image vulnerabilities require developer team to update the image'
+            }
+        elif resource_type == 'AwsEc2Instance':
+            return {
+                'type': 'EC2_CVE',
+                'control_id': cve_id,
+                'resource_type': resource_type,
+                'can_remediate': False,
+                'reason': 'EC2 software vulnerabilities require manual patching'
+            }
+        else:
+            # 其他 Inspector findings (如 Lambda 漏洞)
+            return {
+                'type': 'UNSUPPORTED',
+                'control_id': cve_id,
+                'resource_type': resource_type,
+                'can_remediate': False,
+                'reason': f'Unsupported Inspector finding type for resource: {resource_type}'
+            }
+
+    # FSBP Control findings
+    control_id = extract_control_id(finding)
+    if control_id:
+        return {
+            'type': 'FSBP_CONTROL',
+            'control_id': control_id,
+            'resource_type': resource_type,
+            'can_remediate': True,
+            'reason': None
+        }
+
+    # 无法分类
+    return {
+        'type': 'UNSUPPORTED',
+        'control_id': None,
+        'resource_type': resource_type,
+        'can_remediate': False,
+        'reason': 'Could not classify finding type'
+    }
+
+
+def extract_cve_details(finding: dict) -> dict:
+    """
+    从 Inspector Finding 提取 CVE 详情
+
+    Args:
+        finding: Security Hub Finding (ASFF 格式)
+
+    Returns:
+        dict: CVE 详情
+            {
+                "cve_id": "CVE-2025-xxxxx",
+                "severity": "CRITICAL",
+                "cvss_score": 9.8,
+                "package_name": "openssl",
+                "current_version": "3.5.4",
+                "fixed_version": "3.5.4-1~deb13u2",
+                "remediation_command": "apt-get update && apt-get upgrade",
+                "reference_urls": [...],
+                "exploit_available": True/False,
+                "description": "..."
+            }
+    """
+    vulnerabilities = finding.get('Vulnerabilities', [])
+    vuln = vulnerabilities[0] if vulnerabilities else {}
+
+    # 提取 CVE ID
+    cve_id = vuln.get('Id', '')
+    if not cve_id:
+        title = finding.get('Title', '')
+        cve_match = re.search(r'(CVE-\d{4}-\d+)', title)
+        if cve_match:
+            cve_id = cve_match.group(1)
+
+    # 提取严重性
+    severity = finding.get('Severity', {}).get('Label', 'UNKNOWN')
+
+    # 提取 CVSS 分数
+    cvss_score = 0.0
+    cvss_list = vuln.get('Cvss', [])
+    if cvss_list:
+        # 优先使用 CVSS v3
+        for cvss in cvss_list:
+            if cvss.get('Version', '').startswith('3'):
+                cvss_score = cvss.get('BaseScore', 0.0)
+                break
+        if cvss_score == 0.0 and cvss_list:
+            cvss_score = cvss_list[0].get('BaseScore', 0.0)
+
+    # 提取受影响的包信息
+    vulnerable_packages = vuln.get('VulnerablePackages', [])
+    package = vulnerable_packages[0] if vulnerable_packages else {}
+    package_name = package.get('Name', 'Unknown')
+    current_version = package.get('Version', 'Unknown')
+    fixed_version = package.get('FixedInVersion', 'Not available')
+    remediation_command = package.get('Remediation', '')
+
+    # 如果没有修复命令，根据包管理器生成建议
+    if not remediation_command:
+        pkg_manager = package.get('PackageManager', '')
+        if pkg_manager in ['APT', 'DPKG']:
+            remediation_command = f'apt-get update && apt-get upgrade {package_name}'
+        elif pkg_manager in ['YUM', 'RPM']:
+            remediation_command = f'yum update {package_name}'
+        elif pkg_manager == 'APKG':
+            remediation_command = f'apk upgrade {package_name}'
+        else:
+            remediation_command = f'Update {package_name} to version {fixed_version}'
+
+    # 提取参考链接
+    reference_urls = vuln.get('ReferenceUrls', [])
+
+    # 检查是否有公开利用
+    exploit_available = vuln.get('ExploitAvailable', 'NO') == 'YES'
+
+    # 提取描述
+    description = finding.get('Description', '')
+
+    return {
+        'cve_id': cve_id,
+        'severity': severity,
+        'cvss_score': cvss_score,
+        'package_name': package_name,
+        'current_version': current_version,
+        'fixed_version': fixed_version,
+        'remediation_command': remediation_command,
+        'reference_urls': reference_urls,
+        'exploit_available': exploit_available,
+        'description': description
+    }
+
+
 def process_finding(finding: dict, context) -> dict:
     """处理单个 Finding
 
@@ -140,15 +320,42 @@ def process_finding(finding: dict, context) -> dict:
             'reason': f'Severity {severity} not in scope'
         }
 
-    # 提取 Control ID
-    control_id = extract_control_id(finding)
-    if not control_id:
-        logger.warning(f"Could not extract control ID from finding {finding_id}")
+    # 分类 Finding
+    classification = classify_finding(finding)
+    logger.info(f"Finding {finding_id} classified as: {classification['type']}")
+
+    if classification['type'] == 'FSBP_CONTROL':
+        # 原有流程: 调用 Analyzer Agent
+        return process_fsbp_finding(finding, classification, context)
+
+    elif classification['type'] in ['CONTAINER_CVE', 'EC2_CVE']:
+        # 新流程: 直接处理 CVE，不调用 Agent
+        return process_cve_finding(finding, classification, context)
+
+    else:
+        # 跳过不支持的类型
+        logger.warning(f"Skipping unsupported finding type: {classification['type']}")
         return {
             'finding_id': finding_id,
             'status': 'skipped',
-            'reason': 'Could not extract control ID'
+            'reason': classification.get('reason', 'Unsupported finding type')
         }
+
+
+def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
+    """处理 FSBP Control Finding（原有逻辑）
+
+    Args:
+        finding: Security Hub Finding (ASFF 格式)
+        classification: 分类信息
+        context: Lambda 上下文
+
+    Returns:
+        dict: 处理结果
+    """
+    finding_id = finding.get('Id', '')
+    severity = finding.get('Severity', {}).get('Label', 'MEDIUM')
+    control_id = classification['control_id']
 
     # 创建任务
     task_id = str(uuid.uuid4())
@@ -175,6 +382,7 @@ def process_finding(finding: dict, context) -> dict:
         'taskId': task_id,
         'findingId': finding_id,
         'controlId': control_id,
+        'findingType': 'FSBP_CONTROL',  # 标记为 FSBP Control
         'status': 'pending',
         'phase': 'pre_approval',
         'severity': severity,
@@ -202,7 +410,7 @@ def process_finding(finding: dict, context) -> dict:
 
     # 保存任务
     tasks_table.put_item(Item=task_item)
-    logger.info(f"Created task {task_id} for finding {finding_id}")
+    logger.info(f"Created task {task_id} for FSBP finding {finding_id}")
 
     # 调用 Analyzer Agent (Phase 1)
     # 使用 AWS Account ID 作为 actor_id，确保同账户的修复经验可以共享
@@ -247,6 +455,288 @@ def process_finding(finding: dict, context) -> dict:
             'status': 'analysis_failed',
             'error': str(e)
         }
+
+
+def process_cve_finding(finding: dict, classification: dict, context) -> dict:
+    """处理 CVE 漏洞 Finding (容器/EC2)
+
+    只发送通知邮件，不创建 DynamoDB 任务记录（CVE 漏洞需要手动处理，无需跟踪）
+
+    Args:
+        finding: Security Hub Finding (ASFF 格式)
+        classification: 分类信息
+        context: Lambda 上下文
+
+    Returns:
+        dict: 处理结果
+    """
+    finding_id = finding.get('Id', '')
+    finding_type = classification['type']  # CONTAINER_CVE or EC2_CVE
+
+    # 提取 CVE 详情
+    cve_details = extract_cve_details(finding)
+
+    logger.info(f"Processing CVE finding {finding_id} (type: {finding_type}, cve: {cve_details['cve_id']})")
+
+    # 只发送通知邮件，不写入 DynamoDB
+    email_sent = False
+    try:
+        email_sent = send_cve_notification_email(finding_id, finding, classification, cve_details)
+        if email_sent:
+            logger.info(f"CVE notification email sent for finding {finding_id}")
+        else:
+            logger.warning(f"Failed to send CVE notification email for finding {finding_id}")
+    except Exception as e:
+        logger.exception(f"Error sending CVE notification email for finding {finding_id}: {e}")
+
+    return {
+        'finding_id': finding_id,
+        'status': 'notified' if email_sent else 'notification_failed',
+        'classification': finding_type,
+        'cve_id': cve_details['cve_id']
+    }
+
+
+def send_cve_notification_email(
+    finding_id: str,
+    finding: dict,
+    classification: dict,
+    cve_details: dict
+) -> bool:
+    """发送 CVE 通知邮件
+
+    Args:
+        finding_id: Finding ID
+        finding: Security Hub Finding
+        classification: 分类信息
+        cve_details: CVE 详情
+
+    Returns:
+        bool: 是否发送成功
+    """
+    if not APPROVAL_EMAIL or not SENDER_EMAIL:
+        logger.warning("APPROVAL_EMAIL or SENDER_EMAIL not configured, skipping email")
+        return False
+
+    try:
+        # 格式化邮件内容
+        email_body = format_cve_notification_email(finding_id, finding, classification, cve_details)
+
+        # 构建邮件主题
+        cve_id = cve_details['cve_id']
+        severity = cve_details['severity']
+        finding_type = classification['type']
+
+        if finding_type == 'CONTAINER_CVE':
+            type_label = '容器镜像漏洞'
+        else:
+            type_label = 'EC2 软件漏洞'
+
+        email_subject = f'[SHARA] 🔴 {type_label}通知 - {cve_id} ({severity})'
+
+        # 发送邮件
+        ses_client.send_email(
+            Source=SENDER_EMAIL,
+            Destination={'ToAddresses': [APPROVAL_EMAIL]},
+            Message={
+                'Subject': {
+                    'Data': email_subject,
+                    'Charset': 'UTF-8'
+                },
+                'Body': {
+                    'Text': {
+                        'Data': email_body,
+                        'Charset': 'UTF-8'
+                    }
+                }
+            }
+        )
+
+        logger.info(f"CVE notification email sent for finding {finding_id}")
+        return True
+
+    except ClientError as e:
+        logger.error(f"Failed to send CVE notification email: {e}")
+        return False
+    except Exception as e:
+        logger.exception(f"Error sending CVE notification email: {e}")
+        return False
+
+
+def format_cve_notification_email(
+    finding_id: str,
+    finding: dict,
+    classification: dict,
+    cve_details: dict
+) -> str:
+    """格式化 CVE 通知邮件
+
+    Args:
+        finding_id: Finding ID
+        finding: Security Hub Finding
+        classification: 分类信息
+        cve_details: CVE 详情
+
+    Returns:
+        str: 格式化的邮件内容
+    """
+    finding_type = classification['type']
+    resources = finding.get('Resources', [])
+    resource = resources[0] if resources else {}
+
+    # 严重性图标
+    severity_icons = {
+        'CRITICAL': '🔴 CRITICAL',
+        'HIGH': '🟠 HIGH',
+        'MEDIUM': '🟡 MEDIUM',
+        'LOW': '🟢 LOW'
+    }
+    severity = cve_details['severity']
+    severity_display = severity_icons.get(severity, f'⚪ {severity}')
+
+    # 漏洞类型显示
+    if finding_type == 'CONTAINER_CVE':
+        type_display = '🐳 容器镜像漏洞'
+        type_emoji = '🐳'
+    else:
+        type_display = '🖥️ EC2 软件漏洞'
+        type_emoji = '🖥️'
+
+    # 是否有公开利用
+    exploit_display = '⚠️ YES - 需紧急处理!' if cve_details['exploit_available'] else '❌ NO'
+
+    # 提取资源详细信息
+    resource_id = resource.get('Id', 'N/A')
+    resource_type = resource.get('Type', 'N/A')
+
+    # 对于容器镜像，提取 repository 和 image tag
+    container_info = ''
+    if finding_type == 'CONTAINER_CVE':
+        # 从 resource ID 解析 repository 信息
+        # 格式通常是: arn:aws:ecr:region:account:repository/repo-name/sha256:xxx
+        if '/' in resource_id:
+            parts = resource_id.split('/')
+            if len(parts) >= 2:
+                repo_name = parts[-2] if len(parts) > 2 else parts[-1]
+                container_info = f'\n  Repository:     {repo_name}'
+
+    # 构建邮件内容
+    lines = [
+        '═' * 70,
+        f'              {type_emoji} SHARA 安全漏洞通知 - 需要手动处理',
+        '═' * 70,
+        '',
+        '📋 基本信息',
+        '─' * 70,
+        f'  漏洞类型:       {type_display}',
+        f'  CVE ID:         {cve_details["cve_id"]}',
+        f'  严重性:         {severity_display}',
+        f'  CVSS 分数:      {cve_details["cvss_score"]}',
+        f'  Finding ID:     {finding_id[:50]}...' if len(finding_id) > 50 else f'  Finding ID:     {finding_id}',
+        '',
+        '📦 受影响资源',
+        '─' * 70,
+        f'  资源类型:       {resource_type}',
+        f'  资源 ID:        {resource_id}',
+        f'  AWS 账户:       {finding.get("AwsAccountId", "N/A")}',
+        f'  区域:           {finding.get("Region", "N/A")}',
+    ]
+
+    if container_info:
+        lines.append(container_info)
+
+    lines.extend([
+        '',
+        '🐛 漏洞详情',
+        '─' * 70,
+        f'  受影响包:       {cve_details["package_name"]}',
+        f'  当前版本:       {cve_details["current_version"]}',
+        f'  修复版本:       {cve_details["fixed_version"]}',
+        f'  是否有公开利用: {exploit_display}',
+        '',
+        '  漏洞描述:',
+    ])
+
+    # 漏洞描述（可能很长，需要换行处理）
+    description = cve_details['description']
+    if description:
+        # 将描述按行分割，每行最多 65 个字符
+        desc_lines = []
+        current_line = '  '
+        for word in description.split():
+            if len(current_line) + len(word) + 1 <= 68:
+                current_line += word + ' '
+            else:
+                desc_lines.append(current_line.rstrip())
+                current_line = '  ' + word + ' '
+        if current_line.strip():
+            desc_lines.append(current_line.rstrip())
+        lines.extend(desc_lines[:10])  # 最多显示 10 行
+        if len(desc_lines) > 10:
+            lines.append('  ...(描述已截断)')
+    else:
+        lines.append('  (无描述信息)')
+
+    lines.extend([
+        '',
+        '🔧 修复建议',
+        '─' * 70,
+    ])
+
+    if finding_type == 'CONTAINER_CVE':
+        lines.extend([
+            '  ⚠️ 无法自动修复 - 需要开发团队更新镜像',
+            '',
+            '  建议操作:',
+            '  1. 更新 Dockerfile 或基础镜像中的软件包',
+            f'  2. 执行: {cve_details["remediation_command"]}',
+            '  3. 重新构建并推送镜像到 ECR',
+            '  4. 重新部署使用该镜像的服务 (ECS/EKS/Lambda)',
+            '  5. 在 Security Hub 中验证 Finding 已解决',
+            '',
+            '  负责团队: DevOps / 开发团队',
+        ])
+    else:  # EC2_CVE
+        lines.extend([
+            '  ⚠️ 无法自动修复 - 需要运维团队手动打补丁',
+            '',
+            '  建议操作:',
+            '  1. 在测试环境验证补丁兼容性',
+            '  2. 安排维护窗口 (建议在业务低峰期)',
+            f'  3. 执行: {cve_details["remediation_command"]}',
+            '  4. 重启相关服务或实例',
+            '  5. 验证服务正常运行',
+            '  6. 在 Security Hub 中验证 Finding 已解决',
+            '',
+            '  负责团队: 运维 / SRE 团队',
+        ])
+
+    # 参考链接
+    reference_urls = cve_details.get('reference_urls', [])
+    if reference_urls:
+        lines.extend([
+            '',
+            '📚 参考链接',
+            '─' * 70,
+        ])
+        for url in reference_urls[:5]:  # 最多显示 5 个链接
+            lines.append(f'  • {url}')
+        if len(reference_urls) > 5:
+            lines.append(f'  ... 还有 {len(reference_urls) - 5} 个链接')
+
+    lines.extend([
+        '',
+        '═' * 70,
+        '                    此邮件为通知性质，无需审批操作',
+        '',
+        '  如果此漏洞已修复或不再相关，请在 Security Hub 中归档此 Finding。',
+        '═' * 70,
+        '                    SHARA - Security Hub Auto-Remediation Agent',
+        '                              Powered by AWS Bedrock',
+        '═' * 70,
+    ])
+
+    return '\n'.join(lines)
 
 
 def run_phase1_analysis(

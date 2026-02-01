@@ -1,0 +1,91 @@
+{
+  "version": "0",
+  "id": "test-event-s3-8",
+  "detail-type": "Security Hub Findings - Imported",
+  "source": "aws.securityhub",
+  "account": "870414140965",
+  "time": "2026-02-01T06:13:49Z",
+  "region": "ap-northeast-1",
+  "resources": [],
+  "detail": {
+    "findings": [
+      {
+        "SchemaVersion": "2018-10-08",
+        "Id": "arn:aws:securityhub:ap-northeast-1:870414140965:security-control/S3.8/finding/d664dc7a-9c33-4864-9595-64eb8d81d9cf",
+        "ProductArn": "arn:aws:securityhub:ap-northeast-1::product/aws/securityhub",
+        "ProductName": "Security Hub",
+        "CompanyName": "AWS",
+        "Region": "ap-northeast-1",
+        "GeneratorId": "security-control/S3.8",
+        "AwsAccountId": "870414140965",
+        "Types": [
+          "Software and Configuration Checks/Industry and Regulatory Standards",
+          "Posture Management"
+        ],
+        "FirstObservedAt": "2026-02-01T05:39:10.229Z",
+        "LastObservedAt": "2026-02-01T06:13:43.752Z",
+        "CreatedAt": "2026-01-30T10:21:37.506Z",
+        "UpdatedAt": "2026-02-01T06:13:49.518Z",
+        "Severity": {
+          "Label": "HIGH",
+          "Normalized": 70
+        },
+        "Title": "S3 general purpose buckets should block public access",
+        "Description": "This control checks whether an Amazon S3 general purpose bucket blocks public access at the bucket level. The control fails if any of the following settings are set to false: ignorePublicAcls, blockPublicPolicy, blockPublicAcls, restrictPublicBuckets.",
+        "Remediation": {
+          "Recommendation": {
+            "Text": "For information on how to correct this issue, consult the AWS Security Hub controls documentation.",
+            "Url": "https://docs.aws.amazon.com/console/securityhub/S3.8/remediation"
+          }
+        },
+        "ProductFields": {
+          "StandardsArn": "arn:aws:securityhub:::standards/aws-foundational-security-best-practices/v/1.0.0",
+          "StandardsSubscriptionArn": "arn:aws:securityhub:ap-northeast-1:870414140965:subscription/aws-foundational-security-best-practices/v/1.0.0",
+          "ControlId": "S3.8",
+          "RecommendationUrl": "https://docs.aws.amazon.com/console/securityhub/S3.8/remediation",
+          "StandardsControlArn": "arn:aws:securityhub:ap-northeast-1:870414140965:control/aws-foundational-security-best-practices/v/1.0.0/S3.8",
+          "aws/securityhub/ProductName": "Security Hub",
+          "aws/securityhub/CompanyName": "AWS",
+          "aws/securityhub/FindingId": "arn:aws:securityhub:ap-northeast-1::product/aws/securityhub/arn:aws:securityhub:ap-northeast-1:870414140965:security-control/S3.8/finding/d664dc7a-9c33-4864-9595-64eb8d81d9cf"
+        },
+        "Resources": [
+          {
+            "Type": "AwsS3Bucket",
+            "Id": "arn:aws:s3:::test-agent-bucket-870414140965",
+            "Partition": "aws",
+            "Region": "ap-northeast-1",
+            "Details": {
+              "AwsS3Bucket": {
+                "Name": "test-agent-bucket-870414140965"
+              }
+            }
+          }
+        ],
+        "Compliance": {
+          "Status": "FAILED",
+          "SecurityControlId": "S3.8",
+          "AssociatedStandards": [
+            {
+              "StandardsId": "standards/aws-foundational-security-best-practices/v/1.0.0"
+            }
+          ]
+        },
+        "WorkflowState": "NEW",
+        "Workflow": {
+          "Status": "NEW"
+        },
+        "RecordState": "ACTIVE",
+        "FindingProviderFields": {
+          "Severity": {
+            "Label": "HIGH",
+            "Normalized": 70
+          },
+          "Types": [
+            "Software and Configuration Checks/Industry and Regulatory Standards",
+            "Posture Management"
+          ]
+        }
+      }
+    ]
+  }
+}

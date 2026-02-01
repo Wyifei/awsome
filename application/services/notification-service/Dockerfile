@@ -1,13 +1,29 @@
-# Runtime stage - using pre-built JAR
-FROM public.ecr.aws/docker/library/amazoncorretto:21-alpine
-WORKDIR /app
+# syntax=docker/dockerfile:1
+# Notification Service
 
-# Create non-root user
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-USER appuser
+# ============== Builder Stage ==============
+FROM public.ecr.aws/docker/library/amazoncorretto:21-alpine AS builder
+WORKDIR /app
 
 # Copy pre-built JAR
 COPY target/notification-service-*.jar app.jar
+
+# ============== Runtime Stage ==============
+FROM public.ecr.aws/docker/library/amazoncorretto:21-alpine AS runtime
+WORKDIR /app
+
+# Apply security updates and create non-root user
+RUN apk update && \
+    apk upgrade --no-cache && \
+    apk add --no-cache wget && \
+    addgroup -S appgroup && adduser -S appuser -G appgroup && \
+    rm -rf /var/cache/apk/*
+
+# Copy JAR from builder
+COPY --from=builder /app/app.jar app.jar
+
+# Switch to non-root user
+USER appuser
 
 EXPOSE 8080
 
