@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import Optional
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError
 
 
@@ -333,7 +334,14 @@ def _invoke_runtime_http(
     """
     try:
         # 使用 boto3 的 bedrock-agentcore 客户端
-        client = boto3.client('bedrock-agentcore', region_name=REGION)
+        # 配置较长的超时时间（AgentCore Runtime 冷启动 + LLM 推理需要时间）
+        # connect_timeout=60s, read_timeout=280s（略小于 Lambda 300s 超时）
+        agentcore_config = Config(
+            connect_timeout=60,
+            read_timeout=280,
+            retries={'max_attempts': 1}  # 不重试，因为 Lambda 本身有超时限制
+        )
+        client = boto3.client('bedrock-agentcore', region_name=REGION, config=agentcore_config)
 
         # 构建请求体
         payload = {
@@ -346,7 +354,7 @@ def _invoke_runtime_http(
             })
         }
 
-        logger.info(f"Calling Analyzer Runtime via boto3: {ANALYZER_RUNTIME_ARN}")
+        logger.info(f"Calling Analyzer Runtime via boto3: {ANALYZER_RUNTIME_ARN} (timeout: 280s)")
 
         # 调用 invoke_agent_runtime
         response = client.invoke_agent_runtime(
