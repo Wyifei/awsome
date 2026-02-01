@@ -254,19 +254,18 @@ def create_analyzer_agent(
 
     # 使用 AWS 账户 ID 作为 actor_id
     # 这样同一账户的所有修复经验可以跨 session 共享检索
-    # actor_id 应该从 Lambda event 传入 (通常是 AWS 账户 ID)
-    # 如果没有传入，则使用 task_id 的前缀 (不推荐)
     if not actor_id:
-        logger.warning("actor_id not provided, using task_id as fallback. "
-                      "For better LTM retrieval, pass AWS account ID as actor_id.")
+        logger.warning("actor_id not provided, using task_id as fallback")
         actor_id = f"task-{task_id}"
+
+    # Use provided memory_id or fall back to config
+    effective_memory_id = memory_id or config.memory_id
 
     # 配置 Memory Session Manager
     session_manager = None
 
-    if not memory_id:
-        logger.warning("AGENTCORE_MEMORY_ID 未配置，将跳过 Memory 功能")
-        logger.warning("请运行 'python setup_memory.py create' 创建 Memory 资源")
+    if not effective_memory_id:
+        logger.warning("AGENTCORE_MEMORY_ID 未配置，Memory 功能将不可用")
     else:
         try:
             from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
@@ -282,7 +281,7 @@ def create_analyzer_agent(
                 )
 
             memory_config = AgentCoreMemoryConfig(
-                memory_id=memory_id,
+                memory_id=effective_memory_id,  # 使用 effective_memory_id
                 actor_id=actor_id,
                 session_id=session_id,  # 使用传入的 session_id
                 retrieval_config=retrieval_namespaces if retrieval_namespaces else None

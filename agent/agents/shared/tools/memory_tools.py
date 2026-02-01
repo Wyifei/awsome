@@ -152,9 +152,21 @@ def create_memory_session(session_manager) -> Optional[MemorySession]:
         MemorySession: 封装的 Memory session 对象，或 None 如果失败
     """
     try:
+        if not hasattr(session_manager, 'memory_client') or session_manager.memory_client is None:
+            logger.error("Invalid session_manager: missing memory_client")
+            return None
+        if not hasattr(session_manager, 'config'):
+            logger.error("Invalid session_manager: missing config")
+            return None
+
+        memory_id = session_manager.config.memory_id
+        if not memory_id:
+            logger.error("memory_id is empty - cannot create MemorySession")
+            return None
+
         return MemorySession(
             client=session_manager.memory_client,
-            memory_id=session_manager.config.memory_id,
+            memory_id=memory_id,
             actor_id=session_manager.config.actor_id,
             session_id=session_manager.config.session_id
         )
@@ -174,6 +186,8 @@ def set_memory_session(session):
     # 如果传入的是 AgentCoreMemorySessionManager，则创建 MemorySession
     if hasattr(session, 'memory_client') and hasattr(session, 'config'):
         _memory_session = create_memory_session(session)
+        if _memory_session is None:
+            logger.error("Failed to create MemorySession - Memory tools will not work")
     elif isinstance(session, MemorySession):
         _memory_session = session
     else:

@@ -299,6 +299,8 @@ resource "aws_iam_role_policy" "agentcore_securityhub" {
 }
 
 # AgentCore Memory Access Policy
+# IMPORTANT: AgentCore Memory uses bedrock-agentcore: namespace for Memory API
+# but may also use bedrock: namespace for Knowledge Base retrieval internally
 resource "aws_iam_role_policy" "agentcore_memory" {
   name = "${local.name_prefix}-agentcore-memory"
   role = aws_iam_role.agentcore_runtime.id
@@ -307,9 +309,25 @@ resource "aws_iam_role_policy" "agentcore_memory" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "AgentCoreMemoryAccess"
         Effect = "Allow"
         Action = [
-          "bedrock:InvokeAgent",
+          "bedrock-agentcore:CreateEvent",
+          "bedrock-agentcore:ListEvents",
+          "bedrock-agentcore:GetMemory",
+          "bedrock-agentcore:CreateSession",
+          "bedrock-agentcore:DeleteSession",
+          "bedrock-agentcore:GetSession",
+          "bedrock-agentcore:ListSessions",
+          "bedrock-agentcore:RetrieveMemory",
+          "bedrock-agentcore:SearchMemory"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "BedrockKnowledgeBaseAccess"
+        Effect = "Allow"
+        Action = [
           "bedrock:RetrieveAndGenerate",
           "bedrock:Retrieve"
         ]
@@ -498,6 +516,36 @@ resource "aws_iam_role_policy" "agentcore_remediation" {
           "cloudtrail:DescribeTrails",
           "cloudtrail:UpdateTrail",
           "cloudtrail:StartLogging"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# Code Interpreter Policy (for Remediator Agent to execute code in sandbox)
+# IMPORTANT: These permissions are required for the Remediator agent to execute
+# remediation code securely. Without these, the agent will silently fail.
+resource "aws_iam_role_policy" "agentcore_code_interpreter" {
+  name = "${local.name_prefix}-agentcore-code-interpreter"
+  role = aws_iam_role.agentcore_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "CodeInterpreterFullAccess"
+        Effect = "Allow"
+        Action = [
+          "bedrock-agentcore:CreateCodeInterpreter",
+          "bedrock-agentcore:StartCodeInterpreterSession",
+          "bedrock-agentcore:InvokeCodeInterpreter",
+          "bedrock-agentcore:StopCodeInterpreterSession",
+          "bedrock-agentcore:DeleteCodeInterpreter",
+          "bedrock-agentcore:ListCodeInterpreters",
+          "bedrock-agentcore:GetCodeInterpreter",
+          "bedrock-agentcore:GetCodeInterpreterSession",
+          "bedrock-agentcore:ListCodeInterpreterSessions"
         ]
         Resource = "*"
       }

@@ -106,9 +106,7 @@ def invoke_validator_agent(
         "error_message": error_message
     }
 
-    logger.info(f"Invoking Validator Agent via A2A for task {task_id}")
-    logger.info(f"is_rollback: {is_rollback}, rollback_failed: {rollback_failed}")
-    logger.info(f"Running in AgentCore Runtime: {is_agentcore_runtime}")
+    logger.info(f"Invoking Validator Agent for task {task_id}, is_rollback={is_rollback}")
 
     if is_agentcore_runtime:
         # Use AgentCore InvokeAgentRuntime API (production mode)

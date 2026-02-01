@@ -268,24 +268,25 @@ def create_remediator_agent(
     region = region or config.region
 
     # 使用与 Analyzer 相同的 actor_id
-    # actor_id 应该是 AWS 账户 ID，以便跨 session 共享修复经验
     if not actor_id:
-        logger.warning("actor_id not provided, using task_id as fallback. "
-                      "For better LTM retrieval, pass AWS account ID as actor_id.")
+        logger.warning("actor_id not provided, using task_id as fallback")
         actor_id = f"task-{task_id}"
 
     # 复用 Phase 1 创建的 Memory Session
     session_manager = None
 
-    if not memory_id:
-        logger.warning("AGENTCORE_MEMORY_ID 未配置，将跳过 Memory 功能")
+    # Use provided memory_id or fall back to config
+    effective_memory_id = memory_id or config.memory_id
+
+    if not effective_memory_id:
+        logger.warning("AGENTCORE_MEMORY_ID 未配置，Memory 功能将不可用")
     else:
         try:
             from bedrock_agentcore.memory.integrations.strands.session_manager import AgentCoreMemorySessionManager
             from bedrock_agentcore.memory.integrations.strands.config import AgentCoreMemoryConfig
 
             memory_config = AgentCoreMemoryConfig(
-                memory_id=memory_id,
+                memory_id=effective_memory_id,  # 使用 effective_memory_id
                 actor_id=actor_id,  # 使用与 Analyzer 相同的 actor_id
                 session_id=memory_session_id  # 复用 Phase 1 的 Session
             )

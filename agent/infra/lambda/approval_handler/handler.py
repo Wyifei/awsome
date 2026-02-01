@@ -894,12 +894,13 @@ def run_phase2_remediation(
         agent_input = {
             'task_id': task_id,
             'memory_session_id': memory_session_id,
+            'memory_id': MEMORY_ID,  # 传递 Memory ID 给 Remediator
             'actor_id': actor_id,
             'finding_id': finding_id,
             'resource_arn': resource_arn,
             'resource_type': resource_type,
             'control_id': control_id,
-            'is_rollback': is_rollback  # Pass to Remediator → Validator
+            'is_rollback': is_rollback
         }
 
         update_task_status(task_id, 'executing')

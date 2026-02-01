@@ -78,6 +78,8 @@ async def invocations(request: Request):
         # 支持两种调用方式:
         # 1. 直接调用 (curl): 数据在 body 顶层
         # 2. AgentCore Runtime: 数据在 prompt 字段中 (JSON 字符串)
+        memory_id_from_payload = None  # 从 payload 提取的 memory_id
+
         if 'prompt' in body and body.get('prompt'):
             prompt_data = body.get('prompt')
             if isinstance(prompt_data, str):
@@ -87,6 +89,7 @@ async def invocations(request: Request):
                     prompt_data = {}
             task_id = prompt_data.get('task_id', 'unknown')
             memory_session_id = prompt_data.get('memory_session_id')
+            memory_id_from_payload = prompt_data.get('memory_id')  # 从 prompt 提取 memory_id
             resource_arn = prompt_data.get('resource_arn')
             resource_type = prompt_data.get('resource_type')
             control_id = prompt_data.get('control_id', '')
@@ -97,6 +100,7 @@ async def invocations(request: Request):
         else:
             task_id = body.get('task_id', 'unknown')
             memory_session_id = body.get('memory_session_id')
+            memory_id_from_payload = body.get('memory_id')  # 从 body 提取 memory_id
             resource_arn = body.get('resource_arn')
             resource_type = body.get('resource_type')
             control_id = body.get('control_id', '')
@@ -113,7 +117,12 @@ async def invocations(request: Request):
             raise ValueError("resource_type is required for Remediator Agent")
 
         config = get_config()
-        memory_id = body.get('memory_id') or config.memory_id
+        # 优先使用 payload 中的 memory_id，否则使用环境变量
+        memory_id = memory_id_from_payload or config.memory_id
+
+        if not memory_id:
+            logger.warning("memory_id is empty - Memory features will be disabled")
+
         # actor_id 已在上面解析
 
         # Create agent for this request
