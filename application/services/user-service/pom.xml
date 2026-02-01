@@ -7,7 +7,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.0</version>
+        <version>3.4.5</version>
         <relativePath/>
     </parent>
 
@@ -20,6 +20,12 @@
     <properties>
         <java.version>21</java.version>
         <lombok.version>1.18.36</lombok.version>
+        <aws.sdk.version>2.31.3</aws.sdk.version>
+        <!-- Override vulnerable dependency versions -->
+        <tomcat.version>10.1.45</tomcat.version>
+        <spring-security.version>6.5.4</spring-security.version>
+        <spring-framework.version>6.2.11</spring-framework.version>
+        <netty.version>4.2.5.Final</netty.version>
     </properties>
 
     <dependencies>
@@ -56,10 +62,15 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Flyway (PostgreSQL support included in flyway-core for 9.x) -->
+        <!-- Flyway -->
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
+        </dependency>
+        <!-- Flyway PostgreSQL support (required for Flyway 10.x) -->
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
 
         <!-- Lombok -->
@@ -86,14 +97,14 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>cognitoidentityprovider</artifactId>
-            <version>2.25.0</version>
+            <version>${aws.sdk.version}</version>
         </dependency>
 
         <!-- AWS STS for IRSA (Web Identity Token) authentication -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sts</artifactId>
-            <version>2.25.0</version>
+            <version>${aws.sdk.version}</version>
         </dependency>
 
         <!-- MapStruct -->
