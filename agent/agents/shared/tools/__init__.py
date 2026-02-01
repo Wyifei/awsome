@@ -27,6 +27,7 @@ from shared.tools.execution import (
     execute_rollback,
     execute_code,
     save_task_event,
+    set_audit_context,
 )
 from shared.tools.a2a_tools import (
     invoke_validator_agent,
@@ -63,6 +64,7 @@ __all__ = [
     'execute_rollback',
     'execute_code',
     'save_task_event',
+    'set_audit_context',
     # A2A Communication (Remediator -> Validator)
     'invoke_validator_agent',
     # Validator Tools

@@ -189,3 +189,71 @@ resource "aws_s3_bucket_public_access_block" "asr_playbooks" {
   restrict_public_buckets = true
 }
 
+#------------------------------------------------------------------------------
+# Remediation Audit Bucket - 修复审计日志存储桶
+# 存储 Remediator Agent 执行的代码和日志，用于审计和 troubleshooting
+# 结构: s3://bucket/tasks/{task_id}/
+#   - code.py          - 执行的修复代码
+#   - execution.log    - 执行日志 (stdout, stderr, exit_code)
+#   - metadata.json    - 元数据 (timestamp, resource_arn, control_id 等)
+#------------------------------------------------------------------------------
+
+resource "aws_s3_bucket" "remediation_audit" {
+  bucket = "${local.name_prefix}-remediation-audit-${local.account_id}"
+
+  tags = {
+    Name = "${local.name_prefix}-remediation-audit"
+  }
+}
+
+resource "aws_s3_bucket_versioning" "remediation_audit" {
+  bucket = aws_s3_bucket.remediation_audit.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "remediation_audit" {
+  bucket = aws_s3_bucket.remediation_audit.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+    bucket_key_enabled = true
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "remediation_audit" {
+  bucket = aws_s3_bucket.remediation_audit.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+# 生命周期策略 - 审计日志保留 90 天，之后转移到 Glacier，1 年后删除
+resource "aws_s3_bucket_lifecycle_configuration" "remediation_audit" {
+  bucket = aws_s3_bucket.remediation_audit.id
+
+  rule {
+    id     = "audit-retention"
+    status = "Enabled"
+
+    transition {
+      days          = 90
+      storage_class = "GLACIER"
+    }
+
+    expiration {
+      days = 365
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+

@@ -4,16 +4,6 @@
 ###############################################################################
 
 #------------------------------------------------------------------------------
-# Variables
-#------------------------------------------------------------------------------
-
-variable "enable_code_interpreter" {
-  description = "Enable Code Interpreter creation"
-  type        = bool
-  default     = true
-}
-
-#------------------------------------------------------------------------------
 # Code Interpreter Execution Role
 #------------------------------------------------------------------------------
 
@@ -366,6 +356,55 @@ resource "aws_iam_role_policy" "code_interpreter_kms" {
 }
 
 #------------------------------------------------------------------------------
+# AWS Config Remediation Permissions
+# 修复: Config.1 (配置记录器)
+#------------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "code_interpreter_config" {
+  statement {
+    sid    = "ConfigRemediation"
+    effect = "Allow"
+    actions = [
+      # 查询配置记录器
+      "config:DescribeConfigurationRecorders",
+      "config:DescribeConfigurationRecorderStatus",
+      "config:DescribeDeliveryChannels",
+      "config:DescribeDeliveryChannelStatus",
+      # 修改配置记录器 (Config.1)
+      "config:PutConfigurationRecorder",
+      "config:StartConfigurationRecorder",
+      "config:StopConfigurationRecorder",
+      # 配置交付通道
+      "config:PutDeliveryChannel",
+    ]
+    resources = ["*"]
+  }
+
+  # IAM PassRole - Config 记录器可能需要 service-linked role
+  statement {
+    sid    = "ConfigPassRole"
+    effect = "Allow"
+    actions = [
+      "iam:PassRole"
+    ]
+    resources = [
+      "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/config.amazonaws.com/*"
+    ]
+    condition {
+      test     = "StringEquals"
+      variable = "iam:PassedToService"
+      values   = ["config.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role_policy" "code_interpreter_config" {
+  name   = "config-remediation"
+  role   = aws_iam_role.code_interpreter_execution.id
+  policy = data.aws_iam_policy_document.code_interpreter_config.json
+}
+
+#------------------------------------------------------------------------------
 # CloudWatch Logs (用于 Code Interpreter 日志)
 #------------------------------------------------------------------------------
 
@@ -475,96 +514,16 @@ resource "aws_iam_role_policy" "code_interpreter_elb" {
 
 #------------------------------------------------------------------------------
 # Code Interpreter Resource
-# 使用 null_resource + local-exec 创建 (因为 awscc 可能还不支持)
+# 注意: Code Interpreter 需要通过 AWS Console 手动创建
+# AWS CLI 目前只提供 Data Plane API (start/stop/invoke session)
+# 不提供 Control Plane API (create/delete code interpreter)
+#
+# Console 创建步骤:
+# 1. 打开 Amazon Bedrock AgentCore Console
+# 2. 导航到 Code Interpreter
+# 3. 创建新的 Code Interpreter，选择上面创建的 IAM Role
+# 4. 记录 Code Interpreter ID，配置到 .env 文件的 CODE_INTERPRETER_ID
 #------------------------------------------------------------------------------
-
-resource "null_resource" "code_interpreter" {
-  count = var.enable_code_interpreter ? 1 : 0
-
-  triggers = {
-    role_arn     = aws_iam_role.code_interpreter_execution.arn
-    network_mode = var.code_interpreter_network_mode
-    name         = "${local.name_prefix}-code-interpreter"
-    region       = var.aws_region
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      # 等待 IAM 角色传播
-      sleep 10
-
-      # 检查是否已存在
-      EXISTING=$(aws bedrock-agentcore list-code-interpreters \
-        --region ${var.aws_region} \
-        --endpoint-url https://bedrock-agentcore-control.${var.aws_region}.amazonaws.com \
-        --query "codeInterpreters[?name=='${local.name_prefix}-code-interpreter'].codeInterpreterId" \
-        --output text 2>/dev/null || echo "")
-
-      if [ -n "$EXISTING" ] && [ "$EXISTING" != "None" ]; then
-        echo "Code Interpreter already exists: $EXISTING"
-        echo $EXISTING > ${path.module}/.code_interpreter_id
-      else
-        # 创建 Code Interpreter
-        RESULT=$(aws bedrock-agentcore create-code-interpreter \
-          --region ${var.aws_region} \
-          --endpoint-url https://bedrock-agentcore-control.${var.aws_region}.amazonaws.com \
-          --name "${local.name_prefix}-code-interpreter" \
-          --description "SHARA security remediation code executor" \
-          --execution-role-arn "${aws_iam_role.code_interpreter_execution.arn}" \
-          --network-configuration '{"networkMode":"${var.code_interpreter_network_mode}"}' \
-          --output json)
-
-        CODE_INTERPRETER_ID=$(echo $RESULT | jq -r '.codeInterpreterId')
-        echo "Created Code Interpreter: $CODE_INTERPRETER_ID"
-        echo $CODE_INTERPRETER_ID > ${path.module}/.code_interpreter_id
-      fi
-    EOT
-    interpreter = ["/bin/bash", "-c"]
-  }
-
-  provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOT
-      # 读取 Code Interpreter ID
-      if [ -f ${path.module}/.code_interpreter_id ]; then
-        CODE_INTERPRETER_ID=$(cat ${path.module}/.code_interpreter_id)
-        if [ -n "$CODE_INTERPRETER_ID" ] && [ "$CODE_INTERPRETER_ID" != "None" ]; then
-          echo "Deleting Code Interpreter: $CODE_INTERPRETER_ID"
-          aws bedrock-agentcore delete-code-interpreter \
-            --region ${self.triggers.region} \
-            --endpoint-url https://bedrock-agentcore-control.${self.triggers.region}.amazonaws.com \
-            --code-interpreter-id "$CODE_INTERPRETER_ID" 2>/dev/null || true
-          rm -f ${path.module}/.code_interpreter_id
-        fi
-      fi
-    EOT
-    interpreter = ["/bin/bash", "-c"]
-  }
-
-  depends_on = [
-    aws_iam_role.code_interpreter_execution,
-    aws_iam_role_policy.code_interpreter_s3,
-    aws_iam_role_policy.code_interpreter_ec2,
-    aws_iam_role_policy.code_interpreter_sns,
-    aws_iam_role_policy.code_interpreter_rds,
-    aws_iam_role_policy.code_interpreter_lambda,
-    aws_iam_role_policy.code_interpreter_iam,
-    aws_iam_role_policy.code_interpreter_cloudtrail,
-    aws_iam_role_policy.code_interpreter_kms,
-    aws_iam_role_policy.code_interpreter_logs,
-    aws_iam_role_policy.code_interpreter_sqs,
-    aws_iam_role_policy.code_interpreter_secretsmanager,
-    aws_iam_role_policy.code_interpreter_elb,
-  ]
-}
-
-# 读取创建的 Code Interpreter ID
-data "local_file" "code_interpreter_id" {
-  count    = var.enable_code_interpreter ? 1 : 0
-  filename = "${path.module}/.code_interpreter_id"
-
-  depends_on = [null_resource.code_interpreter]
-}
 
 #------------------------------------------------------------------------------
 # Outputs
@@ -578,14 +537,4 @@ output "code_interpreter_role_arn" {
 output "code_interpreter_role_name" {
   description = "Name of the Code Interpreter execution role"
   value       = aws_iam_role.code_interpreter_execution.name
-}
-
-output "code_interpreter_id" {
-  description = "ID of the Code Interpreter (read from local file after creation)"
-  value       = var.enable_code_interpreter ? trimspace(try(data.local_file.code_interpreter_id[0].content, "")) : ""
-}
-
-output "code_interpreter_name" {
-  description = "Name of the Code Interpreter"
-  value       = var.enable_code_interpreter ? "${local.name_prefix}-code-interpreter" : ""
 }

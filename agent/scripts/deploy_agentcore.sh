@@ -65,6 +65,7 @@ usage() {
     echo "  - TOKENS_TABLE             DynamoDB approval tokens table"
     echo "  - ASR_PLAYBOOKS_BUCKET     S3 bucket for ASR playbooks"
     echo "  - AGENTCORE_MEMORY_ID      AgentCore Memory ID for session management"
+    echo "  - CODE_INTERPRETER_ID      AgentCore Code Interpreter ID (remediator only)"
     echo "  - APPROVAL_HANDLER_ARN     Lambda ARN for result emails (validator only)"
     echo "  - API_GATEWAY_URL          API Gateway URL for rollback links (validator only)"
     echo ""
@@ -146,6 +147,24 @@ get_memory_id() {
     echo "$memory_id"
 }
 
+# Get AgentCore Code Interpreter ID (for remediator sandbox execution)
+# Note: Code Interpreter 需要通过 AWS Console 手动创建，无法通过 Terraform 获取
+# 可以通过环境变量 CODE_INTERPRETER_ID 覆盖默认值
+get_code_interpreter_id() {
+    echo "${CODE_INTERPRETER_ID:-shara_interpreter_tool-sGd1u5rIet}"
+}
+
+# Get Remediation Audit S3 bucket
+get_remediation_audit_bucket() {
+    local bucket=$(get_terraform_output "remediation_audit_bucket_name")
+
+    if [[ -z "$bucket" ]]; then
+        local account_id=$(get_account_id)
+        bucket="${PROJECT_NAME}-${STAGE}-remediation-audit-${account_id}"
+    fi
+    echo "$bucket"
+}
+
 # Get Approval Handler Lambda ARN (for validator result emails)
 get_approval_handler_arn() {
     local arn=$(get_terraform_output "approval_handler_function_arn")
@@ -225,6 +244,7 @@ deploy_agent_api() {
     local memory_id="$5"
     local approval_handler_arn="$6"
     local api_gateway_url="$7"
+    local code_interpreter_id="$8"
     local runtime_name="${PROJECT_NAME}_${STAGE}_${agent_type}"
     local full_image_uri="${ecr_uri}:${IMAGE_TAG}"
 
@@ -261,6 +281,17 @@ deploy_agent_api() {
             log_info "Validator Runtime ARN: ${validator_arn}"
         else
             log_warn "Validator Runtime ARN not found - deploy validator first, then redeploy remediator"
+        fi
+        # Code Interpreter for secure sandbox execution
+        if [[ -n "$code_interpreter_id" ]]; then
+            env_vars_json+=",\"CODE_INTERPRETER_ID\": \"${code_interpreter_id}\""
+            log_info "Code Interpreter ID: ${code_interpreter_id}"
+        fi
+        # Audit bucket for remediation logs
+        local audit_bucket=$(get_remediation_audit_bucket)
+        if [[ -n "$audit_bucket" ]]; then
+            env_vars_json+=",\"REMEDIATION_AUDIT_BUCKET\": \"${audit_bucket}\""
+            log_info "Audit Bucket: ${audit_bucket}"
         fi
     fi
     # OpenTelemetry configuration for observability
@@ -331,6 +362,7 @@ deploy_agent_cli() {
     local memory_id="$5"
     local approval_handler_arn="$6"
     local api_gateway_url="$7"
+    local code_interpreter_id="$8"
     # AgentCore requires names with underscores only (no hyphens)
     local runtime_name="${PROJECT_NAME}_${STAGE}_${agent_type}"
 
@@ -387,6 +419,17 @@ deploy_agent_cli() {
         else
             log_warn "Validator Runtime ARN not found - deploy validator first, then redeploy remediator"
         fi
+        # Code Interpreter for secure sandbox execution
+        if [[ -n "$code_interpreter_id" ]]; then
+            env_args+=(--env "CODE_INTERPRETER_ID=${code_interpreter_id}")
+            log_info "Code Interpreter ID: ${code_interpreter_id}"
+        fi
+        # Audit bucket for remediation logs
+        local audit_bucket=$(get_remediation_audit_bucket)
+        if [[ -n "$audit_bucket" ]]; then
+            env_args+=(--env "REMEDIATION_AUDIT_BUCKET=${audit_bucket}")
+            log_info "Audit Bucket: ${audit_bucket}"
+        fi
     fi
 
     # Add OpenTelemetry configuration for observability
@@ -417,6 +460,7 @@ deploy_agent() {
     local memory_id="$5"
     local approval_handler_arn="$6"
     local api_gateway_url="$7"
+    local code_interpreter_id="$8"
 
     log_info "ASR Bucket: ${asr_bucket}"
     log_info "Memory ID: ${memory_id:-'(not configured)'}"
@@ -424,12 +468,15 @@ deploy_agent() {
         log_info "Approval Handler ARN: ${approval_handler_arn:-'(not configured)'}"
         log_info "API Gateway URL: ${api_gateway_url:-'(not configured)'}"
     fi
+    if [[ "$agent_type" == "remediator" ]]; then
+        log_info "Code Interpreter ID: ${code_interpreter_id:-'(not configured)'}"
+    fi
     log_info "Deploy Mode: ${DEPLOY_MODE}"
 
     if [[ "$DEPLOY_MODE" == "api" ]]; then
-        deploy_agent_api "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url"
+        deploy_agent_api "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url" "$code_interpreter_id"
     else
-        deploy_agent_cli "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url"
+        deploy_agent_cli "$agent_type" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url" "$code_interpreter_id"
     fi
 }
 
@@ -512,6 +559,10 @@ main() {
         log_info "API Gateway URL: ${api_gateway_url}"
     fi
 
+    # Get remediator-specific configuration
+    local code_interpreter_id=$(get_code_interpreter_id)
+    log_info "Code Interpreter ID: ${code_interpreter_id}"
+
     # Get existing validator URL (for remediator A2A)
     local validator_runtime_url=$(get_validator_runtime_url)
     if [[ -n "$validator_runtime_url" ]]; then
@@ -533,7 +584,7 @@ main() {
 
         ecr_uri=$(get_ecr_uri "$agent")
 
-        if deploy_agent "$agent" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url"; then
+        if deploy_agent "$agent" "$ecr_uri" "$runtime_role_arn" "$asr_bucket" "$memory_id" "$approval_handler_arn" "$api_gateway_url" "$code_interpreter_id"; then
             success_agents="${success_agents} ${agent}"
             success_count=$((success_count + 1))
         else

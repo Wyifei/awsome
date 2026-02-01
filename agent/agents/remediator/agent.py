@@ -17,7 +17,7 @@ from shared.tools.memory_tools import (
     get_rollback_from_memory,
     save_remediation_result,
 )
-from shared.tools.execution import execute_code, save_task_event
+from shared.tools.execution import execute_code, save_task_event, set_audit_context
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.a2a_tools import invoke_validator_agent
 from shared.tools.code_check import pre_execution_check
@@ -67,13 +67,15 @@ prerequisites 和 post_actions 是给人工处理的，不在你的职责范围�
    - task_id, resource_arn, resource_type, pre_state, rollback_code
    - **如果跳过此步骤，用户无法回滚！**
 
-## Phase D: 执行修复 (含错误重试机制)
+## Phase D: 执行修复 (含错误重试机制，同一沙箱 Session)
 6. **验证修复代码**: 使用 pre_execution_check 工具
 7. **执行修复代码**: 使用 execute_code 工具
    - 从 Finding 中提取 Region，传递给 `target_region` 参数
+   - **首次执行时设置 `close_session=False`**，保持 session 用于可能的重试
    - 沙盒环境会设置 AWS_REGION 和 TARGET_REGION 环境变量
-8. **[重要] 错误分析与重试** (最多重试 2 次):
-   如果 execute_code 返回 exit_code != 0:
+
+8. **[重要] 错误分析与重试** (最多重试 2 次，在同一沙箱 Session 中):
+   如果 execute_code 返回 success=False:
    a. **分析错误原因**: 仔细阅读 stderr 中的错误信息
    b. **诊断问题**: 常见问题包括:
       - 变量作用域问题 (如 `name 'xxx' is not defined`)
@@ -81,15 +83,30 @@ prerequisites 和 post_actions 是给人工处理的，不在你的职责范围�
       - API 参数错误
       - 权限不足
    c. **修复代码**: 根据错误原因修改代码
-   d. **重新执行**: 再次调用 execute_code
+   d. **重新执行**: 使用返回的 `session_id` 在同一沙箱中重试
+      - 第一次重试: `execute_code(fixed_code, session_id=xxx, close_session=False)`
+      - 第二次重试(最后): `execute_code(fixed_code, session_id=xxx, close_session=True)`
 
-   **重试示例**:
+   **Session 复用示例**:
    ```
-   第一次执行失败: "name 'region' is not defined"
-   → 分析: 变量 region 在函数内部使用但定义在外部，作用域问题
-   → 修复: 将 region 定义移到函数内部，或使用 global 声明
-   → 重新执行修复后的代码
+   # 首次执行 (保持 session)
+   result1 = execute_code(code, target_region="ap-northeast-1", close_session=False)
+   # result1 = {"success": False, "stderr": "name 'region' is not defined", "session_id": "abc123"}
+
+   # 分析错误: 变量 region 在函数内使用但定义在外部
+   # 修复: 将 region 定义移到函数内部
+
+   # 第一次重试 (复用 session)
+   result2 = execute_code(fixed_code, session_id="abc123", close_session=False)
+   # 如果仍然失败，继续修复...
+
+   # 第二次重试 (最后一次，关闭 session)
+   result3 = execute_code(fixed_code2, session_id="abc123", close_session=True)
    ```
+
+9. **关闭沙箱 Session**:
+   - 如果执行成功且未关闭 session，调用 `execute_code(code="", session_id=xxx, close_session=True)` 关闭
+   - 如果最后一次重试，设置 `close_session=True` 自动关闭
 
 ## Phase E: 保存和通知 (无论成功失败都执行)
 9. **保存修复结果**: 使用 save_remediation_result 工具
@@ -460,39 +477,50 @@ Execute remediation for task {task_id}:
    - rollback_code: the code from step 4
    - **If you skip this step, user CANNOT rollback!**
 
-**PHASE D: Execute Remediation (with retry on failure)**
+**PHASE D: Execute Remediation (with retry in same sandbox session)**
 6. Validate remediation code using pre_execution_check tool
    - If safe_to_execute=False, regenerate code and repeat step 6
 7. Execute remediation code using execute_code tool:
    - 从 finding.Region 提取 region，传递给 target_region 参数
+   - **IMPORTANT**: Set `close_session=False` to keep session open for potential retries
    - 沙盒环境会自动设置 AWS_REGION 环境变量
-8. **[IMPORTANT] If execution fails (exit_code != 0), RETRY up to 2 times:**
+8. **[IMPORTANT] If execution fails (success=False), RETRY up to 2 times in SAME session:**
    a. **Analyze the error**: Read stderr carefully to understand the root cause
       - Common errors: variable scope issues, import errors, API errors
       - Example: "name 'region' is not defined" → variable defined outside function
    b. **Fix the code**: Modify the code to address the specific error
-      - Move variable definitions inside the function
-      - Add missing imports
-      - Fix API parameter errors
-   c. **Re-execute**: Call execute_code again with the fixed code
-   d. **Repeat if needed**: If still failing, analyze and fix again (max 2 retries)
+   c. **Re-execute with session_id**: Call execute_code with the returned session_id
+      - First retry: `execute_code(fixed_code, session_id=xxx, close_session=False)`
+      - Last retry: `execute_code(fixed_code, session_id=xxx, close_session=True)`
+   d. **Repeat if needed**: Max 2 retries, then close session
 
-   **Retry Example:**
+   **Session Reuse Example:**
    ```
-   Attempt 1: Failed - "name 'region' is not defined"
-   → Fix: Move `region = os.environ.get(...)` inside the function
-   Attempt 2: Execute fixed code
+   # First attempt (keep session open)
+   result1 = execute_code(code, target_region="ap-northeast-1", close_session=False)
+   # Returns: {{"success": False, "session_id": "abc123", "stderr": "..."}}
+
+   # Fix code based on error...
+
+   # Retry 1 (reuse session)
+   result2 = execute_code(fixed_code, session_id="abc123", close_session=False)
+
+   # Retry 2 (final, close session)
+   result3 = execute_code(fixed_code2, session_id="abc123", close_session=True)
    ```
+
+9. **Close session after success**: If execution succeeded with close_session=False:
+   - Call `execute_code(code="", session_id=xxx, close_session=True)` to close the session
 
 **PHASE E: Save and Notify (ALWAYS execute after all retries)**
-9. Save remediation result using save_remediation_result tool:
-   - task_id: {task_id}
-   - resource_arn: {resource_arn}
-   - generated_code: the FINAL remediation code (after any fixes)
-   - execution_result: the result from last execution attempt
-   - **IMPORTANT**: Save even if all retries failed
+10. Save remediation result using save_remediation_result tool:
+    - task_id: {task_id}
+    - resource_arn: {resource_arn}
+    - generated_code: the FINAL remediation code (after any fixes)
+    - execution_result: the result from last execution attempt
+    - **IMPORTANT**: Save even if all retries failed
 
-10. **[ALWAYS]** Call Validator using invoke_validator_agent tool:
+11. **[ALWAYS]** Call Validator using invoke_validator_agent tool:
    - task_id: {task_id}
    - resource_arn: {resource_arn}
    - resource_type: {resource_type}
@@ -506,10 +534,11 @@ Execute remediation for task {task_id}:
 
 **CHECKLIST before finishing:**
 - [ ] Did you call save_rollback_to_memory? (Step 5 - MANDATORY)
-- [ ] Did you pass `target_region` to execute_code? (Step 7)
-- [ ] Did you execute code and retry on failure? (Steps 7-8, up to 2 retries)
-- [ ] Did you call save_remediation_result? (Step 9 - even if all retries failed)
-- [ ] Did you call invoke_validator_agent? (Step 10 - ALWAYS, even if failed)
+- [ ] Did you pass `target_region` and `close_session=False` on first execute_code? (Step 7)
+- [ ] Did you retry with `session_id` on failure? (Step 8, up to 2 retries in same session)
+- [ ] Did you close the session? (Step 9, set `close_session=True` on last call)
+- [ ] Did you call save_remediation_result? (Step 10 - even if all retries failed)
+- [ ] Did you call invoke_validator_agent? (Step 11 - ALWAYS, even if failed)
 
 **IMPORTANT**:
 - 从 get_analysis_context 返回的 finding 中提取所需信息（Region、资源 ARN 等）
@@ -520,6 +549,15 @@ Return a JSON summary with rollback_data_saved, execution_result, and validator_
 """
 
     logger.info(f"Running Remediator Agent for task {task_id}, is_rollback={is_rollback}")
+
+    # 设置审计上下文，用于 execute_code 自动上传审计日志到 S3
+    set_audit_context(
+        task_id=task_id,
+        control_id=control_id,
+        resource_arn=resource_arn,
+        resource_type=resource_type,
+        is_rollback=is_rollback
+    )
 
     try:
         result = agent(prompt)

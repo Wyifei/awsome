@@ -154,21 +154,6 @@ variable "validator_runtime_arn" {
 }
 
 #------------------------------------------------------------------------------
-# Code Interpreter Configuration
-#------------------------------------------------------------------------------
-
-variable "code_interpreter_network_mode" {
-  description = "Code Interpreter network mode: PUBLIC or SANDBOX"
-  type        = string
-  default     = "PUBLIC"
-
-  validation {
-    condition     = contains(["PUBLIC", "SANDBOX"], var.code_interpreter_network_mode)
-    error_message = "Network mode must be PUBLIC or SANDBOX"
-  }
-}
-
-#------------------------------------------------------------------------------
 # Email Configuration
 #------------------------------------------------------------------------------
 

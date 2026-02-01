@@ -59,6 +59,16 @@ output "asr_playbooks_bucket_arn" {
   value       = aws_s3_bucket.asr_playbooks.arn
 }
 
+output "remediation_audit_bucket_name" {
+  description = "Remediation Audit S3 bucket name"
+  value       = aws_s3_bucket.remediation_audit.id
+}
+
+output "remediation_audit_bucket_arn" {
+  description = "Remediation Audit S3 bucket ARN"
+  value       = aws_s3_bucket.remediation_audit.arn
+}
+
 #------------------------------------------------------------------------------
 # Lambda
 #------------------------------------------------------------------------------
@@ -158,4 +168,13 @@ output "validator_agent_ecr_url" {
 output "agentcore_runtime_role_arn" {
   description = "AgentCore Runtime IAM role ARN"
   value       = aws_iam_role.agentcore_runtime.arn
+}
+
+#------------------------------------------------------------------------------
+# AgentCore Configuration
+#------------------------------------------------------------------------------
+
+output "agentcore_memory_id" {
+  description = "AgentCore Memory ID for session management"
+  value       = var.agentcore_memory_id
 }

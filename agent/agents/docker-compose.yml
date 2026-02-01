@@ -22,8 +22,11 @@ services:
       - TOKENS_TABLE=${TOKENS_TABLE:-shara-dev-approval-tokens}
       # S3 Buckets
       - ASR_PLAYBOOKS_BUCKET=${ASR_PLAYBOOKS_BUCKET:-shara-dev-asr-playbooks-870414140965}
+      - REMEDIATION_AUDIT_BUCKET=${REMEDIATION_AUDIT_BUCKET:-shara-dev-remediation-audit-870414140965}
       # AgentCore Memory
       - AGENTCORE_MEMORY_ID=${AGENTCORE_MEMORY_ID:-}
+      # AgentCore Code Interpreter (for secure sandbox execution)
+      - CODE_INTERPRETER_ID=${CODE_INTERPRETER_ID:-shara_interpreter_tool-sGd1u5rIet}
       # LLM
       - MODEL_ID=${MODEL_ID:-anthropic.claude-sonnet-4-20250514-v1:0}
       # Agent Type

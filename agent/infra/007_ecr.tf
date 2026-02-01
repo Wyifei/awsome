@@ -249,6 +249,7 @@ resource "aws_iam_role_policy" "agentcore_s3" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ASRPlaybooksRead"
         Effect = "Allow"
         Action = [
           "s3:GetObject",
@@ -257,6 +258,19 @@ resource "aws_iam_role_policy" "agentcore_s3" {
         Resource = [
           aws_s3_bucket.asr_playbooks.arn,
           "${aws_s3_bucket.asr_playbooks.arn}/*"
+        ]
+      },
+      {
+        Sid    = "RemediationAuditWrite"
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          aws_s3_bucket.remediation_audit.arn,
+          "${aws_s3_bucket.remediation_audit.arn}/*"
         ]
       }
     ]
