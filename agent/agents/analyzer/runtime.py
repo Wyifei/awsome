@@ -8,7 +8,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, List, Any
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -26,6 +26,74 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Global MCP client and tools
+_aws_mcp_client = None
+_aws_mcp_tools: List[Any] = []
+
+
+def init_aws_mcp_server():
+    """Initialize AWS Documentation MCP Server at runtime startup."""
+    global _aws_mcp_client, _aws_mcp_tools
+
+    try:
+        from strands.tools.mcp import MCPClient
+        from mcp.client.stdio import stdio_client, StdioServerParameters
+
+        logger.info("Initializing AWS Documentation MCP Server...")
+
+        # AWS Documentation MCP Server 启动参数
+        # 使用安装后的 console script 启动
+        server_params = StdioServerParameters(
+            command="awslabs.aws-documentation-mcp-server",
+            args=[],
+            env={
+                **os.environ,  # 继承当前环境变量
+                "FASTMCP_LOG_LEVEL": "ERROR",
+                "AWS_DOCUMENTATION_PARTITION": "aws",
+            }
+        )
+
+        # 创建 MCPClient
+        _aws_mcp_client = MCPClient(
+            transport_callable=lambda: stdio_client(server_params),
+            startup_timeout=60,
+            prefix="aws_doc"  # 工具名前缀: aws_doc_read_documentation, aws_doc_search_documentation, etc.
+        )
+
+        # 启动 MCP Server
+        _aws_mcp_client.__enter__()
+
+        # 获取所有工具
+        _aws_mcp_tools = _aws_mcp_client.list_tools_sync()
+
+        tool_names = [t.tool_name if hasattr(t, 'tool_name') else str(t) for t in _aws_mcp_tools]
+        logger.info(f"AWS Documentation MCP Server initialized successfully. Available tools: {tool_names}")
+
+    except Exception as e:
+        logger.warning(f"Failed to initialize AWS Documentation MCP Server: {e}. Agent will run without MCP tools.")
+        _aws_mcp_client = None
+        _aws_mcp_tools = []
+
+
+def shutdown_aws_mcp_server():
+    """Shutdown AWS MCP Server."""
+    global _aws_mcp_client, _aws_mcp_tools
+
+    if _aws_mcp_client:
+        try:
+            _aws_mcp_client.__exit__(None, None, None)
+            logger.info("AWS MCP Server shutdown successfully")
+        except Exception as e:
+            logger.warning(f"Error shutting down AWS MCP Server: {e}")
+        finally:
+            _aws_mcp_client = None
+            _aws_mcp_tools = []
+
+
+def get_aws_mcp_tools() -> List[Any]:
+    """Get AWS MCP tools for agent use."""
+    return _aws_mcp_tools
 
 
 class InvocationRequest(BaseModel):
@@ -51,7 +119,14 @@ class InvocationResponse(BaseModel):
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
     logger.info("Starting Analyzer Agent Runtime")
+
+    # Initialize AWS MCP Server
+    init_aws_mcp_server()
+
     yield
+
+    # Shutdown AWS MCP Server
+    shutdown_aws_mcp_server()
     logger.info("Shutting down Analyzer Agent Runtime")
 
 
@@ -124,13 +199,19 @@ async def invocations(request: Request):
 
         logger.info(f"Creating Analyzer Agent: task_id={task_id}, memory_session_id={memory_session_id}")
 
+        # Get AWS MCP tools
+        mcp_tools = get_aws_mcp_tools()
+        if mcp_tools:
+            logger.info(f"Including {len(mcp_tools)} AWS MCP tools")
+
         # Create agent for this request
         agent = create_analyzer_agent(
             task_id=task_id,
             memory_id=memory_id,
             session_id=memory_session_id,  # 传入 session_id
             region=config.region,
-            actor_id=actor_id
+            actor_id=actor_id,
+            mcp_tools=mcp_tools  # Pass MCP tools
         )
 
         # Run analyzer

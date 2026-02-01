@@ -214,6 +214,41 @@ save_analysis_result(
 
 当 `can_remediate: false` 时，必须填写 `cannot_remediate_reason` 说明原因。
 
+# AWS Documentation MCP 工具 (可选)
+如果你有 AWS Documentation MCP 工具可用 (工具名以 `aws_doc_` 前缀开头)，可以在以下情况使用：
+
+## 何时使用 AWS Documentation MCP 工具
+1. **没有 ASR Playbook** - fetch_asr_playbook 返回 matched=false
+2. **没有相似经验** - search_similar_findings 返回空结果
+3. **不确定修复方法** - 对于不熟悉的 Control ID 或资源类型
+4. **需要了解 AWS 最佳实践** - 确认正确的安全配置方式
+
+## 可用的 MCP 工具
+- `aws_doc_search_documentation`: 搜索 AWS 官方文档，获取修复指南和最佳实践
+- `aws_doc_read_documentation`: 读取特定 AWS 文档页面获取详细信息
+- `aws_doc_recommend`: 获取相关文档推荐
+
+## 使用示例
+当遇到不熟悉的 Control ID 时：
+```
+aws_doc_search_documentation(
+  search_phrase="Security Hub <Control ID> remediation best practices"
+)
+```
+
+当需要阅读特定文档时：
+```
+aws_doc_read_documentation(
+  url="https://docs.aws.amazon.com/console/securityhub/<Control ID>/remediation"
+)
+```
+
+## 注意事项
+- MCP 工具是**辅助**工具，不是必须调用的
+- 优先使用 fetch_asr_playbook 和 search_similar_findings
+- 只有在缺乏信息时才查询 AWS 文档
+- 搜索时使用英文关键词效果更好
+
 # asr_match 字段说明
 ASR (Automated Security Response) 匹配基于 Control ID 精确匹配：
 - **matched=true**: 找到对应的 ASR Playbook，confidence 固定为 **1.0**（精确匹配）
@@ -235,7 +270,8 @@ def create_analyzer_agent(
     memory_id: str,
     session_id: str,
     region: Optional[str] = None,
-    actor_id: Optional[str] = None
+    actor_id: Optional[str] = None,
+    mcp_tools: Optional[list] = None
 ) -> Agent:
     """创建 Analyzer Agent 实例。
 
@@ -245,6 +281,7 @@ def create_analyzer_agent(
         session_id: Memory Session ID (从 Lambda 传入，确保与 Phase 2 共享)
         region: AWS Region (可选，默认从环境变量获取)
         actor_id: Actor ID (可选，默认使用 task_id)
+        mcp_tools: AWS MCP Server 提供的工具列表 (可选)
 
     Returns:
         Agent: 配置好的 Analyzer Agent
@@ -314,16 +351,24 @@ def create_analyzer_agent(
         streaming=False
     )
 
+    # 构建工具列表
+    tools = [
+        get_resource_config,  # 第一个必须调用的工具
+        fetch_asr_playbook,
+        search_similar_findings,
+        save_analysis_result,  # 保存分析结果供 Phase 2 使用
+    ]
+
+    # 添加 AWS MCP 工具 (如果可用)
+    if mcp_tools:
+        tools.extend(mcp_tools)
+        logger.info(f"Added {len(mcp_tools)} AWS MCP tools to agent")
+
     # 创建 Agent
     agent = Agent(
         model=model,
         system_prompt=ANALYZER_SYSTEM_PROMPT,
-        tools=[
-            get_resource_config,  # 第一个必须调用的工具
-            fetch_asr_playbook,
-            search_similar_findings,
-            save_analysis_result,  # 保存分析结果供 Phase 2 使用
-        ],
+        tools=tools,
         session_manager=session_manager,
     )
 
