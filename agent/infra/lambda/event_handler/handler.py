@@ -357,6 +357,23 @@ def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
     severity = finding.get('Severity', {}).get('Label', 'MEDIUM')
     control_id = classification['control_id']
 
+    # 检查是否已存在该 Finding 的 task（24小时内未过期）
+    existing_tasks = tasks_table.query(
+        IndexName='GSI2',
+        KeyConditionExpression='GSI2PK = :pk',
+        ExpressionAttributeValues={':pk': f'FINDING#{finding_id}'},
+        Limit=1
+    )
+    if existing_tasks.get('Items'):
+        existing_task = existing_tasks['Items'][0]
+        logger.info(f"Skipping duplicate finding {finding_id}, existing task: {existing_task.get('taskId')}")
+        return {
+            'finding_id': finding_id,
+            'status': 'skipped',
+            'reason': 'duplicate',
+            'existing_task_id': existing_task.get('taskId')
+        }
+
     # 创建任务
     task_id = str(uuid.uuid4())
     memory_session_id = f"session-task-{task_id}"
@@ -366,6 +383,9 @@ def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
     resource = resources[0] if resources else {}
 
     now = datetime.now(timezone.utc).isoformat()
+
+    # 计算 TTL (与审批链接有效期一致)
+    task_ttl = int((datetime.now(timezone.utc) + timedelta(hours=APPROVAL_EXPIRY_HOURS)).timestamp())
 
     task_item = {
         # Keys
@@ -401,7 +421,10 @@ def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
         'createdAt': now,
         'updatedAt': now,
         'version': 1,
-        'traceId': context.aws_request_id if context else None
+        'traceId': context.aws_request_id if context else None,
+
+        # TTL - 与审批链接有效期一致 (24小时)
+        'ttl': task_ttl
     }
 
     # 设置初始状态为 analyzing
@@ -1005,6 +1028,13 @@ def update_task_with_analysis(task_id: str, analysis_result: dict):
     """更新任务的分析结果（只保存控制相关字段）"""
     now = datetime.now(timezone.utc).isoformat()
 
+    # 获取任务元数据以获取 findingId
+    task_response = tasks_table.get_item(
+        Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'}
+    )
+    task_metadata = task_response.get('Item', {})
+    finding_id = task_metadata.get('findingId', '')
+
     # 解析分析结果
     response = analysis_result.get('response', '{}')
     try:
@@ -1074,7 +1104,7 @@ def update_task_with_analysis(task_id: str, analysis_result: dict):
         # 仍然更新任务状态，但不发送邮件
         return
 
-    email_sent = send_approval_email(task_id, {'response': analysis_data})
+    email_sent = send_approval_email(task_id, {'response': analysis_data}, finding_id)
     if email_sent:
         logger.info(f"Approval email sent for task {task_id}")
     else:
@@ -1177,12 +1207,13 @@ def generate_approval_token(task_id: str, action: str) -> str:
     return token
 
 
-def send_approval_email(task_id: str, analysis_result: dict) -> bool:
+def send_approval_email(task_id: str, analysis_result: dict, finding_id: str = '') -> bool:
     """发送审批邮件
 
     Args:
         task_id: 任务 ID
         analysis_result: Analyzer Agent 的分析结果
+        finding_id: Security Hub Finding ID
 
     Returns:
         bool: 是否发送成功
@@ -1214,7 +1245,7 @@ def send_approval_email(task_id: str, analysis_result: dict) -> bool:
         can_remediate = response.get('remediation', {}).get('can_remediate', True)
 
         # 格式化邮件内容
-        email_body = format_approval_email(task_id, response, approve_url, reject_url)
+        email_body = format_approval_email(task_id, response, approve_url, reject_url, finding_id)
 
         # 根据是否可修复设置邮件主题
         control_id = response.get("analysis", {}).get("control_id", task_id)
@@ -1297,7 +1328,8 @@ def format_approval_email(
     task_id: str,
     analysis_data: dict,
     approve_url: str,
-    reject_url: str
+    reject_url: str,
+    finding_id: str = ''
 ) -> str:
     """格式化审批邮件内容
 
@@ -1306,6 +1338,7 @@ def format_approval_email(
         analysis_data: 分析结果数据
         approve_url: 批准链接
         reject_url: 拒绝链接
+        finding_id: Security Hub Finding ID
 
     Returns:
         str: 格式化的邮件内容
@@ -1344,6 +1377,20 @@ def format_approval_email(
     rollback_display = '✅ 是' if remediation.get('rollback_available') else '❌ 否'
     destructive_display = '❌ 是 (请谨慎!)' if remediation.get('is_destructive') else '✅ 否'
 
+    # 处理 Finding ID 显示
+    # 从 arn:aws:securityhub:{region}:{account}:xxx 中提取 xxx 部分
+    finding_id_display = 'N/A'
+    if finding_id:
+        if finding_id.startswith('arn:aws:securityhub:'):
+            # 提取 ARN 最后部分: security-control/Config.1/finding/uuid
+            parts = finding_id.split(':', 5)  # 最多分割5次
+            if len(parts) >= 6:
+                finding_id_display = parts[5]  # 取最后部分
+            else:
+                finding_id_display = finding_id
+        else:
+            finding_id_display = finding_id
+
     # 构建邮件内容
     lines = [
         '═' * 70,
@@ -1353,6 +1400,7 @@ def format_approval_email(
         '📋 基本信息',
         '─' * 70,
         f'  任务 ID:        {task_id}',
+        f'  Finding ID:     {finding_id_display}',
         f'  Control ID:     {analysis.get("control_id", "N/A")}',
         f'  问题类型:       {analysis.get("finding_type", "N/A")}',
         f'  资源类型:       {analysis.get("resource_type", "N/A")}',
