@@ -609,7 +609,7 @@ def handle_send_result_email(event: dict, context) -> dict:
         else:
             subject = f'[SHARA] ⚠️ 修复完成(需验证) - {control_id}'
 
-        # 发送邮件
+        # 发送邮件 (HTML 格式)
         ses_client.send_email(
             Source=SENDER_EMAIL,
             Destination={'ToAddresses': [RESULT_EMAIL]},
@@ -619,7 +619,7 @@ def handle_send_result_email(event: dict, context) -> dict:
                     'Charset': 'UTF-8'
                 },
                 'Body': {
-                    'Text': {
+                    'Html': {
                         'Data': email_body,
                         'Charset': 'UTF-8'
                     }
@@ -695,38 +695,19 @@ def format_result_email_body(
     error_message: Optional[str],
     task: Optional[dict]
 ) -> str:
-    """格式化结果邮件内容"""
-    import unicodedata
-
-    def get_display_width(s: str) -> int:
-        """计算字符串的显示宽度"""
-        width = 0
-        for char in s:
-            if unicodedata.east_asian_width(char) in ('F', 'W'):
-                width += 2
-            elif ord(char) >= 0x1F300:
-                width += 2
-            else:
-                width += 1
-        return width
-
-    def pad_to_width(s: str, target_width: int) -> str:
-        """将字符串填充到指定的显示宽度"""
-        current_width = get_display_width(s)
-        padding = target_width - current_width
-        if padding > 0:
-            return s + ' ' * padding
-        return s
+    """格式化结果邮件内容 (HTML 格式)"""
 
     # 确定操作类型和状态
     if rollback_failed:
         operation = "回滚"
         status_icon = "❌"
         status_text = "失败"
+        header_color = "#dc3545"
     elif is_rollback:
         operation = "回滚"
         status_icon = "✅"
         status_text = "成功"
+        header_color = "#17a2b8"
     else:
         operation = "修复"
         validation_passed = validation.get('passed', False)
@@ -734,104 +715,166 @@ def format_result_email_body(
         if validation_passed and code_review_passed:
             status_icon = "✅"
             status_text = "成功"
+            header_color = "#28a745"
         else:
             status_icon = "⚠️"
             status_text = "完成(需验证)"
+            header_color = "#ffc107"
 
     # 代码审查结果
     code_status = code_review.get('status', 'unknown')
-    code_icons = {'passed': '✅', 'warning': '⚠️', 'rejected': '❌'}
-    code_icon = code_icons.get(code_status, '❓')
+    code_status_colors = {
+        'passed': ('#28a745', '#fff'),
+        'warning': ('#ffc107', '#000'),
+        'rejected': ('#dc3545', '#fff')
+    }
+    code_bg, code_fg = code_status_colors.get(code_status, ('#6c757d', '#fff'))
     risk_level = code_review.get('risk_level', 'unknown')
+    risk_colors = {
+        'low': ('#28a745', '#fff'),
+        'medium': ('#ffc107', '#000'),
+        'high': ('#dc3545', '#fff'),
+        'critical': ('#dc3545', '#fff')
+    }
+    risk_bg, risk_fg = risk_colors.get(risk_level.lower(), ('#6c757d', '#fff'))
     issues_count = code_review.get('issues_count', 0)
 
     # 验证结果
     validation_passed = validation.get('passed', False)
-    validation_icon = '✅' if validation_passed else '❌'
     checks_count = validation.get('checks_count', 0)
 
-    lines = [
-        '═' * 70,
-        f'           {status_icon} SHARA {operation}结果通知 - {status_text}',
-        '═' * 70,
-        '',
-        '📋 任务信息',
-        '─' * 70,
-        f'  任务 ID:      {task_id}',
-        f'  Control ID:   {control_id}',
-        f'  资源:         {resource_arn}',
-        f'  操作类型:     {operation}',
-        '',
-    ]
+    # HTML 模板
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 700px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: {header_color}; color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }}
+        .header h1 {{ margin: 0; font-size: 22px; }}
+        .content {{ background: #fff; border: 1px solid #e0e0e0; border-top: none; padding: 20px; border-radius: 0 0 8px 8px; }}
+        .section {{ margin-bottom: 24px; }}
+        .section-title {{ font-size: 15px; font-weight: 600; color: #333; border-bottom: 2px solid #1a73e8; padding-bottom: 8px; margin-bottom: 12px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        td {{ padding: 8px 12px; vertical-align: top; }}
+        .label {{ font-weight: 500; color: #666; width: 120px; }}
+        .value {{ color: #333; }}
+        .badge {{ display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; }}
+        .result-box {{ background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 16px; margin-top: 8px; }}
+        .result-row {{ margin-bottom: 12px; }}
+        .result-row:last-child {{ margin-bottom: 0; }}
+        .result-label {{ font-weight: 500; color: #666; display: inline-block; width: 100px; }}
+        .btn {{ display: inline-block; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; }}
+        .btn-rollback {{ background: #ffc107; color: #000 !important; }}
+        .btn-container {{ text-align: center; margin: 24px 0; }}
+        .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e0e0e0; }}
+        .error-box {{ background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; padding: 12px; margin: 16px 0; color: #721c24; }}
+        .info-box {{ background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 6px; padding: 12px; margin: 16px 0; color: #0c5460; }}
+        code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 13px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{status_icon} SHARA {operation}结果通知 - {status_text}</h1>
+    </div>
+    <div class="content">
+        <!-- 任务信息 -->
+        <div class="section">
+            <div class="section-title">📋 任务信息</div>
+            <table>
+                <tr><td class="label">任务 ID</td><td class="value"><code>{task_id}</code></td></tr>
+                <tr><td class="label">Control ID</td><td class="value"><strong>{control_id}</strong></td></tr>
+                <tr><td class="label">资源</td><td class="value"><code style="word-break: break-all;">{resource_arn}</code></td></tr>
+                <tr><td class="label">操作类型</td><td class="value">{operation}</td></tr>
+            </table>
+        </div>
+'''
 
     # 错误信息 (如果有)
     if error_message:
-        lines.extend([
-            '❌ 错误信息',
-            '─' * 70,
-            f'  {error_message}',
-            '',
-        ])
+        html += f'''
+        <!-- 错误信息 -->
+        <div class="section">
+            <div class="section-title">❌ 错误信息</div>
+            <div class="error-box">
+                {error_message}
+            </div>
+        </div>
+'''
 
     # 代码审查结果
-    lines.extend([
-        '🔍 代码审查结果',
-        '─' * 70,
-    ])
+    html += f'''
+        <!-- 代码审查结果 -->
+        <div class="section">
+            <div class="section-title">🔍 代码审查结果</div>
+            <div class="result-box">
+                <div class="result-row">
+                    <span class="result-label">状态</span>
+                    <span class="badge" style="background:{code_bg};color:{code_fg}">{code_status.upper()}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">风险等级</span>
+                    <span class="badge" style="background:{risk_bg};color:{risk_fg}">{risk_level.upper()}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">问题数量</span>
+                    <span>{issues_count}</span>
+                </div>
+            </div>
+        </div>
 
-    box_width = 50
-    lines.extend([
-        '  ┌' + '─' * box_width + '┐',
-        '  │' + pad_to_width(f'  状态:       {code_icon} {code_status.upper()}', box_width) + '│',
-        '  │' + pad_to_width(f'  风险等级:   {risk_level.upper()}', box_width) + '│',
-        '  │' + pad_to_width(f'  问题数量:   {issues_count}', box_width) + '│',
-        '  └' + '─' * box_width + '┘',
-        '',
-    ])
-
-    # 验证结果
-    lines.extend([
-        '✓ 验证结果',
-        '─' * 70,
-    ])
-
-    lines.extend([
-        '  ┌' + '─' * box_width + '┐',
-        '  │' + pad_to_width(f'  验证状态:   {validation_icon} {"通过" if validation_passed else "未通过"}', box_width) + '│',
-        '  │' + pad_to_width(f'  检查项数:   {checks_count}', box_width) + '│',
-        '  └' + '─' * box_width + '┘',
-        '',
-    ])
+        <!-- 验证结果 -->
+        <div class="section">
+            <div class="section-title">✓ 验证结果</div>
+            <div class="result-box">
+                <div class="result-row">
+                    <span class="result-label">验证状态</span>
+                    <span class="badge" style="background:{'#28a745' if validation_passed else '#dc3545'};color:#fff">{'✅ 通过' if validation_passed else '❌ 未通过'}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">检查项数</span>
+                    <span>{checks_count}</span>
+                </div>
+            </div>
+        </div>
+'''
 
     # 回滚链接 (仅正常修复时显示)
     if rollback_url and not is_rollback:
-        lines.extend([
-            '↩️ 回滚操作',
-            '─' * 70,
-            '  如果此修复造成问题，您可以点击以下链接回滚:',
-            '',
-            f'  回滚链接: {rollback_url}',
-            '',
-            f'  ⏰ 此回滚链接将在 {ROLLBACK_TOKEN_EXPIRY_HOURS} 小时后过期',
-            '',
-        ])
+        html += f'''
+        <!-- 回滚操作 -->
+        <div class="section">
+            <div class="section-title">↩️ 回滚操作</div>
+            <p>如果此修复造成问题，您可以点击以下按钮回滚:</p>
+            <div class="btn-container">
+                <a href="{rollback_url}" class="btn btn-rollback">↩️ 回滚此修复</a>
+            </div>
+            <p style="text-align: center; color: #666; font-size: 12px;">⏰ 此回滚链接将在 {ROLLBACK_TOKEN_EXPIRY_HOURS} 小时后过期</p>
+        </div>
+'''
     elif is_rollback:
-        lines.extend([
-            '📝 备注',
-            '─' * 70,
-            '  此为回滚操作结果通知。',
-            '  回滚操作不提供二次回滚链接。',
-            '',
-        ])
+        html += '''
+        <!-- 备注 -->
+        <div class="section">
+            <div class="section-title">📝 备注</div>
+            <div class="info-box">
+                <p style="margin: 0;">此为回滚操作结果通知。</p>
+                <p style="margin: 8px 0 0 0;">回滚操作不提供二次回滚链接。</p>
+            </div>
+        </div>
+'''
 
-    lines.extend([
-        '═' * 70,
-        '                SHARA - Security Hub Auto-Remediation Agent',
-        '                          Powered by AWS Bedrock',
-        '═' * 70,
-    ])
+    html += '''
+        <!-- 页脚 -->
+        <div class="footer">
+            <p>SHARA - Security Hub Auto-Remediation Agent</p>
+            <p>Powered by AWS Bedrock</p>
+        </div>
+    </div>
+</body>
+</html>'''
 
-    return '\n'.join(lines)
+    return html
 
 
 def run_phase2_remediation(

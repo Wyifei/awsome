@@ -1254,7 +1254,7 @@ def send_approval_email(task_id: str, analysis_result: dict, finding_id: str = '
         else:
             email_subject = f'[SHARA] 安全发现通知 (无法自动修复) - {control_id}'
 
-        # 发送邮件
+        # 发送邮件 (HTML 格式)
         ses_client.send_email(
             Source=SENDER_EMAIL,
             Destination={'ToAddresses': [APPROVAL_EMAIL]},
@@ -1264,7 +1264,7 @@ def send_approval_email(task_id: str, analysis_result: dict, finding_id: str = '
                     'Charset': 'UTF-8'
                 },
                 'Body': {
-                    'Text': {
+                    'Html': {
                         'Data': email_body,
                         'Charset': 'UTF-8'
                     }
@@ -1283,47 +1283,6 @@ def send_approval_email(task_id: str, analysis_result: dict, finding_id: str = '
         return False
 
 
-def get_display_width(s: str) -> int:
-    """计算字符串的显示宽度（考虑中文字符和 emoji）
-
-    中文字符和大多数 emoji 占用 2 个显示宽度，ASCII 字符占用 1 个。
-
-    Args:
-        s: 输入字符串
-
-    Returns:
-        int: 显示宽度
-    """
-    import unicodedata
-    width = 0
-    for char in s:
-        # emoji 和中文字符占 2 个宽度
-        if unicodedata.east_asian_width(char) in ('F', 'W'):
-            width += 2
-        elif ord(char) >= 0x1F300:  # emoji 范围
-            width += 2
-        else:
-            width += 1
-    return width
-
-
-def pad_to_width(s: str, target_width: int) -> str:
-    """将字符串填充到指定的显示宽度
-
-    Args:
-        s: 输入字符串
-        target_width: 目标显示宽度
-
-    Returns:
-        str: 填充后的字符串
-    """
-    current_width = get_display_width(s)
-    padding = target_width - current_width
-    if padding > 0:
-        return s + ' ' * padding
-    return s
-
-
 def format_approval_email(
     task_id: str,
     analysis_data: dict,
@@ -1331,7 +1290,7 @@ def format_approval_email(
     reject_url: str,
     finding_id: str = ''
 ) -> str:
-    """格式化审批邮件内容
+    """格式化审批邮件内容 (HTML 格式)
 
     Args:
         task_id: 任务 ID
@@ -1341,7 +1300,7 @@ def format_approval_email(
         finding_id: Security Hub Finding ID
 
     Returns:
-        str: 格式化的邮件内容
+        str: 格式化的 HTML 邮件内容
     """
     analysis = analysis_data.get('analysis', {})
     remediation = analysis_data.get('remediation', {})
@@ -1354,294 +1313,291 @@ def format_approval_email(
     can_remediate = remediation.get('can_remediate', True)
     cannot_remediate_reason = remediation.get('cannot_remediate_reason', '')
 
-    # 风险等级图标
-    risk_icons = {
-        'HIGH': '🔴 HIGH',
-        'CRITICAL': '🔴 CRITICAL',
-        'MEDIUM': '🟡 MEDIUM',
-        'LOW': '🟢 LOW'
-    }
-    risk_level = risk_assessment.get('level', 'UNKNOWN')
-    risk_display = risk_icons.get(risk_level, f'⚪ {risk_level}')
-
-    # 影响等级图标
-    impact_icons = {
-        'HIGH': '🔴 HIGH',
-        'MEDIUM': '🟡 MEDIUM',
-        'LOW': '🟢 LOW'
-    }
-    impact_level = remediation.get('estimated_impact', 'UNKNOWN')
-    impact_display = impact_icons.get(impact_level, f'⚪ {impact_level}')
-
-    # 布尔值显示
-    rollback_display = '✅ 是' if remediation.get('rollback_available') else '❌ 否'
-    destructive_display = '❌ 是 (请谨慎!)' if remediation.get('is_destructive') else '✅ 否'
-
     # 处理 Finding ID 显示
-    # 从 arn:aws:securityhub:{region}:{account}:xxx 中提取 xxx 部分
     finding_id_display = 'N/A'
     if finding_id:
         if finding_id.startswith('arn:aws:securityhub:'):
-            # 提取 ARN 最后部分: security-control/Config.1/finding/uuid
-            parts = finding_id.split(':', 5)  # 最多分割5次
+            parts = finding_id.split(':', 5)
             if len(parts) >= 6:
-                finding_id_display = parts[5]  # 取最后部分
+                finding_id_display = parts[5]
             else:
                 finding_id_display = finding_id
         else:
             finding_id_display = finding_id
 
-    # 构建邮件内容
-    lines = [
-        '═' * 70,
-        '                  🔐 SHARA 安全修复审批请求',
-        '═' * 70,
-        '',
-        '📋 基本信息',
-        '─' * 70,
-        f'  任务 ID:        {task_id}',
-        f'  Finding ID:     {finding_id_display}',
-        f'  Control ID:     {analysis.get("control_id", "N/A")}',
-        f'  问题类型:       {analysis.get("finding_type", "N/A")}',
-        f'  资源类型:       {analysis.get("resource_type", "N/A")}',
-        f'  资源 ID:        {analysis.get("resource_id", "N/A")}',
-        '',
-        '⚠️ 风险评估',
-        '─' * 70,
-        f'  风险等级:       {risk_display}',
-        '',
-        '  风险因素:',
-    ]
+    # 风险等级样式
+    risk_level = risk_assessment.get('level', 'UNKNOWN')
+    risk_colors = {
+        'CRITICAL': ('#dc3545', '#fff'),
+        'HIGH': ('#dc3545', '#fff'),
+        'MEDIUM': ('#ffc107', '#000'),
+        'LOW': ('#28a745', '#fff')
+    }
+    risk_bg, risk_fg = risk_colors.get(risk_level, ('#6c757d', '#fff'))
+
+    # 影响等级样式
+    impact_level = remediation.get('estimated_impact', 'UNKNOWN')
+    impact_colors = {
+        'HIGH': ('#dc3545', '#fff'),
+        'MEDIUM': ('#ffc107', '#000'),
+        'LOW': ('#28a745', '#fff')
+    }
+    impact_bg, impact_fg = impact_colors.get(impact_level, ('#6c757d', '#fff'))
+
+    # HTML 模板
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 800px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: linear-gradient(135deg, #1a73e8 0%, #0d47a1 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }}
+        .header h1 {{ margin: 0; font-size: 24px; }}
+        .content {{ background: #fff; border: 1px solid #e0e0e0; border-top: none; padding: 20px; border-radius: 0 0 8px 8px; }}
+        .section {{ margin-bottom: 24px; }}
+        .section-title {{ font-size: 16px; font-weight: 600; color: #1a73e8; border-bottom: 2px solid #1a73e8; padding-bottom: 8px; margin-bottom: 12px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        td {{ padding: 8px 12px; vertical-align: top; }}
+        .label {{ font-weight: 500; color: #666; width: 140px; }}
+        .value {{ color: #333; }}
+        .badge {{ display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; }}
+        .badge-danger {{ background: #dc3545; color: #fff; }}
+        .badge-warning {{ background: #ffc107; color: #000; }}
+        .badge-success {{ background: #28a745; color: #fff; }}
+        .badge-info {{ background: #17a2b8; color: #fff; }}
+        .step-list {{ margin: 0; padding-left: 20px; }}
+        .step-list li {{ margin-bottom: 8px; }}
+        .checkbox-list {{ list-style: none; padding-left: 0; }}
+        .checkbox-list li {{ margin-bottom: 6px; }}
+        .checkbox-list li:before {{ content: "☐ "; color: #666; }}
+        .impact-box {{ background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 16px; margin-top: 16px; }}
+        .impact-row {{ display: flex; justify-content: space-between; margin-bottom: 8px; }}
+        .impact-row:last-child {{ margin-bottom: 0; }}
+        .btn {{ display: inline-block; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; margin: 8px; }}
+        .btn-approve {{ background: #28a745; color: #fff !important; }}
+        .btn-reject {{ background: #dc3545; color: #fff !important; }}
+        .btn-container {{ text-align: center; margin: 24px 0; }}
+        .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e0e0e0; }}
+        .warning-box {{ background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 12px; margin: 16px 0; }}
+        .info-box {{ background: #d1ecf1; border: 1px solid #17a2b8; border-radius: 6px; padding: 12px; margin: 16px 0; }}
+        code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 13px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔐 SHARA 安全修复审批请求</h1>
+    </div>
+    <div class="content">
+        <!-- 基本信息 -->
+        <div class="section">
+            <div class="section-title">📋 基本信息</div>
+            <table>
+                <tr><td class="label">任务 ID</td><td class="value"><code>{task_id}</code></td></tr>
+                <tr><td class="label">Finding ID</td><td class="value"><code>{finding_id_display}</code></td></tr>
+                <tr><td class="label">Control ID</td><td class="value"><strong>{analysis.get("control_id", "N/A")}</strong></td></tr>
+                <tr><td class="label">问题类型</td><td class="value">{analysis.get("finding_type", "N/A")}</td></tr>
+                <tr><td class="label">资源类型</td><td class="value">{analysis.get("resource_type", "N/A")}</td></tr>
+                <tr><td class="label">资源 ID</td><td class="value"><code>{analysis.get("resource_id", "N/A")}</code></td></tr>
+            </table>
+        </div>
+
+        <!-- 风险评估 -->
+        <div class="section">
+            <div class="section-title">⚠️ 风险评估</div>
+            <table>
+                <tr>
+                    <td class="label">风险等级</td>
+                    <td class="value"><span class="badge" style="background:{risk_bg};color:{risk_fg}">{risk_level}</span></td>
+                </tr>
+            </table>
+            <div style="margin-top: 12px;">
+                <strong>风险因素:</strong>
+                <ul class="step-list">
+'''
 
     # 风险因素
     factors = risk_assessment.get('factors', [])
     if factors:
         for factor in factors:
-            lines.append(f'    • {factor}')
+            html += f'                    <li>{factor}</li>\n'
     else:
-        lines.append('    • 未提供风险因素')
+        html += '                    <li>未提供风险因素</li>\n'
 
-    lines.extend([
-        '',
-        '  评估说明:',
-        f'    {risk_assessment.get("justification", "N/A")}',
-        '',
-        '📊 当前状态',
-        '─' * 70,
-    ])
+    html += f'''                </ul>
+            </div>
+            <div style="margin-top: 12px;">
+                <strong>评估说明:</strong>
+                <p style="margin: 8px 0; color: #555;">{risk_assessment.get("justification", "N/A")}</p>
+            </div>
+        </div>
+
+        <!-- 当前状态 -->
+        <div class="section">
+            <div class="section-title">📊 当前状态</div>
+'''
 
     # 当前状态
     if current_state:
-        # 检查是否是资源不存在的情况
         if current_state.get('status') == 'RESOURCE_NOT_FOUND':
-            lines.extend([
-                f'  状态:           ⚠️ {current_state.get("status")}',
-                f'  错误信息:       {current_state.get("error", "N/A")}',
-                '',
-                '  可能原因:',
-            ])
-            for reason in current_state.get('possible_reasons', []):
-                lines.append(f'    • {reason}')
+            html += f'''            <div class="warning-box">
+                <strong>⚠️ 资源未找到</strong>
+                <p>{current_state.get("error", "N/A")}</p>
+            </div>
+'''
         else:
-            # 正常显示当前状态
+            html += '            <table>\n'
             for key, value in current_state.items():
                 if isinstance(value, bool):
-                    value_display = '✅ 已启用' if value else '❌ 未启用'
+                    value_display = '<span class="badge badge-success">✅ 已启用</span>' if value else '<span class="badge badge-danger">❌ 未启用</span>'
                 else:
                     value_display = str(value)
-                lines.append(f'  {key}:  {value_display}')
+                html += f'                <tr><td class="label">{key}</td><td class="value">{value_display}</td></tr>\n'
+            html += '            </table>\n'
     else:
-        lines.append('  (无状态信息)')
+        html += '            <p style="color: #666;">无状态信息</p>\n'
 
-    lines.extend([
-        '',
-        '🔧 修复方案',
-        '─' * 70,
-        f'  方案名称:     {remediation.get("summary", "N/A")}',
-        '',
-        '  方案描述:',
-        f'    {remediation.get("description", "N/A")}',
-    ])
+    html += f'''        </div>
 
-    # 前置条件（人工确认）
+        <!-- 修复方案 -->
+        <div class="section">
+            <div class="section-title">🔧 修复方案</div>
+            <table>
+                <tr><td class="label">方案名称</td><td class="value"><strong>{remediation.get("summary", "N/A")}</strong></td></tr>
+            </table>
+            <div style="margin-top: 12px;">
+                <strong>方案描述:</strong>
+                <p style="margin: 8px 0; color: #555;">{remediation.get("description", "N/A")}</p>
+            </div>
+'''
+
+    # 前置条件
     prerequisites = remediation.get('prerequisites', [])
     if prerequisites:
-        lines.extend([
-            '',
-            '  📋 前置条件（审批前请确认）:',
-        ])
+        html += '            <div style="margin-top: 16px;"><strong>📋 前置条件（审批前请确认）:</strong><ul class="checkbox-list">\n'
         for item in prerequisites:
-            lines.append(f'    □ {item}')
+            html += f'                <li>{item}</li>\n'
+        html += '            </ul></div>\n'
 
     # Agent 执行步骤
     agent_actions = remediation.get('agent_actions', [])
     if agent_actions:
-        lines.extend([
-            '',
-            '  🤖 Agent 将执行:',
-        ])
-        for i, step in enumerate(agent_actions, 1):
-            lines.append(f'    {i}. {step}')
+        html += '            <div style="margin-top: 16px;"><strong>🤖 Agent 将执行:</strong><ol class="step-list">\n'
+        for step in agent_actions:
+            html += f'                <li>{step}</li>\n'
+        html += '            </ol></div>\n'
 
-    # 后续操作（人工处理）
+    # 后续操作
     post_actions = remediation.get('post_actions', [])
     if post_actions:
-        lines.extend([
-            '',
-            '  📝 后续操作（修复后请处理）:',
-        ])
+        html += '            <div style="margin-top: 16px;"><strong>📝 后续操作（修复后请处理）:</strong><ul class="checkbox-list">\n'
         for item in post_actions:
-            lines.append(f'    □ {item}')
+            html += f'                <li>{item}</li>\n'
+        html += '            </ul></div>\n'
 
-    # 兼容旧格式：如果没有新字段，使用 steps 字段
-    if not prerequisites and not agent_actions and not post_actions:
-        steps = remediation.get('steps', [])
-        if steps:
-            lines.extend([
-                '',
-                '  修复步骤:',
-            ])
-            for i, step in enumerate(steps, 1):
-                if step.startswith('步骤') or step.startswith('Step'):
-                    lines.append(f'    {step}')
-                else:
-                    lines.append(f'    {i}. {step}')
+    # 影响评估
+    rollback_display = '✅ 是' if remediation.get('rollback_available') else '❌ 否'
+    destructive_display = '❌ 是 (请谨慎!)' if remediation.get('is_destructive') else '✅ 否'
 
-    # 构建影响评估框（使用 HTML 表格样式更清晰）
-    box_width = 56  # 内容区域宽度
-    lines.extend([
-        '',
-        '  ┌' + '─' * box_width + '┐',
-        '  │' + pad_to_width(f'  预计影响:     {impact_display}', box_width) + '│',
-        '  │' + pad_to_width(f'  可回滚:       {rollback_display}', box_width) + '│',
-        '  │' + pad_to_width(f'  破坏性操作:   {destructive_display}', box_width) + '│',
-        '  └' + '─' * box_width + '┘',
-    ])
+    html += f'''            <div class="impact-box">
+                <table>
+                    <tr><td class="label">预计影响</td><td><span class="badge" style="background:{impact_bg};color:{impact_fg}">{impact_level}</span></td></tr>
+                    <tr><td class="label">可回滚</td><td>{rollback_display}</td></tr>
+                    <tr><td class="label">破坏性操作</td><td>{destructive_display}</td></tr>
+                </table>
+            </div>
+        </div>
 
-    # 特别注意事项
-    special_considerations = remediation.get('special_considerations', [])
-    if special_considerations:
-        lines.extend([
-            '',
-            '  ⚠️ 特别注意事项:',
-        ])
-        for item in special_considerations:
-            lines.append(f'    • {item}')
+        <!-- ASR Playbook -->
+        <div class="section">
+            <div class="section-title">📚 ASR Playbook 匹配</div>
+'''
 
-    # 建议操作
-    recommended_actions = remediation.get('recommended_actions', {})
-    if recommended_actions:
-        lines.extend([
-            '',
-            '  📌 建议操作:',
-        ])
-        if recommended_actions.get('immediate'):
-            lines.append(f'    • 立即:   {recommended_actions["immediate"]}')
-        if recommended_actions.get('short_term'):
-            lines.append(f'    • 短期:   {recommended_actions["short_term"]}')
-        if recommended_actions.get('long_term'):
-            lines.append(f'    • 长期:   {recommended_actions["long_term"]}')
-
-    lines.extend([
-        '',
-        '📚 ASR Playbook 匹配',
-        '─' * 70,
-    ])
-
-    # ASR 匹配状态
     if asr_match.get('matched'):
         confidence = asr_match.get('confidence', 0)
         confidence_pct = int(confidence * 100) if confidence <= 1 else confidence
-        lines.extend([
-            '  匹配状态:     ✅ 已匹配',
-            f'  Playbook ID:  {asr_match.get("playbook_id", "N/A")}',
-            f'  置信度:       {confidence_pct}%',
-            '',
-            '  💡 此修复方案基于 AWS 官方 ASR (Automated Security Response)',
-            '     预定义的 Playbook，已经过充分测试。',
-        ])
+        html += f'''            <table>
+                <tr><td class="label">匹配状态</td><td><span class="badge badge-success">✅ 已匹配</span></td></tr>
+                <tr><td class="label">Playbook ID</td><td><code>{asr_match.get("playbook_id", "N/A")}</code></td></tr>
+                <tr><td class="label">置信度</td><td>{confidence_pct}%</td></tr>
+            </table>
+            <div class="info-box">
+                💡 此修复方案基于 AWS 官方 ASR (Automated Security Response) 预定义的 Playbook，已经过充分测试。
+            </div>
+'''
     else:
-        lines.extend([
-            '  匹配状态:     ❌ 未匹配',
-            '',
-            f'  说明: {asr_match.get("message", "没有找到匹配的 ASR Playbook")}',
-            '',
-            '  ⚠️ 此修复将使用 AI 生成的修复策略，请仔细审核修复步骤。',
-        ])
+        html += f'''            <table>
+                <tr><td class="label">匹配状态</td><td><span class="badge badge-warning">❌ 未匹配</span></td></tr>
+            </table>
+            <div class="warning-box">
+                ⚠️ 此修复将使用 AI 生成的修复策略，请仔细审核修复步骤。
+            </div>
+'''
 
-    lines.extend([
-        '',
-        '📖 相似修复经验',
-        '─' * 70,
-    ])
+    html += '''        </div>
 
-    # 相似经验 - 简洁显示
+        <!-- 相似经验 -->
+        <div class="section">
+            <div class="section-title">📖 相似修复经验</div>
+'''
+
     if similar_experiences:
-        lines.append(f'  找到 {len(similar_experiences)} 条相关历史经验:')
-        for i, exp in enumerate(similar_experiences, 1):
+        html += f'            <p>找到 {len(similar_experiences)} 条相关历史经验:</p><ul class="step-list">\n'
+        for exp in similar_experiences:
             relevance = exp.get('relevance', exp.get('similarity_score', 0))
             relevance_pct = int(relevance * 100) if relevance <= 1 else relevance
-
-            # 从 content 中提取标题或摘要
             content = exp.get('content', '')
             title = ''
             if isinstance(content, str) and content.startswith('{'):
                 try:
                     content_data = json.loads(content)
-                    # 尝试获取 title 或 situation 的前 60 个字符
                     title = content_data.get('title', '') or content_data.get('situation', '')[:60]
                 except:
                     pass
             if not title:
                 title = exp.get('type', 'experience')
-
-            # 截断过长的标题
             if len(title) > 50:
                 title = title[:47] + '...'
-
-            lines.append(f'  • [{relevance_pct}%] {title}')
+            html += f'                <li><span class="badge badge-info">{relevance_pct}%</span> {title}</li>\n'
+        html += '            </ul>\n'
     else:
-        lines.append('  暂无相关历史修复经验')
+        html += '            <p style="color: #666;">暂无相关历史修复经验</p>\n'
 
-    lines.extend([
-        '',
-        '═' * 70,
-        '',
-    ])
+    html += '        </div>\n'
 
-    # 根据 can_remediate 决定是否显示审批按钮
+    # 操作按钮
     if can_remediate:
-        lines.extend([
-            '                        请选择您的操作:',
-            '',
-            '    [ ✅ 批准修复 ]              [ ❌ 拒绝修复 ]',
-            '',
-            f'    批准链接: {approve_url}',
-            '',
-            f'    拒绝链接: {reject_url}',
-            '',
-            f'    ⏰ 此审批链接将在 {APPROVAL_EXPIRY_HOURS} 小时后过期',
-        ])
+        html += f'''
+        <!-- 操作按钮 -->
+        <div class="btn-container">
+            <a href="{approve_url}" class="btn btn-approve">✅ 批准修复</a>
+            <a href="{reject_url}" class="btn btn-reject">❌ 拒绝修复</a>
+        </div>
+        <p style="text-align: center; color: #666; font-size: 12px;">⏰ 此审批链接将在 {APPROVAL_EXPIRY_HOURS} 小时后过期</p>
+'''
     else:
-        lines.extend([
-            '                    ⚠️ 此 Finding 无法自动修复',
-            '',
-            f'    原因: {cannot_remediate_reason or "需要手动处理"}',
-            '',
-            '    建议操作:',
-            '    • 如果资源已删除，请在 Security Hub 中归档此 Finding',
-            '    • 如果是软件漏洞，请通知开发团队更新相关组件',
-            '    • 如果需要手动配置，请按照上述修复步骤手动操作',
-            '',
-            '    此邮件仅供参考，无需审批操作。',
-        ])
+        html += f'''
+        <!-- 无法自动修复提示 -->
+        <div class="warning-box">
+            <strong>⚠️ 此 Finding 无法自动修复</strong>
+            <p><strong>原因:</strong> {cannot_remediate_reason or "需要手动处理"}</p>
+            <p><strong>建议操作:</strong></p>
+            <ul>
+                <li>如果资源已删除，请在 Security Hub 中归档此 Finding</li>
+                <li>如果是软件漏洞，请通知开发团队更新相关组件</li>
+                <li>如果需要手动配置，请按照上述修复步骤手动操作</li>
+            </ul>
+            <p style="color: #666;">此邮件仅供参考，无需审批操作。</p>
+        </div>
+'''
 
-    lines.extend([
-        '',
-        '═' * 70,
-        '                    SHARA - Security Hub Auto-Remediation Agent',
-        '                              Powered by AWS Bedrock',
-        '═' * 70,
-    ])
+    html += '''
+        <!-- 页脚 -->
+        <div class="footer">
+            <p>SHARA - Security Hub Auto-Remediation Agent</p>
+            <p>Powered by AWS Bedrock</p>
+        </div>
+    </div>
+</body>
+</html>'''
 
-    return '\n'.join(lines)
+    return html

@@ -74,6 +74,7 @@ interface TaskItem {
   updatedAt: string;            // ISO8601
   version: number;              // Optimistic locking
   traceId?: string;             // Lambda Request ID
+  ttl: number;                  // Unix timestamp - 24小时后自动删除（与审批链接过期时间一致）
 }
 
 type TaskStatus =
@@ -97,6 +98,8 @@ type TaskStatus =
 1. **只存储控制相关字段** - 分析结果、修复方案等详细信息不存储到 DynamoDB，直接用于发送审批邮件
 2. **GSI*SK 复用 createdAt** - Sort Key 使用创建时间，支持按时间排序查询
 3. **asrMatch 精简** - 只保留 matched 和 playbook_id，不存储完整匹配信息
+4. **24小时 TTL** - 任务记录在创建后 24 小时自动删除，与审批链接过期时间保持一致
+5. **重复 Finding 检测** - 处理 Finding 前通过 GSI2 检查是否已存在相同 Finding ID 的任务记录。如果存在，直接跳过该 Finding 的整个处理流程（不创建任务、不调用 Analyzer Agent、不发送审批邮件）
 
 **示例数据 (Phase 1 - 等待审批状态)：**
 ```json
@@ -134,7 +137,8 @@ type TaskStatus =
   "createdAt": "2025-01-30T07:31:31.412121+00:00",
   "updatedAt": "2025-01-30T07:31:57.845146+00:00",
   "version": 1,
-  "traceId": "da27c4ac-01e8-4f59-9cef-0bdbc0ca7ce5"
+  "traceId": "da27c4ac-01e8-4f59-9cef-0bdbc0ca7ce5",
+  "ttl": 1738398691
 }
 ```
 
@@ -838,22 +842,32 @@ interface ApprovalRequest {
 
 | 数据类型 | 保留期限 | 存储位置 | 归档策略 |
 |----------|----------|----------|----------|
-| 活跃任务 | 30 天 | DynamoDB | 完成后 7 天归档 |
-| 审批 Token | Token 过期后自动删除 | DynamoDB (TTL) | 自动删除 |
+| 任务记录 | 24 小时 | DynamoDB (TTL) | 自动删除（与审批链接过期时间一致） |
+| 审批 Token | 24 小时 | DynamoDB (TTL) | Token 过期后自动删除 |
+| 回滚 Token | 72 小时 | DynamoDB (TTL) | Token 过期后自动删除 |
 | 任务报告 | 1 年 | S3 | Glacier 深度归档 |
 | 审计日志 | 7 年 | S3 + CloudTrail | 合规要求 |
 
 ### 5.2 DynamoDB TTL 配置
 
 ```typescript
-// Tasks 表 - 完成的任务 30 天后删除
-if (task.status === 'completed' || task.status === 'cancelled') {
-  task.ttl = Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60);
-}
+// Tasks 表 - 所有任务在创建后 24 小时自动删除（与审批链接过期时间一致）
+const APPROVAL_EXPIRY_HOURS = 24;
+task.ttl = Math.floor(Date.now() / 1000) + (APPROVAL_EXPIRY_HOURS * 60 * 60);
 
-// Tokens 表 - 使用 expires_at 字段，token 过期后自动删除
-token.expires_at = Math.floor(new Date(token.expiresAt).getTime() / 1000);
+// Tokens 表 - 审批 Token 24 小时后过期
+const APPROVAL_EXPIRY_HOURS = 24;
+token.expires_at = Math.floor(Date.now() / 1000) + (APPROVAL_EXPIRY_HOURS * 60 * 60);
+
+// Tokens 表 - 回滚 Token 72 小时后过期
+const ROLLBACK_TOKEN_EXPIRY_HOURS = 72;
+rollbackToken.expires_at = Math.floor(Date.now() / 1000) + (ROLLBACK_TOKEN_EXPIRY_HOURS * 60 * 60);
 ```
+
+**设计说明：**
+- 任务记录和审批 Token 的 TTL 保持一致（24 小时），确保审批链接过期时任务记录也自动清理
+- 回滚 Token 的 TTL 较长（72 小时），给用户足够时间决定是否回滚
+- TTL 基于任务创建时间计算，不论任务最终状态如何
 
 ### 5.3 S3 生命周期规则
 
@@ -905,7 +919,39 @@ token.expires_at = Math.floor(new Date(token.expiresAt).getTime() / 1000);
 | 按账户查询 | GSI3 | GSI3PK = ACCOUNT#<id> |
 | 查询审批 Token | 主键 | PK = TOKEN#<hash>, SK = TASK#<id> |
 
-### 6.2 查询示例
+### 6.2 重复 Finding 检测
+
+在处理 Finding 前，Event Handler Lambda 会通过 GSI2 检查是否已存在相同 Finding ID 的任务记录。如果存在，则跳过该 Finding 的**整个处理流程**：
+
+```python
+# 检查是否已存在相同 Finding 的任务
+existing_tasks = tasks_table.query(
+    IndexName='GSI2',
+    KeyConditionExpression='GSI2PK = :pk',
+    ExpressionAttributeValues={
+        ':pk': f'FINDING#{finding_id}'
+    },
+    Limit=1
+)
+
+if existing_tasks.get('Items'):
+    # 跳过整个处理流程：不创建任务、不调用 Agent、不发送邮件
+    existing_task = existing_tasks['Items'][0]
+    logger.info(f"Finding {finding_id} already has task {existing_task.get('taskId')}, skipping")
+    return {
+        'status': 'skipped',
+        'reason': 'duplicate',
+        'existing_task_id': existing_task.get('taskId')
+    }
+```
+
+**设计说明：**
+- 由于任务记录的 TTL 为 24 小时，只需检查是否存在相同 Finding ID 的记录即可
+- 如果记录存在，说明该 Finding 在过去 24 小时内已被处理，直接跳过
+- 跳过的流程包括：创建 DynamoDB 任务记录、调用 Analyzer Agent、发送审批邮件等
+- 如果记录已过期被删除（24 小时后），则允许重新创建任务处理该 Finding
+
+### 6.3 查询示例
 
 ```python
 # 查询所有待审批任务
@@ -958,3 +1004,4 @@ response = tokens_table.get_item(
 | 2.1 | 2025-01-29 | - | 新增 ASR 预置经验数据格式；新增知识库索引 (index.json) 格式；区分 ASR 和用户经验 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段工作流（Phase 1: 审批前仅生成描述；Phase 2: 审批后生成代码执行）；分离 remediation 和 generatedCode；新增 phase 和 memorySessionId 字段 |
 | 3.1 | 2025-01-30 | - | 简化数据模型：废弃 Task Events 表，状态变更直接更新 Tasks 表；Tasks 表只存储控制相关字段，不存储分析结果；更新 Approval Tokens 表结构；优化 DynamoDB 存储空间（记录大小减少约 68%）|
+| 3.2 | 2025-02-02 | - | 任务记录 TTL 调整为 24 小时（与审批链接过期时间一致）；新增重复 Finding 检测机制（基于 GSI2 查询）；更新数据保留策略 |

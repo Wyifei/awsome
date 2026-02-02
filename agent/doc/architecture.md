@@ -143,9 +143,15 @@
 
 **职责：**
 - 验证 Finding 格式
-- 去重处理（检查是否已处理）
+- 去重处理（基于 GSI2 检查 24 小时内是否已处理相同 Finding）
 - 丰富 Finding 上下文
 - 调用 Agent 系统
+
+**去重机制：**
+- 使用 DynamoDB GSI2 (FINDING#{findingId}) 查询是否存在相同 Finding ID 的任务记录
+- 任务记录 TTL 为 24 小时（与审批链接过期时间一致），过期后自动删除
+- 如果记录存在，说明该 Finding 在 24 小时内已被处理，跳过重复处理
+- 如果记录不存在（已过期或从未处理），则创建新任务
 
 **伪代码：**
 ```python
@@ -153,7 +159,7 @@ def handler(event, context):
     findings = event['detail']['findings']
 
     for finding in findings:
-        # 1. 去重检查
+        # 1. 去重检查（基于 GSI2 查询，24小时 TTL）
         if is_duplicate(finding['Id']):
             continue
 
@@ -1392,3 +1398,4 @@ def retrieve_similar_experiences(control_id: str, finding: dict) -> list:
 | 4.0 | 2025-01-31 | - | A2A 协议重构：Remediator 通过 A2A 协议调用 Validator；Validator 增强职责（代码安全审查、结果验证、触发结果邮件）；新增结果邮件和回滚流程；结果邮件含 Rollback 链接；回滚邮件不含 Rollback 链接 |
 | 5.0 | 2025-01-31 | - | Memory 数据共享重构：Agent 间数据全部通过 Memory STM 共享；移除 A2A 参数传递代码和执行结果；回滚数据存储从 DynamoDB 迁移到 Memory；回滚代码在修复时预生成并 dry-run 验证；新增 pre_execution_check 快速安全检查 |
 | 6.0 | 2025-02-01 | - | LTM 搜索优化：修复 content 格式问题 (dict vs string)；新增相似度阈值 MIN_RELEVANCE_SCORE=0.35；Memory 存储完整 finding 数据；execute_code 支持 target_region 参数；新增 ReAct 重试机制 (最多 2 次) |
+| 6.1 | 2025-02-02 | - | 任务去重优化：任务记录 TTL 调整为 24 小时（与审批链接过期时间一致）；基于 GSI2 实现重复 Finding 检测，避免 24 小时内重复处理同一 Finding |
