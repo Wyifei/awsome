@@ -32,7 +32,7 @@ agents:
     bedrock_agentcore:
       agent_id: shara_dev_remediator-UQLfXMETec
       agent_arn: arn:aws:bedrock-agentcore:ap-northeast-1:870414140965:runtime/shara_dev_remediator-UQLfXMETec
-      agent_session_id: 42025869-cc8c-4536-9de5-ad2ea93dfbf3
+      agent_session_id: null
     codebuild:
       project_name: bedrock-agentcore-shara_dev_remediator-builder
       execution_role: arn:aws:iam::870414140965:role/AmazonBedrockAgentCoreSDKCodeBuild-ap-northeast-1-87c16fb215

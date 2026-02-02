@@ -180,6 +180,8 @@ Always preserve exact values for:
 - Resource ARNs: arn:aws:s3:::bucket-name, etc.
 - boto3 API calls: put_public_access_block, revoke_security_group_ingress, etc.
 - Error codes: AccessDenied, InvalidParameterValue, etc.
+
+**CRITICAL: You MUST output your analysis using the <summary> XML format with <summary_turn> blocks as specified in the original instructions above. Do not use any other output format. Each conversation turn must have its own <summary_turn> block within the <summary> tags.**
 """
 
 CONSOLIDATION_APPEND_PROMPT = """
@@ -271,6 +273,8 @@ Ensure these are prominently included for search retrieval:
 - Resource Type (for type-specific code)
 - "remediation", "fix", "resolve" (for intent matching)
 - AWS service name (S3, EC2, IAM, etc.)
+
+**CRITICAL: You MUST output your analysis using the <summary> XML format with <situation>, <intent>, <assessment>, <justification>, and <reflection> fields as specified in the original instructions above. Do not use any other output format.**
 """
 
 REFLECTION_APPEND_PROMPT = """
@@ -400,6 +404,8 @@ S3 Block Public Access changes are eventually consistent.
 Recommended validation delay: 20-30 seconds.
 Retry validation up to 3 times with 10-second intervals.
 ```
+
+**CRITICAL: You MUST output your analysis using the <reflections> XML format with <reflection> blocks containing <operator>, <id>, <title>, <use_cases>, <hints>, and <confidence> fields as specified in the original instructions above. Do not use any other output format.**
 """
 
 # ============================================================================
@@ -565,11 +571,14 @@ def create_shara_memory(
     memory_name: str = DEFAULT_MEMORY_NAME,
     event_expiry_days: int = DEFAULT_EVENT_EXPIRY_DAYS,
     model_id: str = None,  # None = 自动选择
-    dry_run: bool = False
+    dry_run: bool = False,
+    use_builtin: bool = False  # 使用 built-in Episodic strategy
 ) -> Optional[dict]:
     """创建 SHARA Memory 资源。
 
-    使用 Episodic Strategy with Override 配置自定义 prompts。
+    支持两种模式：
+    1. Built-in Episodic Strategy (use_builtin=True): 使用 AWS 默认的 Episodic 提取逻辑
+    2. Custom Override (use_builtin=False): 使用自定义 prompts 覆盖提取逻辑
 
     Args:
         region: AWS Region
@@ -577,6 +586,7 @@ def create_shara_memory(
         event_expiry_days: 事件过期天数 (STM)
         model_id: 用于 extraction/consolidation/reflection 的模型 (None = 自动根据区域选择)
         dry_run: 仅打印配置，不实际创建
+        use_builtin: 是否使用 built-in Episodic strategy (默认 False，使用 custom override)
 
     Returns:
         dict: 创建的 Memory 信息
@@ -588,44 +598,67 @@ def create_shara_memory(
     execution_role_arn = get_or_create_execution_role(region)
 
     # Build memory strategy configuration
-    memory_strategies = [
-        {
-            "customMemoryStrategy": {
-                "name": "SecurityRemediationEpisodic",
-                "description": "Episodic memory strategy for AWS Security Hub remediation experiences with custom prompts",
-                "namespaces": EPISODE_NAMESPACES,
-                "configuration": {
-                    "episodicOverride": {
-                        "extraction": {
-                            "appendToPrompt": EXTRACTION_APPEND_PROMPT,
-                            "modelId": actual_model_id
-                        },
-                        "consolidation": {
-                            "appendToPrompt": CONSOLIDATION_APPEND_PROMPT,
-                            "modelId": actual_model_id
-                        },
-                        "reflection": {
-                            "appendToPrompt": REFLECTION_APPEND_PROMPT,
-                            "modelId": actual_model_id,
-                            "namespaces": REFLECTION_NAMESPACES
+    if use_builtin:
+        # Built-in Episodic Strategy - 使用 AWS 默认的提取逻辑
+        # 要求 events 以 USER/ASSISTANT/TOOL 对话格式保存
+        logger.info("Using built-in Episodic Strategy (no custom prompts)")
+        memory_strategies = [
+            {
+                "episodicMemoryStrategy": {
+                    "name": "SecurityRemediationEpisodic",
+                    "description": "Built-in episodic memory strategy for AWS Security Hub remediation experiences",
+                    "namespaces": EPISODE_NAMESPACES,
+                    "reflectionConfiguration": {
+                        "namespaces": REFLECTION_NAMESPACES
+                    }
+                }
+            }
+        ]
+        strategy_type = "EpisodicBuiltIn"
+        description = "SHARA Security Hub Auto-Remediation Agent Memory - Stores remediation experiences using built-in Episodic strategy. Events should be saved in USER/ASSISTANT/TOOL conversation format."
+    else:
+        # Custom Override - 使用自定义 prompts
+        logger.info("Using custom Episodic Strategy with override prompts")
+        memory_strategies = [
+            {
+                "customMemoryStrategy": {
+                    "name": "SecurityRemediationEpisodic",
+                    "description": "Episodic memory strategy for AWS Security Hub remediation experiences with custom prompts",
+                    "namespaces": EPISODE_NAMESPACES,
+                    "configuration": {
+                        "episodicOverride": {
+                            "extraction": {
+                                "appendToPrompt": EXTRACTION_APPEND_PROMPT,
+                                "modelId": actual_model_id
+                            },
+                            "consolidation": {
+                                "appendToPrompt": CONSOLIDATION_APPEND_PROMPT,
+                                "modelId": actual_model_id
+                            },
+                            "reflection": {
+                                "appendToPrompt": REFLECTION_APPEND_PROMPT,
+                                "modelId": actual_model_id,
+                                "namespaces": REFLECTION_NAMESPACES
+                            }
                         }
                     }
                 }
             }
-        }
-    ]
+        ]
+        strategy_type = "EpisodicOverride"
+        description = "SHARA Security Hub Auto-Remediation Agent Memory - Stores remediation experiences using Episodic strategy with custom prompts for security-specific extraction, consolidation, and reflection."
 
     # Build request
     request = {
         "name": memory_name,
-        "description": "SHARA Security Hub Auto-Remediation Agent Memory - Stores remediation experiences using Episodic strategy with custom prompts for security-specific extraction, consolidation, and reflection.",
+        "description": description,
         "eventExpiryDuration": event_expiry_days,
         "memoryExecutionRoleArn": execution_role_arn,
         "memoryStrategies": memory_strategies,
         "tags": {
             "Project": "SHARA",
             "Purpose": "SecurityRemediation",
-            "StrategyType": "EpisodicOverride"
+            "StrategyType": strategy_type
         }
     }
 
@@ -850,14 +883,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # 创建 Memory (使用默认配置)
+  # 创建 Memory (使用 custom override prompts - 默认)
   python create_shara_memory.py create
+
+  # 创建 Memory (使用 built-in Episodic Strategy)
+  python create_shara_memory.py create --builtin
 
   # 创建 Memory (指定区域和名称)
   python create_shara_memory.py create --region us-east-1 --name my-shara-memory
 
   # 仅打印配置，不实际创建
   python create_shara_memory.py create --dry-run
+  python create_shara_memory.py create --builtin --dry-run
 
   # 列出所有 Memory
   python create_shara_memory.py list --region ap-northeast-1
@@ -867,6 +904,10 @@ Examples:
 
   # 删除 Memory
   python create_shara_memory.py delete --region ap-northeast-1 <memory_id>
+
+Strategy 选择说明:
+  --builtin: 使用 AWS built-in Episodic Strategy，要求 events 以 USER/ASSISTANT/TOOL 对话格式保存
+  (默认): 使用 custom override prompts，支持自定义的 JSON 格式经验数据
 """
     )
 
@@ -902,6 +943,11 @@ Examples:
         action='store_true',
         help='仅打印配置，不实际创建'
     )
+    create_parser.add_argument(
+        '--builtin',
+        action='store_true',
+        help='使用 built-in Episodic Strategy (默认使用 custom override prompts)'
+    )
 
     # list command
     list_parser = subparsers.add_parser('list', help='列出所有 Memory 资源')
@@ -926,7 +972,8 @@ Examples:
             memory_name=args.name,
             event_expiry_days=args.expiry_days,
             model_id=args.model_id,
-            dry_run=args.dry_run
+            dry_run=args.dry_run,
+            use_builtin=args.builtin
         )
         if memory:
             print_env_config(memory)

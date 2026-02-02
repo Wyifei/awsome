@@ -38,6 +38,12 @@ logger = logging.getLogger(__name__)
 DEFAULT_REGION = "ap-northeast-1"
 
 # Namespace patterns (must match create_shara_memory.py)
+# NOTE: AgentCore Memory API 不支持通配符，必须使用完全匹配的 namespace
+# Memory Strategy 配置使用 {actorId} 占位符，在运行时需要替换为实际值
+EPISODE_NAMESPACE_PATTERN = "/remediation/actors/{actorId}/"
+REFLECTION_NAMESPACE_PATTERN = "/remediation/actors/{actorId}/"
+
+# 兼容旧代码的别名
 EPISODE_NAMESPACE_PREFIX = "/remediation/actors/"
 REFLECTION_NAMESPACE_PREFIX = "/remediation/actors/"
 
@@ -59,7 +65,8 @@ def query_ltm(
     query: str,
     namespace: str = None,
     top_k: int = 10,
-    region: str = DEFAULT_REGION
+    region: str = DEFAULT_REGION,
+    show_full: bool = False
 ):
     """查询 LTM (长期记忆)。
 
@@ -89,12 +96,11 @@ def query_ltm(
         namespaces_to_try.append(namespace)
     else:
         # 默认尝试的 namespace 列表
+        # 首先尝试正确的 namespace（包含 actorId）
+        correct_namespace = EPISODE_NAMESPACE_PATTERN.replace("{actorId}", actor_id)
         namespaces_to_try = [
-            EPISODE_NAMESPACE_PREFIX,
-            f"{EPISODE_NAMESPACE_PREFIX}{actor_id}/",
-            "/",
-            f"/remediation/",
-            f"/remediation/actors/{actor_id}/",
+            correct_namespace,  # 正确的完整 namespace
+            f"/remediation/actors/{actor_id}/",  # 备用格式
         ]
 
     total_results = []
@@ -125,13 +131,23 @@ def query_ltm(
                     else:
                         content = str(raw_content) if raw_content else ''
 
-                    # 截取内容预览
-                    preview = content[:200].replace('\n', ' ') if content else '(empty)'
-
                     print(f"\n  [{i+1}] Score: {score:.4f}")
                     print(f"      Record ID: {memory_record_id}")
                     print(f"      Namespace: {namespace_found}")
-                    print(f"      Content preview: {preview}...")
+
+                    if show_full:
+                        # 显示完整内容
+                        print(f"      Content ({len(content)} chars):")
+                        # 尝试格式化 JSON
+                        try:
+                            content_json = json.loads(content)
+                            print(json.dumps(content_json, indent=6, ensure_ascii=False))
+                        except:
+                            print(f"      {content}")
+                    else:
+                        # 截取内容预览
+                        preview = content[:200].replace('\n', ' ') if content else '(empty)'
+                        print(f"      Content preview: {preview}...")
 
                     total_results.append({
                         "namespace_searched": ns,
@@ -410,10 +426,12 @@ def check_ltm_extraction_status(
         control_id = exp.get('control_id', '')
         query = f"Control ID {control_id} security remediation"
 
+        # 使用正确的 namespace（包含 actorId）
+        episode_namespace = EPISODE_NAMESPACE_PATTERN.replace("{actorId}", actor_id)
         try:
             results = client.retrieve_memories(
                 memory_id=memory_id,
-                namespace=EPISODE_NAMESPACE_PREFIX,
+                namespace=episode_namespace,
                 query=query,
                 actor_id=actor_id,
                 top_k=5
@@ -464,19 +482,19 @@ def main():
         epilog="""
 Examples:
   # 查询 LTM (搜索修复经验)
-  python query_memory.py ltm --memory-id MEM123 --actor-id 123456789012 --query "S3 Block Public Access"
+  python query_memory.py ltm --memory-id shara_memory-eQ5Cx9Cfzv --actor-id 870414140965 --query "S3 Block Public Access"
 
   # 查询 STM (查看 session 中的 events)
-  python query_memory.py stm --memory-id MEM123 --actor-id 123456789012 --session-id task-abc123
+  python query_memory.py stm --memory-id shara_memory-eQ5Cx9Cfzv --actor-id 870414140965 --session-id task-abc123
 
   # 检查 LTM 提取状态
-  python query_memory.py check --memory-id MEM123 --actor-id 123456789012 --session-id task-abc123
+  python query_memory.py check --memory-id shara_memory-eQ5Cx9Cfzv --actor-id 870414140965 --session-id task-abc123
 
   # 查看 memory 状态
-  python query_memory.py status --memory-id MEM123
+  python query_memory.py status --memory-id shara_memory-eQ5Cx9Cfzv 
 
   # 导出结果到文件
-  python query_memory.py ltm --memory-id MEM123 --actor-id 123456789012 --query "S3" --output results.json
+  python query_memory.py ltm --memory-id shara_memory-eQ5Cx9Cfzv --actor-id 870414140965 --query "S3" --output results.json
 """
     )
 
@@ -495,6 +513,7 @@ Examples:
     ltm_parser.add_argument('--query', '-q', required=True, help='搜索查询')
     ltm_parser.add_argument('--namespace', '-n', help='命名空间前缀 (默认尝试多个)')
     ltm_parser.add_argument('--top-k', '-k', type=int, default=10, help='返回结果数量 (default: 10)')
+    ltm_parser.add_argument('--full', '-f', action='store_true', help='显示完整内容而非截取预览')
     ltm_parser.add_argument('--region', **region_kwargs)
     ltm_parser.add_argument('--output', '-o', help='导出结果到文件')
 
@@ -535,7 +554,8 @@ Examples:
             query=args.query,
             namespace=args.namespace,
             top_k=args.top_k,
-            region=args.region
+            region=args.region,
+            show_full=args.full
         )
         if args.output:
             export_results(results, args.output)

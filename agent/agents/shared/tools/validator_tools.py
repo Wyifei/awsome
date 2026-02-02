@@ -168,6 +168,46 @@ def review_code_security(code: str) -> dict:
     return result
 
 
+def _check_email_already_sent(task_id: str, is_rollback: bool, region: str) -> bool:
+    """检查邮件是否已发送，防止 Agent 重复调用。
+
+    Args:
+        task_id: 任务 ID
+        is_rollback: 是否为回滚操作
+        region: AWS Region
+
+    Returns:
+        bool: True 如果邮件已发送
+    """
+    tasks_table_name = os.environ.get('TASKS_TABLE')
+    if not tasks_table_name:
+        logger.warning("TASKS_TABLE not configured, skipping duplicate check")
+        return False
+
+    try:
+        dynamodb = boto3.resource('dynamodb', region_name=region)
+        tasks_table = dynamodb.Table(tasks_table_name)
+
+        response = tasks_table.get_item(
+            Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'},
+            ProjectionExpression='resultEmailSent, rollbackEmailSent'
+        )
+
+        task = response.get('Item')
+        if not task:
+            return False
+
+        # 根据操作类型检查对应的邮件发送状态
+        if is_rollback:
+            return task.get('rollbackEmailSent', False)
+        else:
+            return task.get('resultEmailSent', False)
+
+    except Exception as e:
+        logger.warning(f"Error checking email sent status: {e}")
+        return False
+
+
 @tool
 def trigger_result_email(
     task_id: str,
@@ -191,6 +231,10 @@ def trigger_result_email(
     - HTTP mode (local): Calls EMAIL_SERVICE_URL (e.g., http://email:8080/send)
     - Lambda mode (AWS): Invokes RESULT_EMAIL_LAMBDA_ARN or APPROVAL_HANDLER_ARN
 
+    NOTE: This tool includes duplicate prevention - if the email was already
+    sent for this task (checked via DynamoDB), it returns success without
+    invoking Lambda again. This prevents Agent from sending duplicate emails.
+
     Args:
         task_id: Task ID
         resource_arn: Resource ARN
@@ -207,8 +251,22 @@ def trigger_result_email(
             - sent: bool - Whether email will be sent
             - includes_rollback_link: bool - Whether email has rollback link
             - error: str - Error message if failed
+            - already_sent: bool - True if email was already sent (duplicate prevented)
     """
     config = get_config()
+
+    # ===== 防重复检查：在 Agent 端防止重复调用 Lambda =====
+    if _check_email_already_sent(task_id, is_rollback, config.region):
+        email_type_desc = "rollback" if is_rollback else "remediation result"
+        logger.warning(f"Email already sent for task {task_id} ({email_type_desc}), skipping duplicate")
+        return {
+            "success": True,
+            "sent": False,
+            "already_sent": True,
+            "includes_rollback_link": not is_rollback,
+            "email_type": "rollback_success" if is_rollback else "remediation_result",
+            "message": f"邮件已发送，跳过重复调用 (task_id={task_id})"
+        }
 
     # Determine email type and content
     if is_rollback:
@@ -222,6 +280,10 @@ def trigger_result_email(
         include_rollback_link = True
 
     # Build email payload
+    # 提取检查明细供邮件显示
+    code_issues = code_review_result.get("issues", [])
+    validation_checks = validation_result.get("checks", [])
+
     payload = {
         "action": "send_result_email",
         "task_id": task_id,
@@ -231,11 +293,15 @@ def trigger_result_email(
         "code_review": {
             "status": code_review_result.get("status", "unknown"),
             "issues_count": code_review_result.get("summary", {}).get("total_issues", 0),
-            "risk_level": code_review_result.get("risk_level", "unknown")
+            "risk_level": code_review_result.get("risk_level", "unknown"),
+            "issues": code_issues,  # 传递完整的问题列表
+            "recommendations": code_review_result.get("recommendations", [])
         },
         "validation": {
             "passed": validation_result.get("passed", False),
-            "checks_count": len(validation_result.get("checks", []))
+            "checks_count": len(validation_checks),
+            "checks": validation_checks,  # 传递完整的检查项列表
+            "summary": validation_result.get("summary", "")
         },
         "include_rollback_link": include_rollback_link,
         "is_rollback": is_rollback,

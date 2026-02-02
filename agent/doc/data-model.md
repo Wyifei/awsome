@@ -951,7 +951,57 @@ if existing_tasks.get('Items'):
 - 跳过的流程包括：创建 DynamoDB 任务记录、调用 Analyzer Agent、发送审批邮件等
 - 如果记录已过期被删除（24 小时后），则允许重新创建任务处理该 Finding
 
-### 6.3 查询示例
+### 6.3 CVE Finding 去重（按资源 ID）
+
+对于 CVE 漏洞 Finding（容器镜像漏洞、EC2 软件漏洞），采用**按资源 ID 去重**策略，避免信息爆炸：
+
+| Finding 类型 | 去重键 | 说明 |
+|-------------|--------|------|
+| CONTAINER_CVE | `CVE_RESOURCE#CONTAINER_CVE#{镜像ARN}` | 同一镜像 24 小时内只发一封邮件 |
+| EC2_CVE | `CVE_RESOURCE#EC2_CVE#{实例ARN}` | 同一实例 24 小时内只发一封邮件 |
+
+**原因：**
+- 一个 ECR 镜像可能包含 10+ 个 CVE 漏洞
+- Inspector 为每个 CVE 生成独立的 Security Hub Finding
+- 如果按 finding_id 去重，会发送 10+ 封邮件 → 信息爆炸
+- 按资源 ID 去重，同一镜像/实例只发一封通知邮件
+
+```python
+# CVE Finding 按资源 ID 去重
+resource_id = finding['Resources'][0]['Id']
+dedup_key = f"CVE_RESOURCE#{finding_type}#{resource_id}"
+
+existing_records = tasks_table.query(
+    IndexName='GSI2',
+    KeyConditionExpression='GSI2PK = :pk',
+    ExpressionAttributeValues={':pk': dedup_key},
+    Limit=1
+)
+
+if existing_records.get('Items'):
+    # 跳过：不发送邮件
+    return {'status': 'skipped', 'reason': 'duplicate_resource'}
+
+# 首次处理该资源：创建去重记录 + 发送通知邮件
+dedup_record = {
+    'PK': f'TASK#{task_id}',
+    'SK': 'METADATA',
+    'GSI2PK': dedup_key,  # CVE_RESOURCE#{type}#{resource_id}
+    'findingType': finding_type,
+    'status': 'cve_notified',
+    'ttl': task_ttl,  # 24小时后自动删除
+    ...
+}
+tasks_table.put_item(Item=dedup_record)
+send_cve_notification_email(...)
+```
+
+**设计说明：**
+- CVE 去重记录也使用 24 小时 TTL，与 FSBP 任务保持一致
+- 邮件标题注明是"首次发现"，提示用户在 Security Hub 控制台查看完整 CVE 列表
+- 复用 GSI2 索引，使用不同的 key 前缀区分 FSBP 和 CVE
+
+### 6.4 查询示例
 
 ```python
 # 查询所有待审批任务
@@ -1004,4 +1054,4 @@ response = tokens_table.get_item(
 | 2.1 | 2025-01-29 | - | 新增 ASR 预置经验数据格式；新增知识库索引 (index.json) 格式；区分 ASR 和用户经验 |
 | 3.0 | 2025-01-29 | - | 重构为两阶段工作流（Phase 1: 审批前仅生成描述；Phase 2: 审批后生成代码执行）；分离 remediation 和 generatedCode；新增 phase 和 memorySessionId 字段 |
 | 3.1 | 2025-01-30 | - | 简化数据模型：废弃 Task Events 表，状态变更直接更新 Tasks 表；Tasks 表只存储控制相关字段，不存储分析结果；更新 Approval Tokens 表结构；优化 DynamoDB 存储空间（记录大小减少约 68%）|
-| 3.2 | 2025-02-02 | - | 任务记录 TTL 调整为 24 小时（与审批链接过期时间一致）；新增重复 Finding 检测机制（基于 GSI2 查询）；更新数据保留策略 |
+| 3.2 | 2025-02-02 | - | 任务记录 TTL 调整为 24 小时（与审批链接过期时间一致）；新增 FSBP Finding 去重机制（基于 GSI2 + Finding ID）；新增 CVE Finding 去重机制（基于 GSI2 + 资源 ID，避免同一镜像/实例的多个 CVE 发送多封邮件）；更新数据保留策略 |

@@ -31,7 +31,7 @@ REGION = os.environ.get('AWS_REGION', 'us-east-1')
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')
 RESULT_EMAIL = os.environ.get('RESULT_EMAIL', '')
 API_GATEWAY_URL = os.environ.get('API_GATEWAY_URL', '')
-ROLLBACK_TOKEN_EXPIRY_HOURS = int(os.environ.get('ROLLBACK_TOKEN_EXPIRY_HOURS', '72'))
+ROLLBACK_TOKEN_EXPIRY_HOURS = int(os.environ.get('ROLLBACK_TOKEN_EXPIRY_HOURS', '24'))
 
 # AWS 客户端
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
@@ -268,6 +268,16 @@ def handle_async_remediation(event: dict, context) -> dict:
 
     logger.info(f"Starting async remediation for task {task_id}")
 
+    # 验证 task 存在
+    task = get_task(task_id)
+    if not task:
+        logger.error(f"Task {task_id} not found, cannot perform remediation")
+        return {
+            'success': False,
+            'task_id': task_id,
+            'error': f'Task {task_id} not found'
+        }
+
     try:
         # Phase 2: 执行修复 (Remediator 会通过 A2A 调用 Validator)
         remediation_result = run_phase2_remediation(
@@ -385,8 +395,16 @@ def handle_rollback_request(event: dict, context) -> dict:
         }
 
     # 检查任务状态 - 只有已完成的修复才能回滚
+    # 也允许状态为 executing 但邮件已发送的情况（解决邮件发送与状态更新之间的时序问题）
     current_status = task.get('status')
-    if current_status not in ['completed', 'validated']:
+    result_email_sent = task.get('resultEmailSent', False)
+
+    can_rollback = (
+        current_status in ['completed', 'validated'] or
+        (current_status == 'executing' and result_email_sent)
+    )
+
+    if not can_rollback:
         return {
             'statusCode': 400,
             'body': json.dumps({
@@ -494,6 +512,16 @@ def handle_async_rollback(event: dict, context) -> dict:
 
     logger.info(f"Starting async rollback for task {task_id}")
 
+    # 验证 task 存在
+    task = get_task(task_id)
+    if not task:
+        logger.error(f"Task {task_id} not found, cannot perform rollback")
+        return {
+            'success': False,
+            'task_id': task_id,
+            'error': f'Task {task_id} not found'
+        }
+
     try:
         # 调用 Remediator with is_rollback=True
         # Remediator 会通过 A2A 调用 Validator，Validator 会发送无回滚链接的结果邮件
@@ -564,6 +592,43 @@ def handle_send_result_email(event: dict, context) -> dict:
     validation = event.get('validation', {})
 
     logger.info(f"Sending result email for task {task_id}, email_type={email_type}, is_rollback={is_rollback}")
+
+    # 防重复检查: 根据操作类型检查对应的邮件发送状态
+    if task_id:
+        task = get_task(task_id)
+        if task:
+            if is_rollback:
+                # 回滚邮件检查 rollbackEmailSent
+                if task.get('rollbackEmailSent'):
+                    logger.warning(f"Rollback email already sent for task {task_id}, skipping duplicate send")
+                    return {
+                        'success': True,
+                        'sent': False,
+                        'task_id': task_id,
+                        'message': 'Rollback email already sent, skipping duplicate',
+                        'already_sent': True
+                    }
+            else:
+                # 修复结果邮件检查 resultEmailSent
+                if task.get('resultEmailSent'):
+                    logger.warning(f"Result email already sent for task {task_id}, skipping duplicate send")
+                    return {
+                        'success': True,
+                        'sent': False,
+                        'task_id': task_id,
+                        'message': 'Email already sent, skipping duplicate',
+                        'already_sent': True
+                    }
+
+    # 在发送邮件前，标记邮件已发送（用于回滚检查）
+    # 注意: 不更新 status，只设置邮件发送标记，避免触发状态变更相关的事件
+    if task_id and not rollback_failed:
+        try:
+            _mark_email_sent(task_id, is_rollback=is_rollback)
+            email_type_desc = "rollback" if is_rollback else "result"
+            logger.info(f"Marked {email_type_desc} email sent for task {task_id}")
+        except Exception as e:
+            logger.warning(f"Failed to mark email sent: {e}")
 
     # 检查邮件配置
     if not SENDER_EMAIL or not RESULT_EMAIL:
@@ -738,10 +803,14 @@ def format_result_email_body(
     }
     risk_bg, risk_fg = risk_colors.get(risk_level.lower(), ('#6c757d', '#fff'))
     issues_count = code_review.get('issues_count', 0)
+    code_issues = code_review.get('issues', [])
+    code_recommendations = code_review.get('recommendations', [])
 
     # 验证结果
     validation_passed = validation.get('passed', False)
     checks_count = validation.get('checks_count', 0)
+    validation_checks = validation.get('checks', [])
+    validation_summary = validation.get('summary', '')
 
     # HTML 模板
     html = f'''<!DOCTYPE html>
@@ -821,8 +890,53 @@ def format_result_email_body(
                     <span>{issues_count}</span>
                 </div>
             </div>
-        </div>
+'''
 
+    # 代码审查问题明细
+    if code_issues:
+        html += '''            <div style="margin-top: 12px;">
+                <strong>发现的问题:</strong>
+                <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px;">
+                    <tr style="background:#f8f9fa;">
+                        <th style="padding:8px;text-align:left;border:1px solid #e0e0e0;">类型</th>
+                        <th style="padding:8px;text-align:left;border:1px solid #e0e0e0;">描述</th>
+                        <th style="padding:8px;text-align:left;border:1px solid #e0e0e0;">严重程度</th>
+                    </tr>
+'''
+        for issue in code_issues[:5]:  # 最多显示5个问题
+            issue_type = issue.get('type', 'unknown')
+            issue_msg = issue.get('message', '')
+            issue_severity = issue.get('severity', 'unknown')
+            severity_colors = {'high': '#dc3545', 'medium': '#ffc107', 'low': '#28a745'}
+            severity_color = severity_colors.get(issue_severity, '#6c757d')
+            html += f'''                    <tr>
+                        <td style="padding:8px;border:1px solid #e0e0e0;">{issue_type}</td>
+                        <td style="padding:8px;border:1px solid #e0e0e0;">{issue_msg}</td>
+                        <td style="padding:8px;border:1px solid #e0e0e0;"><span style="color:{severity_color};font-weight:600;">{issue_severity.upper()}</span></td>
+                    </tr>
+'''
+        html += '''                </table>
+            </div>
+'''
+        if len(code_issues) > 5:
+            html += f'            <p style="color:#666;font-size:12px;margin-top:4px;">... 还有 {len(code_issues) - 5} 个问题未显示</p>\n'
+    else:
+        html += '''            <div style="margin-top: 12px;">
+                <span style="color:#28a745;">✅ 未发现安全问题</span>
+            </div>
+'''
+
+    # 代码审查建议
+    if code_recommendations:
+        html += '            <div style="margin-top: 12px;"><strong>建议:</strong><ul style="margin:4px 0;padding-left:20px;">\n'
+        for rec in code_recommendations[:3]:
+            html += f'                <li style="color:#555;">{rec}</li>\n'
+        html += '            </ul></div>\n'
+
+    html += '        </div>\n'
+
+    # 验证结果
+    html += f'''
         <!-- 验证结果 -->
         <div class="section">
             <div class="section-title">✓ 验证结果</div>
@@ -836,7 +950,52 @@ def format_result_email_body(
                     <span>{checks_count}</span>
                 </div>
             </div>
-        </div>
+'''
+
+    # 验证检查项明细
+    if validation_checks:
+        html += '''            <div style="margin-top: 12px;">
+                <strong>检查项明细:</strong>
+                <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:13px;">
+                    <tr style="background:#f8f9fa;">
+                        <th style="padding:8px;text-align:left;border:1px solid #e0e0e0;">检查项</th>
+                        <th style="padding:8px;text-align:left;border:1px solid #e0e0e0;">期望值</th>
+                        <th style="padding:8px;text-align:left;border:1px solid #e0e0e0;">实际值</th>
+                        <th style="padding:8px;text-align:center;border:1px solid #e0e0e0;">结果</th>
+                    </tr>
+'''
+        for check in validation_checks:
+            check_name = check.get('name', 'unknown')
+            check_expected = check.get('expected', 'N/A')
+            check_actual = check.get('actual', 'N/A')
+            check_passed = check.get('passed', False)
+            result_icon = '✅' if check_passed else '❌'
+            result_color = '#28a745' if check_passed else '#dc3545'
+            # 格式化布尔值显示
+            expected_display = 'True' if check_expected is True else ('False' if check_expected is False else str(check_expected))
+            actual_display = 'True' if check_actual is True else ('False' if check_actual is False else str(check_actual))
+            html += f'''                    <tr>
+                        <td style="padding:8px;border:1px solid #e0e0e0;"><code>{check_name}</code></td>
+                        <td style="padding:8px;border:1px solid #e0e0e0;">{expected_display}</td>
+                        <td style="padding:8px;border:1px solid #e0e0e0;">{actual_display}</td>
+                        <td style="padding:8px;border:1px solid #e0e0e0;text-align:center;"><span style="color:{result_color};">{result_icon}</span></td>
+                    </tr>
+'''
+        html += '''                </table>
+            </div>
+'''
+    else:
+        html += '''            <div style="margin-top: 12px;">
+                <span style="color:#666;">暂无检查项明细</span>
+            </div>
+'''
+
+    # 验证摘要
+    if validation_summary:
+        html += f'            <div style="margin-top: 12px;color:#555;"><strong>摘要:</strong> {validation_summary}</div>\n'
+
+    html += '        </div>\n'
+    html += '''
 '''
 
     # 回滚链接 (仅正常修复时显示)
@@ -1136,8 +1295,51 @@ def get_task(task_id: str) -> Optional[dict]:
         return None
 
 
+def _mark_email_sent(task_id: str, is_rollback: bool = False):
+    """标记邮件已发送
+
+    根据操作类型设置不同的字段:
+    - 修复结果邮件: resultEmailSent, resultEmailSentAt
+    - 回滚结果邮件: rollbackEmailSent, rollbackEmailSentAt
+
+    只更新邮件发送标记，不更新 status。
+    这样可以避免触发状态变更相关的事件/流，同时允许回滚检查通过。
+
+    Args:
+        task_id: 任务 ID
+        is_rollback: 是否为回滚邮件
+    """
+    now = datetime.now(timezone.utc).isoformat()
+
+    if is_rollback:
+        sent_field = 'rollbackEmailSent'
+        sent_at_field = 'rollbackEmailSentAt'
+    else:
+        sent_field = 'resultEmailSent'
+        sent_at_field = 'resultEmailSentAt'
+
+    try:
+        tasks_table.update_item(
+            Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'},
+            UpdateExpression=f'SET {sent_field} = :sent, {sent_at_field} = :sentAt',
+            ExpressionAttributeValues={
+                ':sent': True,
+                ':sentAt': now
+            },
+            ConditionExpression='attribute_exists(PK)'
+        )
+    except tasks_table.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.warning(f"Task {task_id} does not exist, cannot mark email sent")
+    except Exception as e:
+        logger.exception(f"Error marking {sent_field}: {e}")
+
+
 def update_task_status(task_id: str, status: str, extra_data: dict = None):
-    """更新任务状态"""
+    """更新任务状态
+
+    注意: 只更新已存在的记录，不会创建新记录。
+    如果记录不存在，会抛出 ConditionalCheckFailedException。
+    """
     now = datetime.now(timezone.utc).isoformat()
 
     update_expr = 'SET #status = :status, updatedAt = :updated, GSI1PK = :gsi1pk, phase = :phase'
@@ -1157,12 +1359,17 @@ def update_task_status(task_id: str, status: str, extra_data: dict = None):
             expr_values[f':{key}'] = value
             expr_names[attr_name] = key
 
-    tasks_table.update_item(
-        Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'},
-        UpdateExpression=update_expr,
-        ExpressionAttributeValues=expr_values,
-        ExpressionAttributeNames=expr_names
-    )
+    try:
+        tasks_table.update_item(
+            Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'},
+            UpdateExpression=update_expr,
+            ExpressionAttributeValues=expr_values,
+            ExpressionAttributeNames=expr_names,
+            ConditionExpression='attribute_exists(PK)'  # 确保记录已存在
+        )
+    except tasks_table.meta.client.exceptions.ConditionalCheckFailedException:
+        logger.warning(f"Task {task_id} does not exist, skipping status update to '{status}'")
+        raise ValueError(f"Task {task_id} does not exist")
 
 
 def get_approval_status(event: dict) -> dict:

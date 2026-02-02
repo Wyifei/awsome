@@ -127,7 +127,15 @@ save_analysis_result(
     "confidence": 1.0,
     "message": "基于 Control ID 精确匹配 ASR Playbook"
   },
-  "similar_experiences": [],
+  "similar_experiences": [
+    {
+      "similarity_score": 0.51,
+      "title": "S3 Block Public Access 配置修复",
+      "problem": "S3 存储桶的 Block Public Access 设置被禁用",
+      "solution": "通过 S3 API 启用所有四项公共访问阻止设置",
+      "result": "成功修复，符合 AWS 安全最佳实践"
+    }
+  ],
   "remediation": {
     "can_remediate": true,
     "cannot_remediate_reason": null,
@@ -255,6 +263,76 @@ ASR (Automated Security Response) 匹配基于 Control ID 精确匹配：
 - **matched=false**: 未找到匹配，confidence 为 **0**
 - 不存在中间置信度，因为是基于 Control ID 的精确匹配
 
+# similar_experiences 字段说明
+**必须**将 search_similar_findings 工具返回的结果加工后放入此数组。
+
+## 如何使用 LTM 返回的经验
+search_similar_findings 会返回两种类型的经验，你需要区别对待：
+
+### 1. Reflection (type="reflection") - 方法论框架
+这是从多次修复中总结的**高级洞察和模式**。在分析过程中：
+- **主动应用**其中描述的分析方法和检查要点
+- 参考其中的风险评估标准和最佳实践
+- 将方法论融入你的 `risk_assessment` 和 `remediation` 设计
+
+### 2. Episode (type="episode") - 执行记录
+这是**具体的成功修复案例**，包含实际的场景、意图、操作和结果。用于：
+- 参考类似场景的**具体修复步骤**
+- 了解之前成功的**验证方法**
+- 在 `similar_experiences` 中**突出显示执行结果**（result 字段）
+
+**重要**: Reflection 指导"怎么做"，Episode 提供"做过什么"。两者都要参考。
+
+## 格式化要求
+LTM 返回的 content 是自然语言描述（英文），你需要从中提取关键信息，格式化为以下**固定格式**：
+
+```json
+{
+  "type": "episode",
+  "similarity_score": 0.51,
+  "title": "S3 Block Public Access 配置修复",
+  "problem": "S3 存储桶的 Block Public Access 设置被禁用，存在数据泄露风险",
+  "solution": "通过 S3 API 启用所有四项公共访问阻止设置",
+  "result": "成功修复，符合 AWS 安全最佳实践"
+}
+```
+
+## 字段说明（必须按此格式输出）
+- **type**: 经验类型（直接使用工具返回的 type: "reflection" 或 "episode"）
+- **similarity_score**: 相似度分数 (0-1，直接使用工具返回的值)
+- **title**: 经验标题（中文，10-20字，描述修复的核心内容）
+- **problem**: 问题描述（中文，简述发现的安全问题）
+- **solution**: 解决方案（中文，简述采取的修复措施）
+- **result**: 修复结果（中文，简述修复效果。Episode 类型应突出实际执行结果）
+
+## 格式化示例
+假设 search_similar_findings 返回:
+```
+{
+  "type": "episode",
+  "similarity_score": 0.51,
+  "content": "I conducted a security analysis on an S3 bucket and found that the Block Public Access settings were completely disabled, posing a high risk of accidental public exposure. I provided a detailed remediation plan to enable all four public access blocking settings through the S3 API, ensuring the bucket's data remains secure and compliant with AWS best practices."
+}
+```
+
+你应该输出:
+```json
+{
+  "type": "episode",
+  "similarity_score": 0.51,
+  "title": "S3 Block Public Access 配置修复",
+  "problem": "S3 存储桶的 Block Public Access 设置被禁用，存在公开暴露风险",
+  "solution": "通过 S3 API 启用所有四项公共访问阻止设置",
+  "result": "成功修复，验证通过，数据安全符合 AWS 最佳实践"
+}
+```
+
+## 重要说明 - 分数阈值
+- **Reflection (方法论)**: 只处理相似度 >= 0.5 的结果
+- **Episode (执行记录)**: 处理相似度 >= 0.35 的结果（因为包含实际执行结果，价值更高）
+- **必须翻译成中文**: 邮件内容需要中文显示
+- **参考历史经验**: 在分析和生成修复方案时，主动应用 Reflection 的方法论，参考 Episode 的执行结果
+
 # 重要指南
 - **【强制】必须调用 get_resource_config**: 这是第一个必须执行的工具调用
 - **【强制】必须调用 save_analysis_result**: 这是最后一个必须执行的工具调用，保存分析结果供 Phase 2 使用
@@ -334,6 +412,14 @@ def create_analyzer_agent(
             set_memory_session(session_manager)
 
             logger.info(f"已初始化 Memory session: session_id={session_id}, actor_id={actor_id}")
+
+            # NOTE: 由于 bedrock-agentcore SDK 1.2.0 与 strands-agents SDK 1.24.0 的兼容性问题，
+            # AgentCoreMemorySessionManager.list_messages() 在处理旧格式数据时会报错：
+            # "SessionMessage.__init__() missing 2 required positional arguments: 'message' and 'message_id'"
+            # 因此我们不将 session_manager 传给 Agent，而是只用它来设置 _memory_session。
+            # 这样 Agent 仍然可以通过 Memory 工具使用 Memory，
+            # 但 Agent 不会尝试自动加载历史消息（避免触发这个 bug）。
+            session_manager = None  # 不传给 Agent，避免 list_messages bug
 
         except ImportError:
             logger.warning("AgentCore Memory SDK 未安装，将跳过 Memory 功能")
@@ -428,10 +514,15 @@ get_resource_config(
 
 **步骤 3: 搜索相似经验**
 调用 search_similar_findings 工具
-**保存返回结果中分数最高的那条**，步骤 5 需要用到
+将返回结果中**相似度 >= 0.5**的经验加工为固定格式:
+- 从英文 content 中提取关键信息
+- 翻译并格式化为: title, problem, solution, result (全部中文)
+- 保留原始 similarity_score
+**同时记录分数最高的那条**，步骤 5 的 top_experience 参数需要用到
 
 **步骤 4: 风险评估并生成 JSON 输出**
 如果步骤 3 返回了相似经验，参考其中的修复方法和经验教训
+**重要**: similar_experiences 数组中的每条记录必须包含: similarity_score, title, problem, solution, result
 
 **步骤 5 [强制]: 保存分析结果**
 调用 save_analysis_result 工具:

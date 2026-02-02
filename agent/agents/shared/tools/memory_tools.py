@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 _memory_session = None
 
 # Namespace patterns (must match create_shara_memory.py)
+# NOTE: Memory Strategy 配置使用 {actorId} 占位符，LTM 提取时会自动替换
+# 但在检索时，必须手动替换为实际的 actor_id（API 不支持通配符）
+# 格式: /remediation/actors/{actorId}/
+EPISODE_NAMESPACE_PATTERN = "/remediation/actors/{actorId}/"
+REFLECTION_NAMESPACE_PATTERN = "/remediation/actors/{actorId}/"
+
+# 兼容旧代码的别名（将在后续被替换）
 EPISODE_NAMESPACE_PREFIX = "/remediation/actors/"
 REFLECTION_NAMESPACE_PREFIX = "/remediation/actors/"
 
@@ -205,6 +212,42 @@ def get_memory_session() -> Optional[MemorySession]:
 MIN_RELEVANCE_SCORE = 0.35
 
 
+def _detect_memory_type(content: str) -> str:
+    """根据内容结构检测 Memory 类型（Episode 或 Reflection）。
+
+    Reflection 特征字段: title, use_cases, hints, confidence
+    Episode 特征字段: situation, intent, assessment, justification, turns
+
+    Args:
+        content: Memory 内容（JSON 字符串或原始文本）
+
+    Returns:
+        str: "episode" 或 "reflection"
+    """
+    if not content:
+        return "reflection"
+
+    content_lower = content.lower()
+
+    # Episode 特征关键词（检查是否有 Episode 结构）
+    episode_indicators = ['"situation":', '"intent":', '"assessment":', '"justification":', '"turns":']
+    episode_score = sum(1 for indicator in episode_indicators if indicator in content_lower)
+
+    # Reflection 特征关键词（检查是否有 Reflection 结构）
+    reflection_indicators = ['"use_cases":', '"hints":', '"confidence":']
+    reflection_score = sum(1 for indicator in reflection_indicators if indicator in content_lower)
+
+    # 根据匹配的特征判断类型
+    if episode_score >= 2:  # 至少匹配 2 个 Episode 特征
+        return "episode"
+    elif reflection_score >= 2:  # 至少匹配 2 个 Reflection 特征
+        return "reflection"
+    elif episode_score > reflection_score:
+        return "episode"
+    else:
+        return "reflection"
+
+
 @tool
 def search_similar_findings(
     control_id: str,
@@ -215,14 +258,13 @@ def search_similar_findings(
     """从 Memory LTM 搜索相似的修复经验。
 
     使用 Episodic Memory Strategy 搜索历史修复经验：
-    1. 首先搜索 Reflections (跨任务高级洞察和模式)
-    2. 然后搜索 Episodes (具体修复场景)
+    - Reflections: 跨任务高级洞察和方法论框架
+    - Episodes: 具体的修复执行记录
 
     结果会按相似度分数过滤，只返回分数 >= MIN_RELEVANCE_SCORE (0.35) 的经验。
 
     Namespace 结构:
-    - Episodes: /remediation/actors/{actorId}/
-    - Reflections: /remediation/actors/{actorId}/
+    - Episodes 和 Reflections 都存储在: /remediation/actors/{actorId}/
 
     Args:
         control_id: Security Hub Control ID (如 S3.1)
@@ -232,11 +274,11 @@ def search_similar_findings(
 
     Returns:
         list: 相似修复经验列表，每个经验包含:
-            - type: str - "reflection" 或 "episode"
+            - type: str - "reflection" 或 "episode"（根据内容自动检测）
             - similarity_score: float - 相似度分数
             - content: str/dict - 经验内容
-            - control_id: str - Control ID (如匹配)
-            - insights: str - 提取的关键洞察 (如有)
+            - insights: str - 提取的关键洞察 (Reflection)
+            - episode_structure: dict - 解析的 Episode 结构 (Episode)
     """
     session = get_memory_session()
     if not session:
@@ -244,31 +286,43 @@ def search_similar_findings(
         return []
 
     results = []
+    seen_record_ids = set()  # 用于去重
 
     try:
-        # 构建语义搜索查询 - 包含关键信息以提高匹配准确度
-        query = f"Security remediation for AWS {resource_type}: Control ID {control_id}, Finding: {finding_title}"
+        # 构建语义搜索查询
+        # 使用综合性 query 来检索所有类型的记忆
+        search_query = f"AWS Security Hub {control_id} {resource_type} remediation finding: {finding_title}"
+
+        # 构建完整的 namespace（用 actor_id 替换 {actorId} 占位符）
+        namespace = REFLECTION_NAMESPACE_PATTERN.replace("{actorId}", session.actor_id)
 
         logger.info(f"="*50)
         logger.info(f"[LTM SEARCH] control_id={control_id}")
         logger.info(f"[LTM SEARCH] resource_type={resource_type}")
         logger.info(f"[LTM SEARCH] memory_id={session.memory_id}")
         logger.info(f"[LTM SEARCH] actor_id={session.actor_id}")
-        logger.info(f"[LTM SEARCH] Query: {query[:100]}...")
+        logger.info(f"[LTM SEARCH] namespace={namespace}")
+        logger.info(f"[LTM SEARCH] query: {search_query[:80]}...")
         logger.info(f"="*50)
 
-        # 1. 首先搜索 Reflections - 跨任务的高级洞察
-        # Reflections 存储在 /remediation/actors/{actorId}/ 下
-        logger.info(f"Searching Reflections with namespace_prefix: {REFLECTION_NAMESPACE_PREFIX}")
+        # 搜索 LTM - 一次搜索返回所有类型的记忆
+        logger.info(f"Searching LTM with namespace: {namespace}")
 
         try:
-            reflection_memories = session.search_long_term_memories(
-                query=query,
-                namespace_prefix=REFLECTION_NAMESPACE_PREFIX,
-                top_k=top_k // 2 + 1  # 分配一半给 reflections
+            memories = session.search_long_term_memories(
+                query=search_query,
+                namespace_prefix=namespace,
+                top_k=top_k * 2  # 请求更多以确保有足够的高分结果
             )
 
-            for memory in reflection_memories:
+            for memory in memories:
+                # 去重：使用 memoryRecordId
+                record_id = memory.get('memoryRecordId', '')
+                if record_id and record_id in seen_record_ids:
+                    continue
+                if record_id:
+                    seen_record_ids.add(record_id)
+
                 raw_content = memory.get('content', '')
                 score = memory.get('score', 0.0)
 
@@ -278,55 +332,38 @@ def search_similar_findings(
                 else:
                     content = str(raw_content) if raw_content else ''
 
-                # Reflections 通常包含跨任务的模式和洞察
-                result = {
-                    "type": "reflection",
-                    "similarity_score": score,
-                    "content": content,
-                    "insights": _extract_insights_from_reflection(content, control_id),
-                }
-                results.append(result)
+                # 根据内容自动检测类型
+                memory_type = _detect_memory_type(content)
 
-            logger.info(f"Found {len(reflection_memories)} reflections")
-        except Exception as e:
-            logger.warning(f"Error searching reflections: {e}")
-
-        # 2. 搜索 Episodes - 具体的修复场景
-        # Episodes 存储在 /remediation/actors/{actorId}/ 下 (Actor 级别)
-        logger.info(f"Searching Episodes with namespace_prefix: {EPISODE_NAMESPACE_PREFIX}")
-
-        try:
-            episode_memories = session.search_long_term_memories(
-                query=query,
-                namespace_prefix=EPISODE_NAMESPACE_PREFIX,
-                top_k=top_k // 2 + 1  # 分配一半给 episodes
-            )
-
-            for memory in episode_memories:
-                raw_content = memory.get('content', '')
-                score = memory.get('score', 0.0)
-
-                # 处理 content 格式：可能是字符串或 {'text': '...'} 格式
-                if isinstance(raw_content, dict):
-                    content = raw_content.get('text', str(raw_content))
+                if memory_type == "episode":
+                    result = {
+                        "type": "episode",
+                        "similarity_score": score,
+                        "content": content,
+                        "episode_structure": _parse_episode_structure(content),
+                        "record_id": record_id,
+                    }
                 else:
-                    content = str(raw_content) if raw_content else ''
-
-                # Episodes 包含具体的修复场景 (scenario → intent → actions → outcomes)
-                result = {
-                    "type": "episode",
-                    "similarity_score": score,
-                    "content": content,
-                    "episode_structure": _parse_episode_structure(content),
-                }
+                    result = {
+                        "type": "reflection",
+                        "similarity_score": score,
+                        "content": content,
+                        "insights": _extract_insights_from_reflection(content, control_id),
+                        "record_id": record_id,
+                    }
                 results.append(result)
 
-            logger.info(f"Found {len(episode_memories)} episodes")
+            logger.info(f"Found {len(memories)} memories, {len(results)} unique after dedup")
         except Exception as e:
-            logger.warning(f"Error searching episodes: {e}")
+            logger.warning(f"Error searching LTM: {e}")
 
         # 按相似度分数排序
         results.sort(key=lambda x: x.get('similarity_score', 0), reverse=True)
+
+        # 统计类型分布
+        episode_count = sum(1 for r in results if r.get('type') == 'episode')
+        reflection_count = sum(1 for r in results if r.get('type') == 'reflection')
+        logger.info(f"[LTM SEARCH] Type distribution: {episode_count} episodes, {reflection_count} reflections")
 
         # 过滤低分结果 - 只保留相关性足够高的经验
         total_before_filter = len(results)
@@ -915,14 +952,12 @@ def save_experience_to_ltm(
 ) -> dict:
     """保存修复经验到 Memory（通过 STM 触发 LTM Episodic 提取）。
 
-    当修复成功且经过验证后，将此次修复经验保存为 Episodic 格式的 event。
-    AgentCore Memory 的 Episodic Strategy 会自动从 events 中提取:
-    - Episodes (scenario → intent → actions → outcomes) 存储在 /remediation/actors/{actorId}/
-    - Reflections (跨任务模式分析) 也存储在 /remediation/actors/{actorId}/
+    当修复成功且经过验证后，将此次修复经验保存为对话格式的 events。
+    使用 USER/ASSISTANT/TOOL 格式，让 built-in Episodic Strategy 能正确提取：
+    - Episodes (situation → intent → action → thought → assessment)
+    - Reflections (跨任务模式分析)
 
-    使用 Actor 级别 namespace 的好处:
-    - 同一 Actor (AWS 账户) 的所有修复经验可以跨 Session 检索
-    - Reflections 会分析同一 Actor 的所有 Episodes，生成有用的洞察
+    存储在 /remediation/actors/{actorId}/ namespace 下。
 
     注意：LTM 提取是异步的，保存后可能需要几分钟才能在 LTM 中检索到。
 
@@ -956,88 +991,49 @@ def save_experience_to_ltm(
         safe_control_id = control_id.replace('.', '_')
         experience_id = f"EXP_{safe_control_id}_{task_id[:8]}"
 
-        # 构建 Episodic 格式的经验内容
-        # 结构: scenario → intent → actions → outcomes
-        # 这种格式便于 Episodic Extraction 正确识别和提取
-        experience_content = f"""
-# Security Remediation Episode
+        # 提取代码中的关键 boto3 调用作为 TOOL 消息
+        # 只保留前 800 字符避免过长
+        code_for_tool = generated_code[:800]
+        if len(generated_code) > 800:
+            code_for_tool += "\n# ... (code truncated)"
 
-## Episode ID
-{experience_id}
+        # 构建对话格式的经验 - 符合 built-in Episodic Strategy 期望的格式
+        # Turn 1: USER - 任务请求（scenario/situation）
+        user_message = f"Remediate AWS Security Hub finding: Control ID {control_id} on {resource_type}. Finding: {finding_title}"
 
-## Scenario
-**What happened:** AWS Security Hub detected a security finding.
-- **Control ID:** {control_id}
-- **Finding Title:** {finding_title}
-- **Resource Type:** {resource_type}
-- **Task ID:** {task_id}
+        # Turn 2: ASSISTANT - 分析和计划（intent/thought）
+        assistant_analysis = f"I will analyze and remediate this {control_id} finding.\n\nAnalysis: {analysis_summary}\n\nRemediation approach: {remediation_approach}"
 
-### Finding Details
-{analysis_summary}
+        # Turn 3: TOOL - 执行的代码和结果（action）
+        tool_execution = f"execute_remediation_code(control_id='{control_id}', resource_type='{resource_type}')\n\nCode executed:\n```python\n{code_for_tool}\n```"
 
-## Intent
-**Goal:** Remediate the security finding {control_id} on {resource_type} resource to achieve compliance with AWS Security Hub standards.
+        # Turn 4: ASSISTANT - 验证结果（outcome/assessment）
+        outcome = validation_result or "RESOLVED"
+        lessons = f"\n\nLessons learned: {lessons_learned}" if lessons_learned else ""
+        assistant_result = f"Remediation completed. Validation result: {outcome}.{lessons}"
 
-**Expected Outcome:** Resource should pass the security control check after remediation.
-
-## Actions
-**Remediation Approach:**
-{remediation_approach}
-
-**Generated Code:**
-```python
-{generated_code}
-```
-
-**Execution Steps:**
-1. Phase 1 (Analyzer): Analyzed finding and determined remediation strategy
-2. Phase 2 (Remediator): Generated and executed remediation code
-3. Phase 2 (Validator): Verified remediation success and updated Security Hub
-
-## Outcomes
-**Result:** {'SUCCESS' if validation_result else 'PENDING VALIDATION'}
-
-**Validation Details:**
-{validation_result or 'Awaiting validation'}
-
-**Lessons Learned:**
-{lessons_learned or 'N/A'}
-
-## Metadata
-- **Timestamp:** {datetime.now(timezone.utc).isoformat()}
-- **Source:** validated_remediation
-- **Service Family:** {control_id.split('.')[0] if '.' in control_id else control_id}
-"""
-
-        # 保存为 event，Episodic Strategy 会自动:
-        # 1. 提取 Episode 到 /remediation/actors/{actorId}/ (Actor 级别)
-        # 2. 生成 Reflection 到 /remediation/actors/{actorId}/
-        # 注意: 必须使用 JSON 格式，否则 AgentCoreMemorySessionManager
-        # 在恢复会话时会因为 JSON 解析失败而报错
-        experience_data = {
-            "type": "ltm_experience",
-            "experience_id": experience_id,
-            "control_id": control_id,
-            "task_id": task_id,
-            "finding_title": finding_title,
-            "resource_type": resource_type,
-            "content": experience_content,  # Markdown 内容作为字符串字段
-            "saved_at": datetime.now(timezone.utc).isoformat()
-        }
+        # 保存为对话格式的 events
+        # Episodic Strategy 会从这些 turns 中提取:
+        # - situation: 从 USER 消息
+        # - intent: 从 ASSISTANT 分析
+        # - action: 从 TOOL 执行
+        # - thought: 从 ASSISTANT 推理
+        # - assessment: 从最终结果
         session.add_turns([
-            ConversationalMessage(
-                json.dumps(experience_data),
-                MessageRole.ASSISTANT
-            )
+            ConversationalMessage(user_message, MessageRole.USER),
+            ConversationalMessage(assistant_analysis, MessageRole.ASSISTANT),
+            ConversationalMessage(tool_execution, MessageRole.TOOL),
+            ConversationalMessage(assistant_result, MessageRole.ASSISTANT),
         ])
 
         logger.info(f"="*50)
         logger.info(f"[LTM EXPERIENCE SAVED] control_id={control_id}")
         logger.info(f"[LTM EXPERIENCE SAVED] experience_id={experience_id}")
+        logger.info(f"[LTM EXPERIENCE SAVED] Format: Conversational (USER/ASSISTANT/TOOL)")
         logger.info(f"[LTM EXPERIENCE SAVED] Episode namespace: /remediation/actors/{{actorId}}/")
         logger.info(f"[LTM EXPERIENCE SAVED] actor_id={session.actor_id}")
         logger.info(f"[LTM EXPERIENCE SAVED] session_id={session.session_id}")
-        logger.info(f"[LTM EXPERIENCE SAVED] content length={len(experience_content)} chars")
+        logger.info(f"[LTM EXPERIENCE SAVED] turns_count=4")
         logger.info(f"="*50)
 
         return {

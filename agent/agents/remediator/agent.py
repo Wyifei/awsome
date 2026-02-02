@@ -302,6 +302,14 @@ def create_remediator_agent(
 
             logger.info(f"已连接 Memory session: session_id={memory_session_id}, actor_id={actor_id}")
 
+            # NOTE: 由于 bedrock-agentcore SDK 1.2.0 与 strands-agents SDK 1.24.0 的兼容性问题，
+            # AgentCoreMemorySessionManager.list_messages() 在处理旧格式数据时会报错：
+            # "SessionMessage.__init__() missing 2 required positional arguments: 'message' and 'message_id'"
+            # 因此我们不将 session_manager 传给 Agent，而是只用它来设置 _memory_session。
+            # 这样 Agent 仍然可以通过 Memory 工具使用 Memory，
+            # 但 Agent 不会尝试自动加载历史消息（避免触发这个 bug）。
+            session_manager = None  # 不传给 Agent，避免 list_messages bug
+
         except ImportError:
             logger.warning("AgentCore Memory SDK 未安装，将跳过 Memory 功能")
         except Exception as e:

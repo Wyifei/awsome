@@ -483,7 +483,9 @@ def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
 def process_cve_finding(finding: dict, classification: dict, context) -> dict:
     """处理 CVE 漏洞 Finding (容器/EC2)
 
-    只发送通知邮件，不创建 DynamoDB 任务记录（CVE 漏洞需要手动处理，无需跟踪）
+    按资源 ID 去重（同一镜像/实例 24 小时内只发一封邮件），避免信息爆炸。
+    - 容器镜像漏洞：按镜像资源 ID 去重
+    - EC2 软件漏洞：按 EC2 实例 ID 去重
 
     Args:
         finding: Security Hub Finding (ASFF 格式)
@@ -496,12 +498,78 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
     finding_id = finding.get('Id', '')
     finding_type = classification['type']  # CONTAINER_CVE or EC2_CVE
 
+    # 提取资源 ID（用于去重）
+    resources = finding.get('Resources', [])
+    resource = resources[0] if resources else {}
+    resource_id = resource.get('Id', '')
+
     # 提取 CVE 详情
     cve_details = extract_cve_details(finding)
 
-    logger.info(f"Processing CVE finding {finding_id} (type: {finding_type}, cve: {cve_details['cve_id']})")
+    logger.info(f"Processing CVE finding {finding_id} (type: {finding_type}, cve: {cve_details['cve_id']}, resource: {resource_id})")
 
-    # 只发送通知邮件，不写入 DynamoDB
+    # 按资源 ID 去重检查（24小时内同一资源只发一封邮件）
+    # 使用 GSI2 查询，key 格式: CVE_RESOURCE#{finding_type}#{resource_id}
+    dedup_key = f"CVE_RESOURCE#{finding_type}#{resource_id}"
+    existing_records = tasks_table.query(
+        IndexName='GSI2',
+        KeyConditionExpression='GSI2PK = :pk',
+        ExpressionAttributeValues={':pk': dedup_key},
+        Limit=1
+    )
+
+    if existing_records.get('Items'):
+        existing_record = existing_records['Items'][0]
+        logger.info(f"Skipping duplicate CVE for resource {resource_id}, existing record: {existing_record.get('taskId')}")
+        return {
+            'finding_id': finding_id,
+            'status': 'skipped',
+            'reason': 'duplicate_resource',
+            'resource_id': resource_id,
+            'existing_task_id': existing_record.get('taskId'),
+            'cve_id': cve_details['cve_id']
+        }
+
+    # 创建去重记录（最小化，仅用于去重）
+    task_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    task_ttl = int((datetime.now(timezone.utc) + timedelta(hours=APPROVAL_EXPIRY_HOURS)).timestamp())
+
+    dedup_record = {
+        'PK': f'TASK#{task_id}',
+        'SK': 'METADATA',
+        'GSI1PK': f'STATUS#cve_notified',
+        'GSI1SK': now,
+        'GSI2PK': dedup_key,  # CVE_RESOURCE#{type}#{resource_id}
+        'GSI2SK': now,
+        'GSI3PK': f'ACCOUNT#{finding.get("AwsAccountId", "")}',
+        'GSI3SK': now,
+
+        'taskId': task_id,
+        'findingId': finding_id,
+        'findingType': finding_type,
+        'status': 'cve_notified',
+        'phase': 'notification',
+
+        'resourceType': resource.get('Type', ''),
+        'resourceId': resource_id,
+        'awsAccountId': finding.get('AwsAccountId', ''),
+        'region': finding.get('Region', REGION),
+
+        'cveId': cve_details['cve_id'],
+        'cveSeverity': cve_details['severity'],
+
+        'createdAt': now,
+        'updatedAt': now,
+        'ttl': task_ttl,
+        'traceId': context.aws_request_id if context else None
+    }
+
+    # 保存去重记录
+    tasks_table.put_item(Item=dedup_record)
+    logger.info(f"Created CVE dedup record {task_id} for resource {resource_id}")
+
+    # 发送通知邮件
     email_sent = False
     try:
         email_sent = send_cve_notification_email(finding_id, finding, classification, cve_details)
@@ -514,8 +582,10 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
 
     return {
         'finding_id': finding_id,
+        'task_id': task_id,
         'status': 'notified' if email_sent else 'notification_failed',
         'classification': finding_type,
+        'resource_id': resource_id,
         'cve_id': cve_details['cve_id']
     }
 
@@ -557,7 +627,7 @@ def send_cve_notification_email(
 
         email_subject = f'[SHARA] 🔴 {type_label}通知 - {cve_id} ({severity})'
 
-        # 发送邮件
+        # 发送邮件 (HTML 格式)
         ses_client.send_email(
             Source=SENDER_EMAIL,
             Destination={'ToAddresses': [APPROVAL_EMAIL]},
@@ -567,7 +637,7 @@ def send_cve_notification_email(
                     'Charset': 'UTF-8'
                 },
                 'Body': {
-                    'Text': {
+                    'Html': {
                         'Data': email_body,
                         'Charset': 'UTF-8'
                     }
@@ -575,7 +645,7 @@ def send_cve_notification_email(
             }
         )
 
-        logger.info(f"CVE notification email sent for finding {finding_id}")
+        logger.info(f"CVE notification email sent (HTML) for finding {finding_id}")
         return True
 
     except ClientError as e:
@@ -592,7 +662,7 @@ def format_cve_notification_email(
     classification: dict,
     cve_details: dict
 ) -> str:
-    """格式化 CVE 通知邮件
+    """格式化 CVE 通知邮件 (HTML 格式)
 
     Args:
         finding_id: Finding ID
@@ -601,165 +671,173 @@ def format_cve_notification_email(
         cve_details: CVE 详情
 
     Returns:
-        str: 格式化的邮件内容
+        str: HTML 格式的邮件内容
     """
     finding_type = classification['type']
     resources = finding.get('Resources', [])
     resource = resources[0] if resources else {}
 
-    # 严重性图标
-    severity_icons = {
-        'CRITICAL': '🔴 CRITICAL',
-        'HIGH': '🟠 HIGH',
-        'MEDIUM': '🟡 MEDIUM',
-        'LOW': '🟢 LOW'
-    }
+    # 严重性颜色和显示
     severity = cve_details['severity']
-    severity_display = severity_icons.get(severity, f'⚪ {severity}')
+    severity_colors = {
+        'CRITICAL': ('#dc3545', '🔴 CRITICAL'),
+        'HIGH': ('#fd7e14', '🟠 HIGH'),
+        'MEDIUM': ('#ffc107', '🟡 MEDIUM'),
+        'LOW': ('#28a745', '🟢 LOW')
+    }
+    severity_color, severity_display = severity_colors.get(severity, ('#6c757d', f'⚪ {severity}'))
 
-    # 漏洞类型显示
+    # 漏洞类型
     if finding_type == 'CONTAINER_CVE':
         type_display = '🐳 容器镜像漏洞'
-        type_emoji = '🐳'
+        type_icon = '🐳'
+        responsible_team = 'DevOps / 开发团队'
     else:
         type_display = '🖥️ EC2 软件漏洞'
-        type_emoji = '🖥️'
+        type_icon = '🖥️'
+        responsible_team = '运维 / SRE 团队'
 
-    # 是否有公开利用
-    exploit_display = '⚠️ YES - 需紧急处理!' if cve_details['exploit_available'] else '❌ NO'
-
-    # 提取资源详细信息
+    # 资源信息
     resource_id = resource.get('Id', 'N/A')
     resource_type = resource.get('Type', 'N/A')
 
-    # 对于容器镜像，提取 repository 和 image tag
-    container_info = ''
-    if finding_type == 'CONTAINER_CVE':
-        # 从 resource ID 解析 repository 信息
-        # 格式通常是: arn:aws:ecr:region:account:repository/repo-name/sha256:xxx
-        if '/' in resource_id:
-            parts = resource_id.split('/')
-            if len(parts) >= 2:
-                repo_name = parts[-2] if len(parts) > 2 else parts[-1]
-                container_info = f'\n  Repository:     {repo_name}'
+    # 容器镜像额外信息
+    container_row = ''
+    if finding_type == 'CONTAINER_CVE' and '/' in resource_id:
+        parts = resource_id.split('/')
+        if len(parts) >= 2:
+            repo_name = parts[-2] if len(parts) > 2 else parts[-1]
+            container_row = f'<tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">Repository</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{repo_name}</code></td></tr>'
 
-    # 构建邮件内容
-    lines = [
-        '═' * 70,
-        f'              {type_emoji} SHARA 安全漏洞通知 - 需要手动处理',
-        '═' * 70,
-        '',
-        '📋 基本信息',
-        '─' * 70,
-        f'  漏洞类型:       {type_display}',
-        f'  CVE ID:         {cve_details["cve_id"]}',
-        f'  严重性:         {severity_display}',
-        f'  CVSS 分数:      {cve_details["cvss_score"]}',
-        f'  Finding ID:     {finding_id[:50]}...' if len(finding_id) > 50 else f'  Finding ID:     {finding_id}',
-        '',
-        '📦 受影响资源',
-        '─' * 70,
-        f'  资源类型:       {resource_type}',
-        f'  资源 ID:        {resource_id}',
-        f'  AWS 账户:       {finding.get("AwsAccountId", "N/A")}',
-        f'  区域:           {finding.get("Region", "N/A")}',
-    ]
-
-    if container_info:
-        lines.append(container_info)
-
-    lines.extend([
-        '',
-        '🐛 漏洞详情',
-        '─' * 70,
-        f'  受影响包:       {cve_details["package_name"]}',
-        f'  当前版本:       {cve_details["current_version"]}',
-        f'  修复版本:       {cve_details["fixed_version"]}',
-        f'  是否有公开利用: {exploit_display}',
-        '',
-        '  漏洞描述:',
-    ])
-
-    # 漏洞描述（可能很长，需要换行处理）
-    description = cve_details['description']
-    if description:
-        # 将描述按行分割，每行最多 65 个字符
-        desc_lines = []
-        current_line = '  '
-        for word in description.split():
-            if len(current_line) + len(word) + 1 <= 68:
-                current_line += word + ' '
-            else:
-                desc_lines.append(current_line.rstrip())
-                current_line = '  ' + word + ' '
-        if current_line.strip():
-            desc_lines.append(current_line.rstrip())
-        lines.extend(desc_lines[:10])  # 最多显示 10 行
-        if len(desc_lines) > 10:
-            lines.append('  ...(描述已截断)')
+    # 公开利用状态
+    if cve_details['exploit_available']:
+        exploit_html = '<span style="color:#dc3545;font-weight:bold;">⚠️ YES - 需紧急处理!</span>'
     else:
-        lines.append('  (无描述信息)')
+        exploit_html = '<span style="color:#28a745;">❌ NO</span>'
 
-    lines.extend([
-        '',
-        '🔧 修复建议',
-        '─' * 70,
-    ])
-
-    if finding_type == 'CONTAINER_CVE':
-        lines.extend([
-            '  ⚠️ 无法自动修复 - 需要开发团队更新镜像',
-            '',
-            '  建议操作:',
-            '  1. 更新 Dockerfile 或基础镜像中的软件包',
-            f'  2. 执行: {cve_details["remediation_command"]}',
-            '  3. 重新构建并推送镜像到 ECR',
-            '  4. 重新部署使用该镜像的服务 (ECS/EKS/Lambda)',
-            '  5. 在 Security Hub 中验证 Finding 已解决',
-            '',
-            '  负责团队: DevOps / 开发团队',
-        ])
-    else:  # EC2_CVE
-        lines.extend([
-            '  ⚠️ 无法自动修复 - 需要运维团队手动打补丁',
-            '',
-            '  建议操作:',
-            '  1. 在测试环境验证补丁兼容性',
-            '  2. 安排维护窗口 (建议在业务低峰期)',
-            f'  3. 执行: {cve_details["remediation_command"]}',
-            '  4. 重启相关服务或实例',
-            '  5. 验证服务正常运行',
-            '  6. 在 Security Hub 中验证 Finding 已解决',
-            '',
-            '  负责团队: 运维 / SRE 团队',
-        ])
+    # 漏洞描述（截断处理）
+    description = cve_details.get('description', '')
+    if len(description) > 500:
+        description = description[:500] + '...'
 
     # 参考链接
     reference_urls = cve_details.get('reference_urls', [])
+    reference_links_html = ''
     if reference_urls:
-        lines.extend([
-            '',
-            '📚 参考链接',
-            '─' * 70,
-        ])
-        for url in reference_urls[:5]:  # 最多显示 5 个链接
-            lines.append(f'  • {url}')
+        links = ''.join([f'<li><a href="{url}" style="color:#0066cc;">{url}</a></li>' for url in reference_urls[:5]])
         if len(reference_urls) > 5:
-            lines.append(f'  ... 还有 {len(reference_urls) - 5} 个链接')
+            links += f'<li style="color:#666;">... 还有 {len(reference_urls) - 5} 个链接</li>'
+        reference_links_html = f'''
+        <div style="background:#f8f9fa;padding:15px;border-radius:8px;margin-top:20px;">
+            <h3 style="margin:0 0 10px 0;color:#333;">📚 参考链接</h3>
+            <ul style="margin:0;padding-left:20px;">{links}</ul>
+        </div>
+        '''
 
-    lines.extend([
-        '',
-        '═' * 70,
-        '                    此邮件为通知性质，无需审批操作',
-        '',
-        '  如果此漏洞已修复或不再相关，请在 Security Hub 中归档此 Finding。',
-        '═' * 70,
-        '                    SHARA - Security Hub Auto-Remediation Agent',
-        '                              Powered by AWS Bedrock',
-        '═' * 70,
-    ])
+    # 修复步骤
+    if finding_type == 'CONTAINER_CVE':
+        remediation_steps = f'''
+        <ol style="margin:10px 0;padding-left:20px;line-height:1.8;">
+            <li>更新 Dockerfile 或基础镜像中的软件包</li>
+            <li>执行: <code style="background:#f5f5f5;padding:2px 6px;border-radius:3px;">{cve_details["remediation_command"]}</code></li>
+            <li>重新构建并推送镜像到 ECR</li>
+            <li>重新部署使用该镜像的服务 (ECS/EKS/Lambda)</li>
+            <li>在 Security Hub 中验证 Finding 已解决</li>
+        </ol>
+        '''
+    else:
+        remediation_steps = f'''
+        <ol style="margin:10px 0;padding-left:20px;line-height:1.8;">
+            <li>在测试环境验证补丁兼容性</li>
+            <li>安排维护窗口 (建议在业务低峰期)</li>
+            <li>执行: <code style="background:#f5f5f5;padding:2px 6px;border-radius:3px;">{cve_details["remediation_command"]}</code></li>
+            <li>重启相关服务或实例</li>
+            <li>验证服务正常运行</li>
+            <li>在 Security Hub 中验证 Finding 已解决</li>
+        </ol>
+        '''
 
-    return '\n'.join(lines)
+    # 构建 HTML
+    html = f'''
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;background:#f5f5f5;">
+<div style="max-width:700px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,{severity_color},#333);color:#fff;padding:25px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:10px;">{type_icon}</div>
+        <h1 style="margin:0;font-size:22px;">SHARA 安全漏洞通知</h1>
+        <p style="margin:10px 0 0 0;opacity:0.9;">需要手动处理</p>
+    </div>
+
+    <!-- CVE Badge -->
+    <div style="text-align:center;padding:20px;background:#f8f9fa;border-bottom:1px solid #eee;">
+        <span style="display:inline-block;background:{severity_color};color:#fff;padding:8px 20px;border-radius:20px;font-weight:bold;font-size:16px;">
+            {cve_details["cve_id"]} - {severity}
+        </span>
+    </div>
+
+    <div style="padding:25px;">
+
+        <!-- 基本信息 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;margin-top:0;">📋 基本信息</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:25px;">
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">漏洞类型</td><td style="padding:8px;border-bottom:1px solid #eee;">{type_display}</td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">CVSS 分数</td><td style="padding:8px;border-bottom:1px solid #eee;"><strong style="color:{severity_color};">{cve_details["cvss_score"]}</strong></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">是否有公开利用</td><td style="padding:8px;border-bottom:1px solid #eee;">{exploit_html}</td></tr>
+        </table>
+
+        <!-- 受影响资源 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;">📦 受影响资源</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:25px;">
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">资源类型</td><td style="padding:8px;border-bottom:1px solid #eee;">{resource_type}</td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">资源 ID</td><td style="padding:8px;border-bottom:1px solid #eee;word-break:break-all;"><code style="font-size:12px;">{resource_id}</code></td></tr>
+            {container_row}
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">AWS 账户</td><td style="padding:8px;border-bottom:1px solid #eee;">{finding.get("AwsAccountId", "N/A")}</td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">区域</td><td style="padding:8px;border-bottom:1px solid #eee;">{finding.get("Region", "N/A")}</td></tr>
+        </table>
+
+        <!-- 漏洞详情 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;">🐛 漏洞详情</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:15px;">
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">受影响包</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{cve_details["package_name"]}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">当前版本</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{cve_details["current_version"]}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">修复版本</td><td style="padding:8px;border-bottom:1px solid #eee;"><code style="color:#28a745;">{cve_details["fixed_version"]}</code></td></tr>
+        </table>
+        <div style="background:#f8f9fa;padding:15px;border-radius:8px;margin-bottom:25px;">
+            <strong style="color:#666;">漏洞描述:</strong>
+            <p style="margin:10px 0 0 0;line-height:1.6;color:#333;">{description if description else "(无描述信息)"}</p>
+        </div>
+
+        <!-- 修复建议 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;">🔧 修复建议</h2>
+        <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:15px;margin-bottom:15px;">
+            <strong style="color:#856404;">⚠️ 无法自动修复 - 需要 {responsible_team} 处理</strong>
+        </div>
+        <div style="background:#f8f9fa;padding:15px;border-radius:8px;">
+            <strong>建议操作:</strong>
+            {remediation_steps}
+        </div>
+
+        {reference_links_html}
+
+    </div>
+
+    <!-- Footer -->
+    <div style="background:#f8f9fa;padding:20px;text-align:center;border-top:1px solid #eee;">
+        <p style="margin:0 0 10px 0;color:#666;">此邮件为通知性质，无需审批操作</p>
+        <p style="margin:0;color:#999;font-size:12px;">如果此漏洞已修复或不再相关，请在 Security Hub 中归档此 Finding</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:15px 0;">
+        <p style="margin:0;color:#999;font-size:12px;">SHARA - Security Hub Auto-Remediation Agent | Powered by AWS Bedrock</p>
+    </div>
+
+</div>
+</body>
+</html>
+'''
+    return html
 
 
 def run_phase1_analysis(
@@ -1541,24 +1619,77 @@ def format_approval_email(
 '''
 
     if similar_experiences:
-        html += f'            <p>找到 {len(similar_experiences)} 条相关历史经验:</p><ul class="step-list">\n'
+        # 过滤经验，使用不同阈值：
+        # - Reflection (方法论): 相似度 >= 50%
+        # - Episode (执行记录): 相似度 >= 35% (包含实际执行结果，价值更高)
+        high_relevance_experiences = []
         for exp in similar_experiences:
-            relevance = exp.get('relevance', exp.get('similarity_score', 0))
-            relevance_pct = int(relevance * 100) if relevance <= 1 else relevance
-            content = exp.get('content', '')
-            title = ''
-            if isinstance(content, str) and content.startswith('{'):
-                try:
-                    content_data = json.loads(content)
-                    title = content_data.get('title', '') or content_data.get('situation', '')[:60]
-                except:
-                    pass
-            if not title:
-                title = exp.get('type', 'experience')
-            if len(title) > 50:
-                title = title[:47] + '...'
-            html += f'                <li><span class="badge badge-info">{relevance_pct}%</span> {title}</li>\n'
-        html += '            </ul>\n'
+            score = exp.get('relevance', exp.get('similarity_score', 0)) or 0
+            exp_type = exp.get('type', 'reflection')  # 默认为 reflection
+            if exp_type == 'episode':
+                if score >= 0.35:
+                    high_relevance_experiences.append(exp)
+            else:
+                if score >= 0.5:
+                    high_relevance_experiences.append(exp)
+        total_high_relevance = len(high_relevance_experiences)
+
+        # 按相似度排序，取前 3 条
+        high_relevance_experiences.sort(
+            key=lambda x: x.get('relevance', x.get('similarity_score', 0)) or 0,
+            reverse=True
+        )
+        top_experiences = high_relevance_experiences[:3]
+
+        if top_experiences:
+            if total_high_relevance > 3:
+                html += f'            <p>找到 <strong>{total_high_relevance}</strong> 条相关历史经验，显示最相关的 3 条:</p><ul class="step-list">\n'
+            else:
+                html += f'            <p>找到 <strong>{total_high_relevance}</strong> 条相关历史经验:</p><ul class="step-list">\n'
+
+            for exp in top_experiences:
+                relevance = exp.get('relevance', exp.get('similarity_score', 0))
+                relevance_pct = int(relevance * 100) if relevance <= 1 else relevance
+                exp_type = exp.get('type', 'reflection')
+
+                # 类型徽章：区分方法论 (Reflection) 和执行记录 (Episode)
+                if exp_type == 'episode':
+                    type_badge = '<span class="badge badge-success" style="font-size:10px;margin-right:4px;">执行记录</span>'
+                else:
+                    type_badge = '<span class="badge" style="background:#6c757d;color:#fff;font-size:10px;margin-right:4px;">方法论</span>'
+
+                # 固定格式: Analyzer Agent 已加工为中文结构化内容
+                title = exp.get('title', '')
+                problem = exp.get('problem', '')
+                solution = exp.get('solution', '')
+                result = exp.get('result', '')
+
+                # 构建显示内容
+                if title and problem and solution:
+                    # 完整格式: 标题 + 问题 + 解决方案
+                    display_html = f'''{type_badge}<strong>{title}</strong>
+                        <br><span style="color:#666;font-size:12px;">问题: {problem[:60]}</span>
+                        <br><span style="color:#666;font-size:12px;">方案: {solution[:60]}</span>'''
+                    if result:
+                        display_html += f'''<br><span style="color:#28a745;font-size:12px;">结果: {result[:40]}</span>'''
+                elif title:
+                    # 只有标题
+                    display_html = f'{type_badge}<strong>{title}</strong>'
+                else:
+                    # 回退: 使用旧格式兼容
+                    content = exp.get('content', '')
+                    if isinstance(content, str) and len(content) > 10:
+                        display_html = type_badge + (content[:150] + '...' if len(content) > 150 else content)
+                    else:
+                        display_html = type_badge + '历史修复经验'
+
+                html += f'                <li><span class="badge badge-info">{relevance_pct}%</span> {display_html}</li>\n'
+            html += '            </ul>\n'
+
+            if total_high_relevance > 3:
+                html += f'            <p style="color: #666; font-size: 12px;">💡 还有 {total_high_relevance - 3} 条相关经验未显示</p>\n'
+        else:
+            html += '            <p style="color: #666;">暂无相关历史修复经验</p>\n'
     else:
         html += '            <p style="color: #666;">暂无相关历史修复经验</p>\n'
 

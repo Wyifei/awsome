@@ -83,10 +83,18 @@ VALIDATOR_SYSTEM_PROMPT = """# 角色
 - **修复验证**: 如果验证通过，更新为 RESOLVED
 - **回滚验证**: 如果验证通过，更新为 NEW（因为资源恢复到不合规状态）
 
-## 步骤 5: 保存修复经验
-如果验证通过，使用 save_experience_to_ltm 工具：
-- 保存成功的修复方案供将来参考
-- 包含 control_id、resource_type、修复代码等信息
+## 步骤 5: 保存修复经验 (关键步骤)
+如果验证通过，**必须**使用 save_experience_to_ltm 工具：
+- 这是构建 LTM 知识库的关键步骤，不要跳过
+- 必填参数:
+  - control_id: Security Hub Control ID
+  - task_id: 任务 ID
+  - finding_title: 简短描述 finding
+  - resource_type: 资源类型
+  - analysis_summary: 分析摘要
+  - remediation_approach: 修复方案描述
+  - generated_code: 实际执行的修复代码
+  - validation_result: 验证结果描述
 - **回滚成功时不保存经验**（回滚不是值得复用的修复方案）
 
 ## 步骤 6: 触发结果邮件
@@ -225,6 +233,14 @@ def create_validator_agent(
             set_memory_session(session_manager)
 
             logger.info(f"已连接 Memory session: session_id={memory_session_id}, actor_id={actor_id}")
+
+            # NOTE: 由于 bedrock-agentcore SDK 1.2.0 与 strands-agents SDK 1.24.0 的兼容性问题，
+            # AgentCoreMemorySessionManager.list_messages() 在处理旧格式数据时会报错：
+            # "SessionMessage.__init__() missing 2 required positional arguments: 'message' and 'message_id'"
+            # 因此我们不将 session_manager 传给 Agent，而是只用它来设置 _memory_session。
+            # 这样 Validator 仍然可以通过 get_remediation_result 等工具使用 Memory，
+            # 但 Agent 不会尝试自动加载历史消息（避免触发这个 bug）。
+            session_manager = None  # 不传给 Agent，避免 list_messages bug
 
         except ImportError:
             logger.warning("AgentCore Memory SDK 未安装，将跳过 Memory 功能")
@@ -478,7 +494,18 @@ Validate the REMEDIATION for task {task_id}:
    - finding_id: {finding_id}
 
 5. **Save Experience**: If verification passes, use save_experience_to_ltm tool
-   - Save this remediation experience for future reference
+   - **IMPORTANT**: This step is REQUIRED for successful remediations to build LTM knowledge
+   - Parameters to pass:
+     - control_id: {control_id}
+     - task_id: {task_id}
+     - finding_title: "{control_id} security finding on {resource_type}"
+     - resource_type: {resource_type}
+     - analysis_summary: "Security Hub finding {control_id} required remediation"
+     - remediation_approach: Describe what the generated_code does (from step 0)
+     - generated_code: The code retrieved from step 0
+     - validation_result: "SUCCESS - Resource verified compliant" or describe actual result
+     - lessons_learned: Any insights from the remediation (optional)
+   - This saves the experience for future similar findings
 
 6. **Trigger Result Email**: Use trigger_result_email tool - ALWAYS do this step
    - task_id: {task_id}
