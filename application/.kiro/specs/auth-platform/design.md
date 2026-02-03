@@ -235,51 +235,73 @@ notification-service/
 
 ## 3. 数据模型
 
-### 3.1 User 表 (users)
+### 3.1 Users 表 (users)
+
+用户数据采用单表设计，身份信息由 user-service 管理，资料信息由 profile-service 管理。
 
 ```sql
 CREATE TABLE users (
-    id VARCHAR(36) PRIMARY KEY,           -- Cognito sub
-    username VARCHAR(255) NOT NULL,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    phone_number VARCHAR(20),
-    email_verified BOOLEAN DEFAULT FALSE,
+    -- 身份信息 (由 user-service 管理)
+    id                    VARCHAR(36) PRIMARY KEY,  -- Cognito user sub (UUID)
+    email                 VARCHAR(256) NOT NULL UNIQUE,
+    username              VARCHAR(128) NOT NULL UNIQUE,
+    phone_number          VARCHAR(20),              -- E.164 格式
+    status                VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',  -- ACTIVE, INACTIVE, SUSPENDED
+    email_verified        BOOLEAN NOT NULL DEFAULT FALSE,
     phone_number_verified BOOLEAN DEFAULT FALSE,
-    status VARCHAR(20) DEFAULT 'PENDING_VERIFICATION',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+    -- 资料信息 (由 profile-service 管理)
+    nickname              VARCHAR(64),
+    avatar                VARCHAR(512),             -- S3/CloudFront URL (已弃用)
+    avatar_data           BYTEA,                    -- 头像二进制数据
+    avatar_content_type   VARCHAR(100),             -- 头像 MIME 类型
+    gender                VARCHAR(10),              -- MALE, FEMALE, OTHER
+    birthday              DATE,
+    address               VARCHAR(256),
+    preferences           JSONB,                    -- 用户偏好设置 JSON
+
+    -- 时间戳
+    created_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 索引
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
+CREATE INDEX idx_users_status ON users(status);
+CREATE INDEX idx_users_created_at ON users(created_at);
 ```
 
-### 3.2 UserProfile 表 (user_profiles)
+**字段说明：**
+- `id`: Cognito 用户 sub (UUID)，主键标识
+- `status`: 账户状态，可选值：ACTIVE（活跃）、INACTIVE（未激活）、SUSPENDED（已暂停）
+- `avatar_data`: 头像图片直接存储在数据库中的二进制数据
+- `avatar_content_type`: 头像图片的 MIME 类型（如 image/jpeg, image/png）
+- `preferences`: JSON 格式的用户偏好设置
 
-```sql
-CREATE TABLE user_profiles (
-    id VARCHAR(36) PRIMARY KEY,           -- 与 users.id 相同
-    nickname VARCHAR(100),
-    avatar TEXT,                          -- Base64 编码
-    gender VARCHAR(10),
-    birthday DATE,
-    address TEXT,
-    preferences JSONB,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
+### 3.2 VerificationCodes 表 (verification_codes)
 
-### 3.3 VerificationCode 表 (verification_codes)
+用于存储邮箱验证码和密码重置码。
 
 ```sql
 CREATE TABLE verification_codes (
-    id BIGSERIAL PRIMARY KEY,
-    email VARCHAR(255) NOT NULL,
-    code VARCHAR(6) NOT NULL,
-    type VARCHAR(30) NOT NULL,            -- EMAIL_VERIFICATION, PASSWORD_RESET, ACCOUNT_DELETE
-    expires_at TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(email, type)
+    id          BIGSERIAL PRIMARY KEY,
+    email       VARCHAR(256) NOT NULL,
+    code        VARCHAR(6) NOT NULL,
+    type        VARCHAR(20) NOT NULL,       -- EMAIL_VERIFICATION, PASSWORD_RESET
+    expires_at  TIMESTAMP NOT NULL,
+    created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 索引
+CREATE INDEX idx_verification_codes_email_type ON verification_codes(email, type);
+CREATE INDEX idx_verification_codes_expires_at ON verification_codes(expires_at);
 ```
+
+**字段说明：**
+- `code`: 6位数字验证码
+- `type`: 验证码类型，可选值：EMAIL_VERIFICATION（邮箱验证）、PASSWORD_RESET（密码重置）
+- `expires_at`: 验证码过期时间，通常为创建后15分钟
 
 ## 4. 统一响应格式
 
