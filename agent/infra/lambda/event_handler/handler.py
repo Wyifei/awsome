@@ -1370,17 +1370,18 @@ def format_github_pr_approval_email(
     remediation = analysis_data.get('remediation', {})
     can_remediate = remediation.get('can_remediate', True) if remediation else analysis_data.get('can_remediate', True)
 
-    # 容器/服务信息 - 兼容新旧格式
-    ecr_repository = service_info.get('ecr_repository') or container.get('ecr_repository', 'N/A')
-    service_path = service_info.get('path') or container.get('service_path', 'N/A')
-    service_name = service_info.get('name') or container.get('service_name') or ecr_repository
-
-    # PR 预览信息 - 由 Lambda 自动生成，Remediator 会创建实际的 PR
-    from datetime import datetime
-    date_str = datetime.now().strftime('%Y%m%d')
-    pr_title = f"[Security] 修复 {service_name} {len(vulnerabilities)} 个容器镜像漏洞"
-    branch_name = f"security/fix-{service_name}-cve-{date_str}"
-    base_branch = "master"
+    # 容器/服务信息 - 优先使用原始 container 信息（来自 Finding）
+    ecr_repository = container.get('ecr_repository') or service_info.get('ecr_repository', 'N/A')
+    image_tag = container.get('image_tag', 'latest')
+    image_digest = container.get('image_digest', '')
+    # 容器镜像显示：repo:tag
+    container_image = f"{ecr_repository}:{image_tag}"
+    # 镜像摘要单独显示
+    image_digest_display = image_digest if image_digest else 'N/A'
+    # 仓库文件路径 - 来自 Agent 的 GitHub 搜索结果
+    service_path = service_info.get('path', 'N/A')
+    if service_path in ('N/A', 'unknown', ''):
+        service_path = '未找到 (Agent 未能在 GitHub 中定位服务)'
 
     # 漏洞统计
     total_vulns = len(vulnerabilities)
@@ -1423,11 +1424,20 @@ def format_github_pr_approval_email(
     # 不可修复的警告
     cannot_remediate_html = ''
     if not can_remediate:
-        reason = analysis_data.get('cannot_remediate_reason', '未知原因')
+        # 尝试从多个位置获取原因
+        reason = analysis_data.get('cannot_remediate_reason') or \
+                 remediation.get('reason') or \
+                 remediation.get('description', '')
+        # 如果没有明确原因，根据 service_info 推断
+        if not reason:
+            if service_info.get('path') in ('unknown', 'N/A', '', None):
+                reason = 'Agent 未能在 GitHub 中定位到对应的服务代码，无法生成 PR。请检查：\n1. GitHub PAT 是否配置正确\n2. 仓库是否存在对应的 Dockerfile/requirements.txt'
+            else:
+                reason = '未知原因'
         cannot_remediate_html = f'''
         <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:15px;margin:20px 0;">
             <strong style="color:#856404;">⚠️ 无法自动修复</strong>
-            <p style="margin:10px 0 0 0;color:#856404;">{reason}</p>
+            <p style="margin:10px 0 0 0;color:#856404;white-space:pre-line;">{reason}</p>
         </div>
 '''
 
@@ -1465,8 +1475,9 @@ def format_github_pr_approval_email(
         <table style="width:100%;border-collapse:collapse;margin-bottom:25px;">
             <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">任务 ID</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{task_id}</code></td></tr>
             <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">ECR Repository</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{ecr_repository}</code></td></tr>
-            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">服务名称</td><td style="padding:8px;border-bottom:1px solid #eee;"><strong>{service_name}</strong></td></tr>
-            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">服务路径</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{service_path}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">容器镜像</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{container_image}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">镜像摘要</td><td style="padding:8px;border-bottom:1px solid #eee;"><code style="font-size:12px;word-break:break-all;">{image_digest_display}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">仓库文件路径</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{service_path}</code></td></tr>
         </table>
 
         {cannot_remediate_html}
@@ -1487,13 +1498,7 @@ def format_github_pr_approval_email(
             </tbody>
         </table>
 
-        <!-- PR 信息 -->
-        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;">📝 Pull Request 信息</h2>
-        <table style="width:100%;border-collapse:collapse;margin-bottom:15px;">
-            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">PR 标题</td><td style="padding:8px;border-bottom:1px solid #eee;"><strong>{pr_title}</strong></td></tr>
-            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">分支名称</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{branch_name}</code></td></tr>
-            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">目标分支</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{base_branch}</code></td></tr>
-        </table>
+        <!-- 文件修改 -->
         {file_changes_html}
 
         <!-- 审批按钮 -->
@@ -2013,13 +2018,28 @@ def update_task_with_analysis(task_id: str, analysis_result: dict):
         ExpressionAttributeNames={'#status': 'status'}
     )
 
-    # 发送审批邮件（使用完整的 analysis_data，不存储到 DynamoDB）
-    # 验证 analysis_data 是否有效，避免发送全 N/A 的邮件
-    if not analysis.get('control_id') and not analysis.get('finding_type'):
-        logger.error(f"Task {task_id}: Skipping email - analysis data is invalid or empty")
-        logger.error(f"analysis_data keys: {list(analysis_data.keys()) if analysis_data else 'None'}")
-        # 仍然更新任务状态，但不发送邮件
-        return
+    # 发送审批邮件
+    # 对于容器漏洞 (github_pr)，从 task_metadata 补充原始 container 信息
+    # 这样即使 Agent 搜索失败，也能显示正确的镜像信息
+    remediation_type = analysis_data.get('remediation_type') or task_metadata.get('remediationType', 'aws_api')
+
+    if remediation_type == 'github_pr':
+        # 容器漏洞: 从任务记录获取原始 container 信息
+        original_container = task_metadata.get('container', {})
+        if original_container:
+            # 合并原始 container 信息到 analysis_data
+            analysis_data['container'] = original_container
+            # 同时更新 vulnerabilities（如果 Agent 没有返回）
+            if not analysis_data.get('vulnerabilities'):
+                analysis_data['vulnerabilities'] = task_metadata.get('vulnerabilities', [])
+        logger.info(f"Task {task_id}: Using original container info from task metadata")
+    else:
+        # AWS API 模式: 验证 analysis_data 是否有效
+        if not analysis.get('control_id') and not analysis.get('finding_type'):
+            logger.error(f"Task {task_id}: Skipping email - analysis data is invalid or empty")
+            logger.error(f"analysis_data keys: {list(analysis_data.keys()) if analysis_data else 'None'}")
+            # 仍然更新任务状态，但不发送邮件
+            return
 
     email_sent = send_approval_email(task_id, {'response': analysis_data}, finding_id)
     if email_sent:

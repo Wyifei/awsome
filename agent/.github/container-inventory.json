@@ -1,0 +1,64 @@
+{
+  "version": "1.0",
+  "description": "ECR Repository to Service Path Mapping for SHARA Container Vulnerability Auto-Remediation",
+  "containers": [
+    {
+      "name": "analyzer",
+      "description": "SHARA Analyzer Agent - Security Hub Finding Analyzer",
+      "ecr_pattern": "analyzer-agent",
+      "path": "agents/analyzer",
+      "dockerfile": "agents/analyzer/Dockerfile",
+      "base_image": "python:3.12-slim",
+      "language": "python",
+      "framework": "fastapi",
+      "port": 8080,
+      "dependencies": [
+        {
+          "file": "agents/analyzer/requirements.txt",
+          "type": "pip"
+        }
+      ]
+    },
+    {
+      "name": "remediator",
+      "description": "SHARA Remediator Agent - Security Issue Remediation",
+      "ecr_pattern": "remediator-agent",
+      "path": "agents/remediator",
+      "dockerfile": "agents/remediator/Dockerfile",
+      "base_image": "python:3.12-slim",
+      "language": "python",
+      "framework": "fastapi",
+      "port": 8081,
+      "dependencies": [
+        {
+          "file": "agents/remediator/requirements.txt",
+          "type": "pip"
+        }
+      ]
+    },
+    {
+      "name": "validator",
+      "description": "SHARA Validator Agent - Remediation Validation",
+      "ecr_pattern": "validator-agent",
+      "path": "agents/validator",
+      "dockerfile": "agents/validator/Dockerfile",
+      "base_image": "python:3.12-slim",
+      "language": "python",
+      "framework": "fastapi",
+      "port": 8082,
+      "dependencies": [
+        {
+          "file": "agents/validator/requirements.txt",
+          "type": "pip"
+        }
+      ]
+    }
+  ],
+  "remediation_patterns": {
+    "python": {
+      "dependency_files": ["requirements.txt", "setup.py", "pyproject.toml"],
+      "update_strategy": "pin_version",
+      "comment_format": "# Security: {cve_id} - {description}"
+    }
+  }
+}

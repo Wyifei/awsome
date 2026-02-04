@@ -247,12 +247,17 @@ async def invocations(request: Request):
             # GitHub PR 模式 (容器漏洞修复)
             # Analyzer 负责：分析漏洞、建议文件修改、风险评估
             # Remediator 负责：创建 PR（标题、描述、分支名）
+
+            # 获取输入的 container 信息 (来自 Lambda)
+            container_input = body.get('container', {})
+
             response_data = {
                 "success": result.get('success', False),
                 "task_id": task_id,
                 "remediation_type": "github_pr",
                 "analysis": result.get('analysis', {}),
                 "service_info": result.get('service_info', {}),
+                "container": container_input,  # 传递原始 container 信息 (用于邮件显示 ECR Repository)
                 "vulnerabilities": result.get('vulnerabilities', []),
                 "file_changes": result.get('file_changes', []),
                 "remediation": result.get('remediation', {}),
