@@ -39,6 +39,8 @@ MEMORY_ID = os.environ.get('AGENTCORE_MEMORY_ID', '')
 ANALYZER_RUNTIME_ARN = os.environ.get('ANALYZER_RUNTIME_ARN', '')  # Analyzer Agent Runtime ARN
 STAGE = os.environ.get('STAGE', 'dev')
 REGION = os.environ.get('AWS_REGION', 'us-east-1')
+# GitHub 配置 (用于容器漏洞修复的动态仓库搜索)
+GITHUB_OWNER = os.environ.get('GITHUB_OWNER', 'Wyifei')  # GitHub 用户名/组织名
 APPROVAL_EMAIL = os.environ.get('APPROVAL_EMAIL', '')  # 审批者邮箱
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')  # 发件人邮箱
 API_GATEWAY_URL = os.environ.get('API_GATEWAY_URL', '')  # API Gateway URL
@@ -51,6 +53,9 @@ tokens_table = dynamodb.Table(TOKENS_TABLE)
 
 # SES 客户端
 ses_client = boto3.client('ses', region_name=REGION)
+
+# Inspector 客户端 (用于容器漏洞聚合)
+inspector_client = boto3.client('inspector2', region_name=REGION)
 
 
 def lambda_handler(event: dict, context) -> dict:
@@ -298,6 +303,216 @@ def extract_cve_details(finding: dict) -> dict:
     }
 
 
+def get_container_findings(
+    repo_name: str,
+    image_tag: str,
+    image_digest: str,
+    registry_id: str
+) -> list:
+    """获取指定容器镜像的所有 HIGH/CRITICAL 漏洞。
+
+    调用 Inspector list_findings API，按镜像 digest 筛选漏洞。
+
+    Args:
+        repo_name: ECR 仓库名称 (如 "shara-analyzer")
+        image_tag: 镜像标签 (如 "v1.2.3")
+        image_digest: 镜像摘要 (如 "sha256:abc123...")
+        registry_id: ECR 注册表 ID (即 AWS 账户 ID)
+
+    Returns:
+        list: 漏洞列表，每个漏洞包含:
+            {
+                "cve_id": "CVE-2024-1234",
+                "severity": "CRITICAL",
+                "cvss_score": 9.8,
+                "package_name": "requests",
+                "current_version": "2.28.0",
+                "fixed_version": "2.31.0",
+                "package_manager": "pip",
+                "exploit_available": True/False,
+                "description": "..."
+            }
+    """
+    logger.info(f"Fetching Inspector findings for {repo_name}:{image_tag} (digest: {image_digest[:20]}...)")
+
+    vulnerabilities = []
+    next_token = None
+
+    try:
+        # 构建筛选条件
+        filter_criteria = {
+            # 按镜像仓库和 digest 筛选
+            'ecrImageRepositoryName': [{'comparison': 'EQUALS', 'value': repo_name}],
+            'ecrImageHash': [{'comparison': 'EQUALS', 'value': image_digest}],
+            # 只获取 HIGH 和 CRITICAL 级别
+            'severity': [
+                {'comparison': 'EQUALS', 'value': 'CRITICAL'},
+                {'comparison': 'EQUALS', 'value': 'HIGH'}
+            ],
+            # 只获取容器漏洞
+            'findingType': [{'comparison': 'EQUALS', 'value': 'PACKAGE_VULNERABILITY'}],
+            'resourceType': [{'comparison': 'EQUALS', 'value': 'AWS_ECR_CONTAINER_IMAGE'}]
+        }
+
+        while True:
+            # 调用 Inspector API
+            params = {
+                'filterCriteria': filter_criteria,
+                'maxResults': 100  # 每页最多 100 条
+            }
+            if next_token:
+                params['nextToken'] = next_token
+
+            response = inspector_client.list_findings(**params)
+
+            # 处理响应
+            for finding in response.get('findings', []):
+                vuln = extract_vulnerability_from_inspector_finding(finding)
+                if vuln:
+                    vulnerabilities.append(vuln)
+
+            # 检查是否有更多结果
+            next_token = response.get('nextToken')
+            if not next_token:
+                break
+
+        logger.info(f"Found {len(vulnerabilities)} HIGH/CRITICAL vulnerabilities for {repo_name}:{image_tag}")
+        return vulnerabilities
+
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', '')
+        logger.error(f"Inspector API error ({error_code}): {e}")
+        raise
+    except Exception as e:
+        logger.exception(f"Error fetching Inspector findings: {e}")
+        raise
+
+
+def extract_vulnerability_from_inspector_finding(finding: dict) -> Optional[dict]:
+    """从 Inspector Finding 提取漏洞信息。
+
+    Args:
+        finding: Inspector Finding (Inspector API 格式，非 ASFF)
+
+    Returns:
+        dict: 漏洞信息，或 None (如果无法提取)
+    """
+    try:
+        # Inspector API 返回的结构与 Security Hub ASFF 不同
+        # 参考: https://docs.aws.amazon.com/inspector/latest/user/findings-understanding.html
+
+        # 提取 CVE ID
+        vulnerability_id = finding.get('packageVulnerabilityDetails', {}).get('vulnerabilityId', '')
+        if not vulnerability_id or not vulnerability_id.startswith('CVE-'):
+            return None
+
+        # 提取严重性
+        severity = finding.get('severity', 'UNKNOWN')
+
+        # 提取 CVSS 分数
+        cvss_score = 0.0
+        cvss_list = finding.get('packageVulnerabilityDetails', {}).get('cvss', [])
+        for cvss in cvss_list:
+            # 优先使用 CVSS v3
+            if cvss.get('version', '').startswith('3'):
+                cvss_score = cvss.get('baseScore', 0.0)
+                break
+        if cvss_score == 0.0 and cvss_list:
+            cvss_score = cvss_list[0].get('baseScore', 0.0)
+
+        # 提取受影响的包信息
+        vulnerable_packages = finding.get('packageVulnerabilityDetails', {}).get('vulnerablePackages', [])
+        if not vulnerable_packages:
+            return None
+
+        package = vulnerable_packages[0]
+        package_name = package.get('name', 'Unknown')
+        current_version = package.get('version', 'Unknown')
+        fixed_version = package.get('fixedInVersion', 'Not available')
+        package_manager = package.get('packageManager', 'Unknown')
+
+        # 检查是否有公开利用
+        exploit_available = finding.get('exploitAvailable', 'NO') == 'YES'
+
+        # 提取描述
+        description = finding.get('description', '')
+
+        return {
+            'cve_id': vulnerability_id,
+            'severity': severity,
+            'cvss_score': cvss_score,
+            'package_name': package_name,
+            'current_version': current_version,
+            'fixed_version': fixed_version,
+            'package_manager': package_manager.lower(),
+            'exploit_available': exploit_available,
+            'description': description
+        }
+
+    except Exception as e:
+        logger.warning(f"Error extracting vulnerability from Inspector finding: {e}")
+        return None
+
+
+def aggregate_vulnerabilities(vulnerabilities: list) -> dict:
+    """聚合漏洞信息，生成摘要。
+
+    Args:
+        vulnerabilities: 漏洞列表
+
+    Returns:
+        dict: 聚合结果
+            {
+                "vulnerabilities": [...],  # 去重后的漏洞列表
+                "summary": {
+                    "total": 5,
+                    "critical": 2,
+                    "high": 3
+                },
+                "packages_affected": ["requests", "urllib3"],
+                "package_managers": ["pip"]
+            }
+    """
+    # 按 CVE ID 去重
+    seen_cves = set()
+    unique_vulns = []
+    critical_count = 0
+    high_count = 0
+    packages_affected = set()
+    package_managers = set()
+
+    for vuln in vulnerabilities:
+        cve_id = vuln.get('cve_id', '')
+        if cve_id and cve_id not in seen_cves:
+            seen_cves.add(cve_id)
+            unique_vulns.append(vuln)
+
+            severity = vuln.get('severity', '')
+            if severity == 'CRITICAL':
+                critical_count += 1
+            elif severity == 'HIGH':
+                high_count += 1
+
+            packages_affected.add(vuln.get('package_name', ''))
+            pkg_manager = vuln.get('package_manager', '')
+            if pkg_manager:
+                package_managers.add(pkg_manager)
+
+    # 按严重性排序 (CRITICAL 优先)
+    unique_vulns.sort(key=lambda x: (0 if x.get('severity') == 'CRITICAL' else 1, -x.get('cvss_score', 0)))
+
+    return {
+        'vulnerabilities': unique_vulns,
+        'summary': {
+            'total': len(unique_vulns),
+            'critical': critical_count,
+            'high': high_count
+        },
+        'packages_affected': list(packages_affected),
+        'package_managers': list(package_managers)
+    }
+
+
 def process_finding(finding: dict, context) -> dict:
     """处理单个 Finding
 
@@ -483,9 +698,8 @@ def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
 def process_cve_finding(finding: dict, classification: dict, context) -> dict:
     """处理 CVE 漏洞 Finding (容器/EC2)
 
-    按资源 ID 去重（同一镜像/实例 24 小时内只发一封邮件），避免信息爆炸。
-    - 容器镜像漏洞：按镜像资源 ID 去重
-    - EC2 软件漏洞：按 EC2 实例 ID 去重
+    - 容器镜像漏洞 (CONTAINER_CVE): 调用 Analyzer Agent 自动修复
+    - EC2 软件漏洞 (EC2_CVE): 发送通知邮件 (手动修复)
 
     Args:
         finding: Security Hub Finding (ASFF 格式)
@@ -498,7 +712,295 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
     finding_id = finding.get('Id', '')
     finding_type = classification['type']  # CONTAINER_CVE or EC2_CVE
 
-    # 提取资源 ID（用于去重）
+    # 容器漏洞: 走自动修复流程
+    if finding_type == 'CONTAINER_CVE':
+        return process_container_cve_finding(finding, classification, context)
+
+    # EC2 漏洞: 走通知流程 (保持原有行为)
+    return process_ec2_cve_finding(finding, classification, context)
+
+
+def process_container_cve_finding(finding: dict, classification: dict, context) -> dict:
+    """处理容器镜像漏洞 Finding - 调用 Analyzer Agent 自动修复
+
+    流程:
+    1. 提取容器镜像信息 (ECR repo, tag, digest)
+    2. 调用 Inspector API 获取该镜像所有 HIGH/CRITICAL 漏洞
+    3. 聚合漏洞并创建 Task (remediation_type: "github_pr")
+    4. 调用 Analyzer Agent 进行分析
+
+    Args:
+        finding: Security Hub Finding (ASFF 格式)
+        classification: 分类信息
+        context: Lambda 上下文
+
+    Returns:
+        dict: 处理结果
+    """
+    finding_id = finding.get('Id', '')
+    severity = finding.get('Severity', {}).get('Label', 'HIGH')
+
+    # 提取资源信息
+    resources = finding.get('Resources', [])
+    resource = resources[0] if resources else {}
+    resource_id = resource.get('Id', '')
+
+    # 提取容器镜像详情
+    container_details = extract_container_details(resource)
+    if not container_details:
+        logger.warning(f"Cannot extract container details from resource: {resource_id}")
+        # 降级到通知流程
+        return process_ec2_cve_finding(finding, classification, context)
+
+    image_digest = container_details.get('image_digest', '')
+    logger.info(f"Processing container CVE for {container_details['ecr_repository']}:{container_details['image_tag']} (digest: {image_digest[:20]}...)")
+
+    # 按镜像 digest 去重 (24小时内同一镜像只处理一次)
+    dedup_key = f"CVE_RESOURCE#CONTAINER_CVE#{image_digest}"
+    existing_records = tasks_table.query(
+        IndexName='GSI2',
+        KeyConditionExpression='GSI2PK = :pk',
+        ExpressionAttributeValues={':pk': dedup_key},
+        Limit=1
+    )
+
+    if existing_records.get('Items'):
+        existing_record = existing_records['Items'][0]
+        logger.info(f"Skipping duplicate container CVE for image {image_digest[:20]}..., existing task: {existing_record.get('taskId')}")
+        return {
+            'finding_id': finding_id,
+            'status': 'skipped',
+            'reason': 'duplicate_image',
+            'image_digest': image_digest,
+            'existing_task_id': existing_record.get('taskId')
+        }
+
+    # 调用 Inspector API 获取该镜像的所有漏洞
+    try:
+        all_vulns = get_container_findings(
+            repo_name=container_details['ecr_repository'],
+            image_tag=container_details['image_tag'],
+            image_digest=image_digest,
+            registry_id=container_details['registry_id']
+        )
+    except Exception as e:
+        logger.exception(f"Failed to fetch Inspector findings: {e}")
+        # 降级: 使用当前 finding 的单个漏洞
+        cve_details = extract_cve_details(finding)
+        all_vulns = [{
+            'cve_id': cve_details['cve_id'],
+            'severity': cve_details['severity'],
+            'cvss_score': cve_details['cvss_score'],
+            'package_name': cve_details['package_name'],
+            'current_version': cve_details['current_version'],
+            'fixed_version': cve_details['fixed_version'],
+            'package_manager': 'unknown',
+            'exploit_available': cve_details['exploit_available'],
+            'description': cve_details['description']
+        }]
+
+    # 聚合漏洞
+    aggregated = aggregate_vulnerabilities(all_vulns)
+
+    if aggregated['summary']['total'] == 0:
+        logger.info(f"No HIGH/CRITICAL vulnerabilities found for {container_details['ecr_repository']}:{container_details['image_tag']}")
+        return {
+            'finding_id': finding_id,
+            'status': 'skipped',
+            'reason': 'no_vulnerabilities',
+            'image_digest': image_digest
+        }
+
+    logger.info(f"Aggregated {aggregated['summary']['total']} vulnerabilities for container image")
+
+    # 创建任务
+    task_id = str(uuid.uuid4())
+    memory_session_id = f"session-task-{task_id}"
+    now = datetime.now(timezone.utc).isoformat()
+    task_ttl = int((datetime.now(timezone.utc) + timedelta(hours=APPROVAL_EXPIRY_HOURS)).timestamp())
+
+    task_item = {
+        # Keys
+        'PK': f'TASK#{task_id}',
+        'SK': 'METADATA',
+        'GSI1PK': 'STATUS#pending',
+        'GSI1SK': now,
+        'GSI2PK': dedup_key,  # CVE_RESOURCE#CONTAINER_CVE#{image_digest}
+        'GSI2SK': now,
+        'GSI3PK': f'ACCOUNT#{finding.get("AwsAccountId", "")}',
+        'GSI3SK': now,
+
+        # 核心控制字段
+        'taskId': task_id,
+        'findingId': finding_id,
+        'findingType': 'CONTAINER_CVE',
+        'remediationType': 'github_pr',  # 标记为 GitHub PR 修复
+        'status': 'pending',
+        'phase': 'pre_approval',
+        'severity': severity,
+
+        # 容器镜像信息
+        'container': convert_floats_to_decimals(container_details),
+
+        # 漏洞列表
+        'vulnerabilities': convert_floats_to_decimals(aggregated['vulnerabilities']),
+        'vulnerabilitySummary': convert_floats_to_decimals(aggregated['summary']),
+        'packagesAffected': aggregated['packages_affected'],
+        'packageManagers': aggregated['package_managers'],
+
+        # 资源标识
+        'resourceType': resource.get('Type', ''),
+        'resourceId': resource_id,
+        'awsAccountId': finding.get('AwsAccountId', ''),
+        'region': finding.get('Region', REGION),
+
+        # Agent 会话
+        'memorySessionId': memory_session_id,
+        'actorId': finding.get('AwsAccountId', ''),
+
+        # 元数据
+        'createdAt': now,
+        'updatedAt': now,
+        'version': 1,
+        'traceId': context.aws_request_id if context else None,
+        'ttl': task_ttl
+    }
+
+    # 设置状态为 analyzing
+    task_item['status'] = 'analyzing'
+    task_item['GSI1PK'] = 'STATUS#analyzing'
+
+    # 保存任务
+    tasks_table.put_item(Item=task_item)
+    logger.info(f"Created container CVE task {task_id} for image {container_details['ecr_repository']}:{container_details['image_tag']}")
+
+    # 调用 Analyzer Agent
+    actor_id = finding.get('AwsAccountId', '')
+
+    try:
+        analysis_result = run_phase1_container_analysis(
+            task_id=task_id,
+            container_details=container_details,
+            vulnerabilities=aggregated['vulnerabilities'],
+            summary=aggregated['summary'],
+            memory_session_id=memory_session_id,
+            actor_id=actor_id
+        )
+
+        if analysis_result.get('success'):
+            update_task_with_analysis(task_id, analysis_result)
+            return {
+                'finding_id': finding_id,
+                'task_id': task_id,
+                'status': 'waiting_approval',
+                'remediation_type': 'github_pr',
+                'vulnerabilities_count': aggregated['summary']['total']
+            }
+        else:
+            update_task_status(task_id, 'analysis_failed', {
+                'error': analysis_result.get('error', 'Unknown error')
+            })
+            return {
+                'finding_id': finding_id,
+                'task_id': task_id,
+                'status': 'analysis_failed',
+                'error': analysis_result.get('error')
+            }
+
+    except Exception as e:
+        logger.exception(f"Container CVE analysis failed for task {task_id}: {e}")
+        update_task_status(task_id, 'analysis_failed', {'error': str(e)})
+        return {
+            'finding_id': finding_id,
+            'task_id': task_id,
+            'status': 'analysis_failed',
+            'error': str(e)
+        }
+
+
+def extract_container_details(resource: dict) -> Optional[dict]:
+    """从 ASFF Resource 提取容器镜像详情。
+
+    Args:
+        resource: ASFF Resource 对象
+
+    Returns:
+        dict: 容器镜像详情，或 None
+            {
+                "ecr_repository": "shara-analyzer",
+                "ecr_registry": "870414140965.dkr.ecr.ap-northeast-1.amazonaws.com",
+                "image_tag": "v1.2.3",
+                "image_digest": "sha256:abc123...",
+                "registry_id": "870414140965"
+            }
+    """
+    if resource.get('Type') != 'AwsEcrContainerImage':
+        return None
+
+    # 从 Details 中提取
+    details = resource.get('Details', {}).get('AwsEcrContainerImage', {})
+
+    # 从资源 ID 提取 (格式: arn:aws:ecr:region:account:repository/repo-name/image/sha256:digest)
+    resource_id = resource.get('Id', '')
+
+    # 提取 ECR 仓库名称
+    repo_name = details.get('RepositoryName', '')
+    if not repo_name and '/' in resource_id:
+        # 从 ARN 中提取
+        parts = resource_id.split('/')
+        if len(parts) >= 2:
+            repo_name = parts[1]
+
+    # 提取镜像标签
+    image_tags = details.get('ImageTags', [])
+    image_tag = image_tags[0] if image_tags else 'latest'
+
+    # 提取镜像摘要
+    image_digest = details.get('ImageDigest', '')
+    if not image_digest:
+        # 从 ARN 中提取 sha256:xxx
+        if 'sha256:' in resource_id:
+            image_digest = 'sha256:' + resource_id.split('sha256:')[1]
+
+    # 提取注册表 ID (AWS 账户 ID)
+    registry_id = details.get('RegistryId', '')
+    if not registry_id:
+        # 从 ARN 中提取 account ID
+        arn_parts = resource_id.split(':')
+        if len(arn_parts) >= 5:
+            registry_id = arn_parts[4]
+
+    # 构建注册表 URL
+    region = resource_id.split(':')[3] if len(resource_id.split(':')) > 3 else REGION
+    ecr_registry = f"{registry_id}.dkr.ecr.{region}.amazonaws.com"
+
+    if not repo_name or not image_digest:
+        return None
+
+    return {
+        'ecr_repository': repo_name,
+        'ecr_registry': ecr_registry,
+        'image_tag': image_tag,
+        'image_digest': image_digest,
+        'registry_id': registry_id
+    }
+
+
+def process_ec2_cve_finding(finding: dict, classification: dict, context) -> dict:
+    """处理 EC2 软件漏洞 Finding - 发送通知邮件 (保持原有行为)
+
+    Args:
+        finding: Security Hub Finding (ASFF 格式)
+        classification: 分类信息
+        context: Lambda 上下文
+
+    Returns:
+        dict: 处理结果
+    """
+    finding_id = finding.get('Id', '')
+    finding_type = classification['type']
+
+    # 提取资源 ID
     resources = finding.get('Resources', [])
     resource = resources[0] if resources else {}
     resource_id = resource.get('Id', '')
@@ -506,10 +1008,9 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
     # 提取 CVE 详情
     cve_details = extract_cve_details(finding)
 
-    logger.info(f"Processing CVE finding {finding_id} (type: {finding_type}, cve: {cve_details['cve_id']}, resource: {resource_id})")
+    logger.info(f"Processing EC2 CVE finding {finding_id} (cve: {cve_details['cve_id']}, resource: {resource_id})")
 
-    # 按资源 ID 去重检查（24小时内同一资源只发一封邮件）
-    # 使用 GSI2 查询，key 格式: CVE_RESOURCE#{finding_type}#{resource_id}
+    # 按资源 ID 去重检查
     dedup_key = f"CVE_RESOURCE#{finding_type}#{resource_id}"
     existing_records = tasks_table.query(
         IndexName='GSI2',
@@ -530,7 +1031,7 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
             'cve_id': cve_details['cve_id']
         }
 
-    # 创建去重记录（最小化，仅用于去重）
+    # 创建去重记录
     task_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc).isoformat()
     task_ttl = int((datetime.now(timezone.utc) + timedelta(hours=APPROVAL_EXPIRY_HOURS)).timestamp())
@@ -540,7 +1041,7 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
         'SK': 'METADATA',
         'GSI1PK': f'STATUS#cve_notified',
         'GSI1SK': now,
-        'GSI2PK': dedup_key,  # CVE_RESOURCE#{type}#{resource_id}
+        'GSI2PK': dedup_key,
         'GSI2SK': now,
         'GSI3PK': f'ACCOUNT#{finding.get("AwsAccountId", "")}',
         'GSI3SK': now,
@@ -548,6 +1049,7 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
         'taskId': task_id,
         'findingId': finding_id,
         'findingType': finding_type,
+        'remediationType': 'manual',  # 手动修复
         'status': 'cve_notified',
         'phase': 'notification',
 
@@ -565,9 +1067,8 @@ def process_cve_finding(finding: dict, classification: dict, context) -> dict:
         'traceId': context.aws_request_id if context else None
     }
 
-    # 保存去重记录
     tasks_table.put_item(Item=dedup_record)
-    logger.info(f"Created CVE dedup record {task_id} for resource {resource_id}")
+    logger.info(f"Created EC2 CVE dedup record {task_id} for resource {resource_id}")
 
     # 发送通知邮件
     email_sent = False
@@ -840,6 +1341,192 @@ def format_cve_notification_email(
     return html
 
 
+def format_github_pr_approval_email(
+    task_id: str,
+    analysis_data: dict,
+    approve_url: str,
+    reject_url: str
+) -> str:
+    """格式化 GitHub PR 审批邮件内容 (HTML 格式)
+
+    用于容器漏洞自动修复流程，显示 PR 相关信息。
+
+    Args:
+        task_id: 任务 ID
+        analysis_data: 分析结果数据
+        approve_url: 批准链接
+        reject_url: 拒绝链接
+
+    Returns:
+        str: 格式化的 HTML 邮件内容
+    """
+    # 从 analysis_data 提取信息
+    # 支持两种格式：旧格式（container）和新格式（service_info）
+    container = analysis_data.get('container', {})
+    service_info = analysis_data.get('service_info', {})
+    vulnerabilities = analysis_data.get('vulnerabilities', [])
+    file_changes = analysis_data.get('file_changes', [])
+    remediation = analysis_data.get('remediation', {})
+    can_remediate = remediation.get('can_remediate', True) if remediation else analysis_data.get('can_remediate', True)
+
+    # 容器/服务信息 - 兼容新旧格式
+    ecr_repository = service_info.get('ecr_repository') or container.get('ecr_repository', 'N/A')
+    service_path = service_info.get('path') or container.get('service_path', 'N/A')
+    service_name = service_info.get('name') or container.get('service_name') or ecr_repository
+
+    # PR 预览信息 - 由 Lambda 自动生成，Remediator 会创建实际的 PR
+    from datetime import datetime
+    date_str = datetime.now().strftime('%Y%m%d')
+    pr_title = f"[Security] 修复 {service_name} {len(vulnerabilities)} 个容器镜像漏洞"
+    branch_name = f"security/fix-{service_name}-cve-{date_str}"
+    base_branch = "master"
+
+    # 漏洞统计
+    total_vulns = len(vulnerabilities)
+    critical_count = sum(1 for v in vulnerabilities if v.get('severity') == 'CRITICAL')
+    high_count = sum(1 for v in vulnerabilities if v.get('severity') == 'HIGH')
+
+    # 构建漏洞列表 HTML
+    vuln_rows = ''
+    for v in vulnerabilities[:10]:  # 最多显示 10 个
+        severity = v.get('severity', 'UNKNOWN')
+        severity_color = '#dc3545' if severity == 'CRITICAL' else '#fd7e14' if severity == 'HIGH' else '#6c757d'
+        # 兼容两种字段名：installed_version (Analyzer) 和 current_version (旧格式)
+        current_ver = v.get('installed_version') or v.get('current_version', 'N/A')
+        vuln_rows += f'''
+            <tr>
+                <td style="padding:8px;border-bottom:1px solid #eee;"><code>{v.get('cve_id', 'N/A')}</code></td>
+                <td style="padding:8px;border-bottom:1px solid #eee;"><span style="color:{severity_color};font-weight:bold;">{severity}</span></td>
+                <td style="padding:8px;border-bottom:1px solid #eee;"><code>{v.get('package_name', 'N/A')}</code></td>
+                <td style="padding:8px;border-bottom:1px solid #eee;"><code>{current_ver}</code> → <code style="color:#28a745;">{v.get('fixed_version', 'N/A')}</code></td>
+            </tr>
+'''
+    if total_vulns > 10:
+        vuln_rows += f'<tr><td colspan="4" style="padding:8px;color:#666;text-align:center;">... 还有 {total_vulns - 10} 个漏洞</td></tr>'
+
+    # 构建文件变更列表
+    file_changes_html = ''
+    if file_changes:
+        file_rows = ''
+        for fc in file_changes:
+            # 兼容两种字段名：path (Analyzer) 和 file_path (旧格式)
+            file_path = fc.get("path") or fc.get("file_path", "N/A")
+            file_rows += f'<li><code>{file_path}</code> ({fc.get("change_type", "update")})</li>'
+        file_changes_html = f'''
+        <div style="margin-top:15px;">
+            <strong>将修改的文件:</strong>
+            <ul style="margin:10px 0;padding-left:20px;">{file_rows}</ul>
+        </div>
+'''
+
+    # 不可修复的警告
+    cannot_remediate_html = ''
+    if not can_remediate:
+        reason = analysis_data.get('cannot_remediate_reason', '未知原因')
+        cannot_remediate_html = f'''
+        <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:15px;margin:20px 0;">
+            <strong style="color:#856404;">⚠️ 无法自动修复</strong>
+            <p style="margin:10px 0 0 0;color:#856404;">{reason}</p>
+        </div>
+'''
+
+    # 构建 HTML
+    html = f'''<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:20px;background:#f5f5f5;">
+<div style="max-width:800px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.1);">
+
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#1a73e8,#0d47a1);color:#fff;padding:25px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:10px;">🐳</div>
+        <h1 style="margin:0;font-size:22px;">SHARA 容器漏洞修复审批</h1>
+        <p style="margin:10px 0 0 0;opacity:0.9;">将创建 GitHub Pull Request 修复依赖版本</p>
+    </div>
+
+    <!-- Stats Badge -->
+    <div style="text-align:center;padding:20px;background:#f8f9fa;border-bottom:1px solid #eee;">
+        <span style="display:inline-block;background:#dc3545;color:#fff;padding:8px 16px;border-radius:20px;font-weight:bold;margin:0 5px;">
+            {critical_count} CRITICAL
+        </span>
+        <span style="display:inline-block;background:#fd7e14;color:#fff;padding:8px 16px;border-radius:20px;font-weight:bold;margin:0 5px;">
+            {high_count} HIGH
+        </span>
+        <span style="display:inline-block;background:#6c757d;color:#fff;padding:8px 16px;border-radius:20px;font-weight:bold;margin:0 5px;">
+            共 {total_vulns} 个漏洞
+        </span>
+    </div>
+
+    <div style="padding:25px;">
+
+        <!-- 任务信息 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;margin-top:0;">📋 任务信息</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:25px;">
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">任务 ID</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{task_id}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">ECR Repository</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{ecr_repository}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">服务名称</td><td style="padding:8px;border-bottom:1px solid #eee;"><strong>{service_name}</strong></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">服务路径</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{service_path}</code></td></tr>
+        </table>
+
+        {cannot_remediate_html}
+
+        <!-- 漏洞列表 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;">🐛 待修复漏洞</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:25px;">
+            <thead>
+                <tr style="background:#f8f9fa;">
+                    <th style="padding:10px;text-align:left;border-bottom:2px solid #ddd;">CVE ID</th>
+                    <th style="padding:10px;text-align:left;border-bottom:2px solid #ddd;">严重性</th>
+                    <th style="padding:10px;text-align:left;border-bottom:2px solid #ddd;">软件包</th>
+                    <th style="padding:10px;text-align:left;border-bottom:2px solid #ddd;">版本更新</th>
+                </tr>
+            </thead>
+            <tbody>
+{vuln_rows}
+            </tbody>
+        </table>
+
+        <!-- PR 信息 -->
+        <h2 style="color:#333;border-bottom:2px solid #eee;padding-bottom:10px;">📝 Pull Request 信息</h2>
+        <table style="width:100%;border-collapse:collapse;margin-bottom:15px;">
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;width:140px;">PR 标题</td><td style="padding:8px;border-bottom:1px solid #eee;"><strong>{pr_title}</strong></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">分支名称</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{branch_name}</code></td></tr>
+            <tr><td style="padding:8px;border-bottom:1px solid #eee;color:#666;">目标分支</td><td style="padding:8px;border-bottom:1px solid #eee;"><code>{base_branch}</code></td></tr>
+        </table>
+        {file_changes_html}
+
+        <!-- 审批按钮 -->
+        <div style="text-align:center;margin:30px 0;padding:20px;background:#f8f9fa;border-radius:8px;">
+            <p style="margin:0 0 15px 0;color:#666;">请审核以上信息后做出决定:</p>
+            <a href="{approve_url}" style="display:inline-block;background:#28a745;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:bold;margin:0 10px;">✅ 批准创建 PR</a>
+            <a href="{reject_url}" style="display:inline-block;background:#dc3545;color:#fff;padding:12px 32px;border-radius:6px;text-decoration:none;font-weight:bold;margin:0 10px;">❌ 拒绝</a>
+        </div>
+
+        <!-- 注意事项 -->
+        <div style="background:#d1ecf1;border:1px solid #17a2b8;border-radius:8px;padding:15px;margin-top:20px;">
+            <strong style="color:#0c5460;">💡 说明</strong>
+            <ul style="margin:10px 0 0 0;padding-left:20px;color:#0c5460;">
+                <li>批准后，Agent 将自动创建 GitHub Pull Request</li>
+                <li>PR 创建后需要人工 Review 和 Merge</li>
+                <li>Merge 后请重新构建并部署容器镜像</li>
+            </ul>
+        </div>
+
+    </div>
+
+    <!-- Footer -->
+    <div style="background:#f8f9fa;padding:20px;text-align:center;border-top:1px solid #eee;">
+        <p style="margin:0 0 10px 0;color:#666;">审批链接有效期: {APPROVAL_EXPIRY_HOURS} 小时</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:15px 0;">
+        <p style="margin:0;color:#999;font-size:12px;">SHARA - Security Hub Auto-Remediation Agent | Powered by AWS Bedrock</p>
+    </div>
+
+</div>
+</body>
+</html>'''
+    return html
+
+
 def run_phase1_analysis(
     task_id: str,
     finding: dict,
@@ -1028,6 +1715,153 @@ def _fallback_analysis(task_id: str, finding: dict, control_id: str) -> dict:
                 'description': 'Auto-generated remediation description',
                 'steps': ['Step 1: Analyze issue', 'Step 2: Apply fix'],
             }
+        })
+    }
+
+
+def run_phase1_container_analysis(
+    task_id: str,
+    container_details: dict,
+    vulnerabilities: list,
+    summary: dict,
+    memory_session_id: str,
+    actor_id: str = ''
+) -> dict:
+    """运行 Phase 1 容器漏洞分析 - 通过 AgentCore Runtime 调用 Analyzer Agent
+
+    Args:
+        task_id: 任务 ID
+        container_details: 容器镜像详情
+        vulnerabilities: 聚合后的漏洞列表
+        summary: 漏洞摘要
+        memory_session_id: Memory Session ID
+        actor_id: Actor ID
+
+    Returns:
+        dict: 分析结果
+    """
+    if not ANALYZER_RUNTIME_ARN:
+        logger.warning("ANALYZER_RUNTIME_ARN not configured, using fallback")
+        return _fallback_container_analysis(task_id, container_details, vulnerabilities, summary)
+
+    try:
+        # 构建 Agent 输入 (容器漏洞专用格式)
+        agent_input = {
+            'task_id': task_id,
+            'remediation_type': 'github_pr',  # 标记为 GitHub PR 修复流程
+            'container': container_details,
+            'vulnerabilities': vulnerabilities,
+            'summary': summary,
+            'memory_session_id': memory_session_id,
+            'actor_id': actor_id,
+            # GitHub 配置 (仅传 owner，repo 由 Agent 动态搜索)
+            'github_owner': GITHUB_OWNER
+        }
+
+        # 使用 boto3 调用 AgentCore Runtime
+        agentcore_config = Config(
+            connect_timeout=60,
+            read_timeout=280,
+            retries={'max_attempts': 1}
+        )
+        client = boto3.client('bedrock-agentcore', region_name=REGION, config=agentcore_config)
+
+        payload = {
+            'prompt': json.dumps(agent_input)
+        }
+
+        logger.info(f"Calling Analyzer Runtime for container CVE: {ANALYZER_RUNTIME_ARN}")
+        logger.info(f"Vulnerabilities to analyze: {summary['total']} ({summary['critical']} CRITICAL, {summary['high']} HIGH)")
+
+        response = client.invoke_agent_runtime(
+            agentRuntimeArn=ANALYZER_RUNTIME_ARN,
+            runtimeSessionId=memory_session_id,
+            payload=json.dumps(payload).encode('utf-8')
+        )
+
+        # 处理响应
+        response_body = response.get('response', b'')
+
+        if hasattr(response_body, 'read'):
+            response_data = response_body.read().decode('utf-8')
+        elif hasattr(response_body, 'iter_lines'):
+            content = []
+            for line in response_body.iter_lines():
+                if line:
+                    line_str = line.decode('utf-8') if isinstance(line, bytes) else line
+                    if line_str.startswith('data: '):
+                        content.append(line_str[6:])
+                    else:
+                        content.append(line_str)
+            response_data = ''.join(content)
+        else:
+            response_data = str(response_body)
+
+        logger.info(f"Container CVE analysis response received for task {task_id}")
+
+        if not response_data or response_data.strip() == '':
+            logger.error(f"Task {task_id}: Empty response from AgentCore Runtime")
+            return {
+                'success': False,
+                'task_id': task_id,
+                'error': 'Empty response from AgentCore Runtime'
+            }
+
+        try:
+            parsed_response = json.loads(response_data)
+        except json.JSONDecodeError:
+            parsed_response = {'output': response_data}
+
+        return {
+            'success': True,
+            'task_id': task_id,
+            'response': parsed_response.get('output', parsed_response)
+        }
+
+    except Exception as e:
+        logger.exception(f"Failed to run container CVE analysis: {e}")
+        return {
+            'success': False,
+            'task_id': task_id,
+            'error': str(e)
+        }
+
+
+def _fallback_container_analysis(
+    task_id: str,
+    container_details: dict,
+    vulnerabilities: list,
+    summary: dict
+) -> dict:
+    """Fallback 容器漏洞分析结果（当 AgentCore 未配置时）"""
+    # 生成简单的 PR 元数据
+    cve_ids = [v['cve_id'] for v in vulnerabilities[:5]]  # 最多显示 5 个 CVE
+    cve_list = ', '.join(cve_ids)
+    if len(vulnerabilities) > 5:
+        cve_list += f' (+{len(vulnerabilities) - 5} more)'
+
+    return {
+        'success': True,
+        'task_id': task_id,
+        'response': json.dumps({
+            'remediation_type': 'github_pr',
+            'can_remediate': True,
+            'container': {
+                'ecr_repository': container_details.get('ecr_repository'),
+                'service_path': 'unknown',
+                'service_name': container_details.get('ecr_repository')
+            },
+            'file_changes': [],
+            'pr_metadata': {
+                'title': f"fix(security): Update dependencies for {cve_list}",
+                'body': f"## Summary\n\nUpdate dependencies to fix {summary['total']} vulnerabilities "
+                        f"({summary['critical']} CRITICAL, {summary['high']} HIGH).\n\n"
+                        f"## CVEs Fixed\n\n" +
+                        '\n'.join([f"- {v['cve_id']} ({v['severity']}) - {v['package_name']}" for v in vulnerabilities[:10]]),
+                'branch_name': f"fix/container-cve-{container_details.get('ecr_repository', 'unknown')[:20]}",
+                'base_branch': 'main'
+            },
+            'vulnerabilities': vulnerabilities
         })
     }
 
@@ -1319,18 +2153,30 @@ def send_approval_email(task_id: str, analysis_result: dict, finding_id: str = '
         approve_url = f"{base_url}/api/v1/approvals/{task_id}/respond?token={approve_token}&action=approve"
         reject_url = f"{base_url}/api/v1/approvals/{task_id}/respond?token={reject_token}&action=reject"
 
-        # 检查是否可以自动修复
-        can_remediate = response.get('remediation', {}).get('can_remediate', True)
+        # 检查修复类型
+        remediation_type = response.get('remediation_type', 'aws_api')
 
-        # 格式化邮件内容
-        email_body = format_approval_email(task_id, response, approve_url, reject_url, finding_id)
+        # 根据修复类型选择邮件格式
+        if remediation_type == 'github_pr':
+            # 容器漏洞 - GitHub PR 修复
+            email_body = format_github_pr_approval_email(task_id, response, approve_url, reject_url)
 
-        # 根据是否可修复设置邮件主题
-        control_id = response.get("analysis", {}).get("control_id", task_id)
-        if can_remediate:
-            email_subject = f'[SHARA] 安全修复审批请求 - {control_id}'
+            # 设置邮件主题
+            container = response.get('container', {})
+            ecr_repo = container.get('ecr_repository', 'container')
+            vuln_count = len(response.get('vulnerabilities', []))
+            email_subject = f'[SHARA] 🐳 容器漏洞修复审批 - {ecr_repo} ({vuln_count} 个漏洞)'
         else:
-            email_subject = f'[SHARA] 安全发现通知 (无法自动修复) - {control_id}'
+            # FSBP Control - AWS API 修复 (原有流程)
+            can_remediate = response.get('remediation', {}).get('can_remediate', True)
+            email_body = format_approval_email(task_id, response, approve_url, reject_url, finding_id)
+
+            # 根据是否可修复设置邮件主题
+            control_id = response.get("analysis", {}).get("control_id", task_id)
+            if can_remediate:
+                email_subject = f'[SHARA] 安全修复审批请求 - {control_id}'
+            else:
+                email_subject = f'[SHARA] 安全发现通知 (无法自动修复) - {control_id}'
 
         # 发送邮件 (HTML 格式)
         ses_client.send_email(

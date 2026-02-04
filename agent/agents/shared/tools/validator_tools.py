@@ -217,15 +217,26 @@ def trigger_result_email(
     validation_result: dict,
     is_rollback: bool = False,
     rollback_failed: bool = False,
-    error_message: Optional[str] = None
+    error_message: Optional[str] = None,
+    remediation_type: str = "aws_api",
+    pr_info: Optional[dict] = None,
+    vulnerabilities: Optional[list] = None
 ) -> dict:
     """Trigger email service to send result email.
 
     After Validator completes verification, invoke email service to send
-    result email to user. The email includes:
+    result email to user.
+
+    For aws_api mode:
     - Code review results
     - Validation results
-    - Rollback link (for normal remediation only, not for rollback operations)
+    - Rollback link (for normal remediation only)
+
+    For github_pr mode:
+    - PR information and link
+    - Files changed summary
+    - Vulnerabilities list (from Memory)
+    - Instructions for human review
 
     Supports two modes:
     - HTTP mode (local): Calls EMAIL_SERVICE_URL (e.g., http://email:8080/send)
@@ -238,18 +249,31 @@ def trigger_result_email(
     Args:
         task_id: Task ID
         resource_arn: Resource ARN
-        control_id: Security Hub Control ID
-        code_review_result: Results from review_code_security tool
-        validation_result: Results from verify_resource_state tool
+        control_id: Security Hub Control ID (empty for container CVE)
+        code_review_result: Results from review_code_security tool (aws_api mode)
+        validation_result: Results from verify_resource_state tool (aws_api mode)
         is_rollback: Whether this is a rollback operation (no rollback link in email)
         rollback_failed: Whether the rollback operation failed
         error_message: Error message to include if operation failed
+        remediation_type: Type of remediation ("aws_api" or "github_pr")
+        pr_info: Pull Request information (github_pr mode only)
+            - pr_number: int - PR number
+            - pr_url: str - PR URL
+            - title: str - PR title
+            - state: str - PR state
+        vulnerabilities: Vulnerability list (github_pr mode only, from Memory)
+            - cve_id: str - CVE identifier
+            - severity: str - CRITICAL/HIGH
+            - package_name: str - Affected package
+            - installed_version: str - Current version
+            - fixed_version: str - Fixed version
 
     Returns:
         dict: Email trigger result including:
             - success: bool - Whether email service was invoked successfully
             - sent: bool - Whether email will be sent
-            - includes_rollback_link: bool - Whether email has rollback link
+            - includes_rollback_link: bool - Whether email has rollback link (aws_api)
+            - includes_pr_link: bool - Whether email has PR link (github_pr)
             - error: str - Error message if failed
             - already_sent: bool - True if email was already sent (duplicate prevented)
     """
@@ -263,54 +287,95 @@ def trigger_result_email(
             "success": True,
             "sent": False,
             "already_sent": True,
-            "includes_rollback_link": not is_rollback,
+            "includes_rollback_link": not is_rollback and remediation_type == "aws_api",
+            "includes_pr_link": remediation_type == "github_pr",
             "email_type": "rollback_success" if is_rollback else "remediation_result",
             "message": f"邮件已发送，跳过重复调用 (task_id={task_id})"
         }
 
     # Determine email type and content
-    if is_rollback:
-        if rollback_failed:
-            email_type = "rollback_failed"
-        else:
-            email_type = "rollback_success"
+    if remediation_type == "github_pr":
+        # GitHub PR mode - send PR result email
+        email_type = "github_pr_result"
         include_rollback_link = False
+        include_pr_link = True
+
+        # Normalize pr_info field names (GitHub API returns 'number'/'url', we expect 'pr_number'/'pr_url')
+        normalized_pr_info = {}
+        if pr_info:
+            normalized_pr_info = {
+                "pr_number": pr_info.get("pr_number") or pr_info.get("number"),
+                "pr_url": pr_info.get("pr_url") or pr_info.get("url"),
+                "title": pr_info.get("title", ""),
+                "state": pr_info.get("state", "open"),
+                "branch_name": pr_info.get("branch_name") or pr_info.get("head_branch", ""),
+                "files_changed": pr_info.get("files_changed", [])
+            }
+
+        # Build PR email payload
+        payload = {
+            "action": "send_result_email",
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "control_id": control_id or "",
+            "email_type": email_type,
+            "remediation_type": "github_pr",
+            "pr_info": normalized_pr_info,
+            "vulnerabilities": vulnerabilities or [],  # 漏洞列表从 Memory 获取
+            "validation": {
+                "pr_verified": validation_result.get("pr_verified", False),
+                "files_verified": validation_result.get("files_verified", False),
+                "summary": validation_result.get("summary", "")
+            },
+            "include_pr_link": include_pr_link,
+            "error_message": error_message
+        }
     else:
-        email_type = "remediation_result"
-        include_rollback_link = True
+        # AWS API mode - original logic
+        if is_rollback:
+            if rollback_failed:
+                email_type = "rollback_failed"
+            else:
+                email_type = "rollback_success"
+            include_rollback_link = False
+        else:
+            email_type = "remediation_result"
+            include_rollback_link = True
+        include_pr_link = False
 
-    # Build email payload
-    # 提取检查明细供邮件显示
-    code_issues = code_review_result.get("issues", [])
-    validation_checks = validation_result.get("checks", [])
+        # Build email payload
+        # 提取检查明细供邮件显示
+        code_issues = code_review_result.get("issues", [])
+        validation_checks = validation_result.get("checks", [])
 
-    payload = {
-        "action": "send_result_email",
-        "task_id": task_id,
-        "resource_arn": resource_arn,
-        "control_id": control_id,
-        "email_type": email_type,
-        "code_review": {
-            "status": code_review_result.get("status", "unknown"),
-            "issues_count": code_review_result.get("summary", {}).get("total_issues", 0),
-            "risk_level": code_review_result.get("risk_level", "unknown"),
-            "issues": code_issues,  # 传递完整的问题列表
-            "recommendations": code_review_result.get("recommendations", [])
-        },
-        "validation": {
-            "passed": validation_result.get("passed", False),
-            "checks_count": len(validation_checks),
-            "checks": validation_checks,  # 传递完整的检查项列表
-            "summary": validation_result.get("summary", "")
-        },
-        "include_rollback_link": include_rollback_link,
-        "is_rollback": is_rollback,
-        "rollback_failed": rollback_failed,
-        "error_message": error_message
-    }
+        payload = {
+            "action": "send_result_email",
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "control_id": control_id,
+            "email_type": email_type,
+            "remediation_type": "aws_api",
+            "code_review": {
+                "status": code_review_result.get("status", "unknown"),
+                "issues_count": code_review_result.get("summary", {}).get("total_issues", 0),
+                "risk_level": code_review_result.get("risk_level", "unknown"),
+                "issues": code_issues,  # 传递完整的问题列表
+                "recommendations": code_review_result.get("recommendations", [])
+            },
+            "validation": {
+                "passed": validation_result.get("passed", False),
+                "checks_count": len(validation_checks),
+                "checks": validation_checks,  # 传递完整的检查项列表
+                "summary": validation_result.get("summary", "")
+            },
+            "include_rollback_link": include_rollback_link,
+            "is_rollback": is_rollback,
+            "rollback_failed": rollback_failed,
+            "error_message": error_message
+        }
 
     logger.info(f"Triggering result email for task {task_id}")
-    logger.info(f"Email type: {email_type}, include_rollback_link: {include_rollback_link}")
+    logger.info(f"Email type: {email_type}, remediation_type: {remediation_type}")
 
     # 获取 Lambda ARN（通过 approval-handler Lambda 发邮件）
     approval_handler_arn = os.environ.get('APPROVAL_HANDLER_ARN')
@@ -320,12 +385,18 @@ def trigger_result_email(
         return {
             "success": True,
             "sent": False,
-            "includes_rollback_link": include_rollback_link,
+            "includes_rollback_link": include_rollback_link if remediation_type == "aws_api" else False,
+            "includes_pr_link": include_pr_link if remediation_type == "github_pr" else False,
             "email_type": email_type,
             "message": "邮件 Lambda 未配置（测试环境预期行为）"
         }
 
-    return _send_email_lambda(approval_handler_arn, payload, config.region, include_rollback_link, email_type)
+    return _send_email_lambda(
+        approval_handler_arn, payload, config.region,
+        include_rollback_link if remediation_type == "aws_api" else False,
+        include_pr_link if remediation_type == "github_pr" else False,
+        email_type
+    )
 
 
 def _send_email_lambda(
@@ -333,6 +404,7 @@ def _send_email_lambda(
     payload: dict,
     region: str,
     include_rollback_link: bool,
+    include_pr_link: bool,
     email_type: str
 ) -> dict:
     """通过 Lambda 发送邮件（AWS 部署模式）"""
@@ -354,6 +426,7 @@ def _send_email_lambda(
             "success": success,
             "sent": success,
             "includes_rollback_link": include_rollback_link,
+            "includes_pr_link": include_pr_link,
             "email_type": email_type,
             "lambda_status_code": status_code
         }

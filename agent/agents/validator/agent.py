@@ -2,6 +2,10 @@
 Validator Agent - Phase 2 验证智能体
 
 负责验证修复效果、更新 Security Hub Finding 状态、保存修复经验。
+
+支持两种修复类型:
+- aws_api: AWS 配置类问题，验证代码执行结果
+- github_pr: 容器漏洞，验证 PR 创建结果
 """
 import logging
 from typing import Optional
@@ -11,9 +15,20 @@ from strands.models import BedrockModel
 
 from shared.config import get_config, VALIDATOR_MODEL_CONFIG
 from shared.tools.security_hub import update_security_hub_finding, verify_resource_state
-from shared.tools.memory_tools import save_experience_to_ltm, set_memory_session, get_remediation_result, get_rollback_from_memory
+from shared.tools.memory_tools import (
+    save_experience_to_ltm,
+    set_memory_session,
+    get_remediation_result,
+    get_rollback_from_memory,
+    get_pr_result,
+    get_analysis_context,  # 获取分析上下文（包含漏洞列表）
+)
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.validator_tools import review_code_security, trigger_result_email
+from shared.tools.github_mcp_client import (
+    get_pull_request,
+    get_pull_request_files,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +189,70 @@ VALIDATOR_SYSTEM_PROMPT = """# 角色
 - **始终触发结果邮件** - 无论成功失败都要通知用户
 - **回滚操作的邮件不能有回滚链接** - 避免无限回滚循环
 - **回滚验证使用 pre_state 作为期望状态，不是安全标准**
+
+---
+
+# GitHub PR 工作流验证 (容器漏洞修复)
+
+当 `remediation_type` 为 `"github_pr"` 时，执行 PR 验证而不是代码执行验证。
+
+## GitHub PR 验证流程
+
+### 步骤 0: 从 Memory 获取 PR 结果
+使用 get_pr_result 工具获取：
+- pr_info: PR 信息 (pr_number, pr_url, branch_name, title, state)
+- files_changed: 变更的文件列表
+
+### 步骤 1: 验证 PR 已创建
+使用 get_pull_request 工具确认 PR 存在：
+- 检查 PR 状态是否为 "open"
+- 检查 PR 标题是否正确
+- 检查目标分支是否正确
+
+### 步骤 2: 验证 PR 文件变更
+使用 get_pull_request_files 工具：
+- 检查变更的文件路径是否匹配 files_changed
+- 确认修复的依赖版本正确
+
+### 步骤 3: 更新 Security Hub
+将 Finding 状态更新为 NOTIFIED（PR 已创建，等待人工 Review）
+
+### 步骤 4: 触发结果邮件
+使用 trigger_result_email 工具：
+- 包含 PR 链接
+- 说明需要人工 Review 和 Merge
+
+## GitHub PR 输出格式
+
+{
+  "pr_verified": true,
+  "pr_info": {
+    "number": 42,
+    "url": "https://github.com/owner/repo/pull/42",
+    "state": "open",
+    "title": "[Security] 修复漏洞"
+  },
+  "files_verified": true,
+  "files_changed": [
+    {
+      "path": "requirements.txt",
+      "verified": true
+    }
+  ],
+  "security_hub_update": {
+    "updated": true,
+    "new_status": "NOTIFIED"
+  },
+  "result_email": {
+    "sent": true,
+    "includes_pr_link": true
+  }
+}
+
+## GitHub PR 验证注意事项
+- **不执行代码审查**: PR 内容由人工 Review
+- **不验证资源状态**: 资源状态在 PR Merge 后才会改变
+- **邮件包含 PR 链接**: 用户需要 Review 并 Merge PR
 """
 
 
@@ -257,26 +336,39 @@ def create_validator_agent(
         streaming=False
     )
 
+    # 构建工具列表 - 基础工具 (aws_api 模式)
+    tools = [
+        # Memory - Get remediation result from Remediator
+        get_remediation_result,
+        get_rollback_from_memory,  # Get pre_state for rollback validation
+        # Code Security Review (A2A enhanced)
+        review_code_security,
+        # Resource Verification
+        verify_resource_state,
+        get_resource_config,
+        # Security Hub
+        update_security_hub_finding,
+        # Experience & Memory
+        save_experience_to_ltm,
+        # Result Email (A2A enhanced)
+        trigger_result_email,
+    ]
+
+    # 添加 GitHub 工具 (用于 github_pr 模式的容器漏洞验证)
+    github_tools = [
+        get_analysis_context,  # 从 Memory 获取分析上下文（包含漏洞列表）
+        get_pr_result,  # 从 Memory 获取 PR 结果
+        get_pull_request,  # 验证 PR 状态
+        get_pull_request_files,  # 验证 PR 文件变更
+    ]
+    tools.extend(github_tools)
+    logger.info(f"Added {len(github_tools)} GitHub tools for container vulnerability validation")
+
     # 创建 Agent
     agent = Agent(
         model=model,
         system_prompt=VALIDATOR_SYSTEM_PROMPT,
-        tools=[
-            # Memory - Get remediation result from Remediator
-            get_remediation_result,
-            get_rollback_from_memory,  # Get pre_state for rollback validation
-            # Code Security Review (A2A enhanced)
-            review_code_security,
-            # Resource Verification
-            verify_resource_state,
-            get_resource_config,
-            # Security Hub
-            update_security_hub_finding,
-            # Experience & Memory
-            save_experience_to_ltm,
-            # Result Email (A2A enhanced)
-            trigger_result_email,
-        ],
+        tools=tools,
         session_manager=session_manager,
     )
 
@@ -600,3 +692,129 @@ def _get_expected_state(resource_type: str, control_id: str) -> dict:
 
     # 默认返回空，让 Agent 根据 Control ID 判断
     return {}
+
+
+def run_github_pr_validator(
+    agent: Agent,
+    task_id: str,
+    finding_id: str,
+    resource_arn: str,
+    github_owner: str = "Wyifei",
+    github_repo: str = "awsome"
+) -> dict:
+    """运行 Validator Agent 验证 GitHub PR 创建结果。
+
+    用于 github_pr 模式的容器漏洞修复验证。
+
+    Args:
+        agent: Validator Agent 实例
+        task_id: 任务 ID
+        finding_id: Security Hub Finding ID
+        resource_arn: 容器镜像 ARN
+        github_owner: GitHub 用户/组织
+        github_repo: GitHub 仓库名
+
+    Returns:
+        dict: 验证结果
+    """
+    prompt = f"""
+Validate the GitHub PR remediation for container vulnerability:
+
+**Task ID:** {task_id}
+**Finding ID:** {finding_id}
+**Resource ARN:** {resource_arn}
+**Remediation Type:** github_pr
+**GitHub Repository:** {github_owner}/{github_repo}
+
+**Instructions - Execute ALL steps in order:**
+
+**Step 0: Get Analysis Context from Memory**
+Use get_analysis_context tool FIRST:
+- task_id: {task_id}
+- This retrieves vulnerabilities list saved by Analyzer (邮件需要显示漏洞列表)
+- **记住返回的 vulnerabilities 列表，Step 4 需要用到**
+
+**Step 1: Get PR Result from Memory**
+Use get_pr_result tool:
+- task_id: {task_id}
+- resource_arn: {resource_arn}
+- This retrieves pr_info and files_changed saved by Remediator
+
+**Step 2: Verify PR Created**
+Use get_pull_request tool:
+- owner: {github_owner}
+- repo: {github_repo}
+- pr_number: from pr_info in step 1
+- Verify PR exists and state is "open"
+
+**Step 3: Verify PR Files**
+Use get_pull_request_files tool:
+- owner: {github_owner}
+- repo: {github_repo}
+- pr_number: from pr_info in step 1
+- Verify changed files match files_changed from step 1
+
+**Step 4: Update Security Hub**
+Use update_security_hub_finding tool:
+- finding_id: {finding_id}
+- Set status to NOTIFIED (PR created, awaiting human review)
+- Note: Container vulnerability requires human PR merge to fully resolve
+
+**Step 5: Trigger Result Email**
+Use trigger_result_email tool - ALWAYS do this:
+- task_id: {task_id}
+- resource_arn: {resource_arn}
+- control_id: "" (container CVE has no control_id)
+- code_review_result: {{}} (not used in github_pr mode)
+- validation_result: {{"pr_verified": true/false, "files_verified": true/false}}
+- remediation_type: "github_pr"
+- pr_info: from step 1
+- **vulnerabilities**: from step 0 (⚠️ 必须传递！邮件需要显示漏洞列表)
+
+**CHECKLIST:**
+- [ ] Did you get analysis context (vulnerabilities)? (Step 0)
+- [ ] Did you get PR result from Memory? (Step 1)
+- [ ] Did you verify PR exists? (Step 2)
+- [ ] Did you verify PR files? (Step 3)
+- [ ] Did you update Security Hub? (Step 4)
+- [ ] Did you trigger result email with vulnerabilities? (Step 5 - ALWAYS)
+
+Return a JSON summary with pr_verified, files_verified, security_hub_update, and result_email results.
+"""
+
+    logger.info(f"Running GitHub PR Validator for task {task_id}")
+
+    try:
+        result = agent(prompt)
+
+        response_text = str(result.message) if hasattr(result, 'message') else str(result)
+
+        # 解析验证结果
+        pr_verified = False
+        email_sent = False
+
+        if 'pr_verified' in response_text.lower() and 'true' in response_text.lower():
+            pr_verified = True
+        if '"sent": true' in response_text.lower():
+            email_sent = True
+
+        logger.info(f"GitHub PR Validator completed for task {task_id}: pr_verified={pr_verified}, email_sent={email_sent}")
+
+        return {
+            "success": pr_verified,
+            "task_id": task_id,
+            "finding_id": finding_id,
+            "remediation_type": "github_pr",
+            "pr_verified": pr_verified,
+            "email_sent": email_sent,
+            "response": response_text
+        }
+
+    except Exception as e:
+        logger.exception(f"GitHub PR Validator failed for task {task_id}: {e}")
+        return {
+            "success": False,
+            "task_id": task_id,
+            "remediation_type": "github_pr",
+            "error": str(e)
+        }

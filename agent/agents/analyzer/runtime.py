@@ -174,6 +174,9 @@ async def invocations(request: Request):
             control_id = prompt_data.get('control_id')
             memory_session_id = prompt_data.get('memory_session_id') or body.get('session_id') or f"session-task-{task_id}"
             actor_id = prompt_data.get('actor_id')
+            remediation_type = prompt_data.get('remediation_type', 'auto')
+            github_owner = prompt_data.get('github_owner', '')
+            github_repo = prompt_data.get('github_repo', '')  # 可选，留空则动态搜索
         else:
             # 直接调用方式 (curl 或其他 HTTP 客户端)
             task_id = body.get('task_id', 'unknown')
@@ -181,6 +184,9 @@ async def invocations(request: Request):
             control_id = body.get('control_id')
             memory_session_id = body.get('memory_session_id') or body.get('session_id') or f"session-task-{task_id}"
             actor_id = body.get('actor_id')
+            remediation_type = body.get('remediation_type', 'auto')  # auto 或 github_pr
+            github_owner = body.get('github_owner', '')
+            github_repo = body.get('github_repo', '')  # 可选，留空则动态搜索
 
         # 验证必需字段
         if not finding:
@@ -188,10 +194,13 @@ async def invocations(request: Request):
                 "缺少必需字段 'finding'。\n"
                 "请提供 Security Hub Finding (ASFF 格式)。"
             )
-        if not control_id:
+
+        # control_id 只在 auto 模式下必需，github_pr 模式 (容器 CVE) 不需要
+        if remediation_type != 'github_pr' and not control_id:
             raise ValueError(
                 "缺少必需字段 'control_id'。\n"
-                "请提供 Control ID (如 SNS.1, S3.1, EC2.19)。"
+                "请提供 Control ID (如 SNS.1, S3.1, EC2.19)。\n"
+                "注意: 如果是容器漏洞修复，请设置 remediation_type='github_pr'"
             )
 
         config = get_config()
@@ -204,38 +213,71 @@ async def invocations(request: Request):
         if mcp_tools:
             logger.info(f"Including {len(mcp_tools)} AWS MCP tools")
 
-        # Create agent for this request
+        # 确定实际的 remediation_type
+        effective_remediation_type = "github_pr" if remediation_type == "github_pr" else "aws_api"
+
+        # Create agent for this request - 根据 remediation_type 选择不同的 Prompt
         agent = create_analyzer_agent(
             task_id=task_id,
             memory_id=memory_id,
             session_id=memory_session_id,  # 传入 session_id
             region=config.region,
             actor_id=actor_id,
-            mcp_tools=mcp_tools  # Pass MCP tools
+            mcp_tools=mcp_tools if effective_remediation_type == "aws_api" else None,  # MCP tools 只用于 aws_api 模式
+            remediation_type=effective_remediation_type  # 传递 remediation_type 以选择 Prompt
         )
+
+        logger.info(f"Created Analyzer Agent with remediation_type={effective_remediation_type}")
 
         # Run analyzer
         import asyncio
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
-            lambda: run_analyzer(agent, finding, control_id, task_id)
+            lambda: run_analyzer(
+                agent, finding, control_id, task_id,
+                remediation_type=remediation_type,
+                github_owner=github_owner,
+                github_repo=github_repo
+            )
         )
 
-        # 构建响应 - 直接包含解析好的数据，避免多层 JSON 嵌套
-        response_data = {
-            "success": result.get('success', False),
-            "task_id": task_id,
-            "analysis": result.get('analysis', {}),
-            "asr_match": result.get('asr_match', {}),
-            "similar_experiences": result.get('similar_experiences', []),
-            "remediation": result.get('remediation', {}),
-            "session_id": memory_session_id,
-            "metadata": {
-                "agent_type": "analyzer",
-                "has_asr_match": result.get('asr_match', {}).get('matched', False)
+        # 构建响应 - 根据 remediation_type 使用不同格式
+        if remediation_type == "github_pr":
+            # GitHub PR 模式 (容器漏洞修复)
+            # Analyzer 负责：分析漏洞、建议文件修改、风险评估
+            # Remediator 负责：创建 PR（标题、描述、分支名）
+            response_data = {
+                "success": result.get('success', False),
+                "task_id": task_id,
+                "remediation_type": "github_pr",
+                "analysis": result.get('analysis', {}),
+                "service_info": result.get('service_info', {}),
+                "vulnerabilities": result.get('vulnerabilities', []),
+                "file_changes": result.get('file_changes', []),
+                "remediation": result.get('remediation', {}),
+                "session_id": memory_session_id,
+                "metadata": {
+                    "agent_type": "analyzer",
+                    "remediation_type": "github_pr"
+                }
             }
-        }
+        else:
+            # AWS API 模式 (常规 Security Hub 修复)
+            response_data = {
+                "success": result.get('success', False),
+                "task_id": task_id,
+                "remediation_type": "aws_api",
+                "analysis": result.get('analysis', {}),
+                "asr_match": result.get('asr_match', {}),
+                "similar_experiences": result.get('similar_experiences', []),
+                "remediation": result.get('remediation', {}),
+                "session_id": memory_session_id,
+                "metadata": {
+                    "agent_type": "analyzer",
+                    "has_asr_match": result.get('asr_match', {}).get('matched', False)
+                }
+            }
 
         # 如果失败，包含错误信息
         if not result.get('success', False):

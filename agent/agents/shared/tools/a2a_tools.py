@@ -31,20 +31,22 @@ def invoke_validator_agent(
     actor_id: str,
     is_rollback: bool = False,
     rollback_failed: bool = False,
-    error_message: str = ""
+    error_message: str = "",
+    remediation_type: str = "aws_api"
 ) -> dict:
     """Through AgentCore Runtime API, invoke Validator Agent for code review and result verification.
 
-    After Remediator completes code execution, call Validator Agent to:
-    1. Get generated code and execution result from Memory (NOT passed as parameters)
-    2. Review generated code for security issues
-    3. Verify execution results
-    4. Update Security Hub Finding status
-    5. Save experience to LTM
-    6. Trigger result email (with rollback link for normal remediation)
+    After Remediator completes execution, call Validator Agent to:
+    1. Get results from Memory (NOT passed as parameters)
+       - aws_api mode: get generated_code and execution_result via get_remediation_result
+       - github_pr mode: get pr_info and files_changed via get_pr_result
+    2. Review/verify results
+    3. Update Security Hub Finding status
+    4. Save experience to LTM
+    5. Trigger result email
 
-    NOTE: Validator retrieves generated_code and execution_result from Memory.
-    Remediator must call save_remediation_result before invoking this tool.
+    NOTE: Validator retrieves results from Memory.
+    Remediator must call save_remediation_result (aws_api) or save_pr_result (github_pr) before invoking this tool.
 
     This tool uses the AgentCore InvokeAgentRuntime API (not direct HTTP) because:
     - Agents in AgentCore Runtime cannot directly communicate via HTTP
@@ -54,19 +56,21 @@ def invoke_validator_agent(
     Args:
         task_id: Task ID
         resource_arn: Resource ARN
-        resource_type: Resource type (e.g., AwsS3Bucket)
-        control_id: Security Hub Control ID (e.g., S3.8)
+        resource_type: Resource type (e.g., AwsS3Bucket, AwsEcrContainerImage)
+        control_id: Security Hub Control ID (e.g., S3.8) - empty for container CVE
         finding_id: Security Hub Finding ID
         memory_session_id: Memory Session ID for context sharing
         actor_id: Actor ID for Memory operations
         is_rollback: Whether this is a rollback operation (rollback emails don't have rollback link)
         rollback_failed: Whether the rollback operation failed (e.g., rollback data not found)
         error_message: Error message to include in the notification email
+        remediation_type: Type of remediation ("aws_api" or "github_pr")
 
     Returns:
         dict: Validator Agent response including:
             - success: bool - Whether A2A call succeeded
-            - code_review: dict - Code security review results
+            - code_review: dict - Code security review results (aws_api mode)
+            - pr_verified: bool - Whether PR was verified (github_pr mode)
             - verification: dict - Execution result verification
             - security_hub_update: dict - Security Hub update status
             - experience_saved: dict - LTM save status
@@ -91,7 +95,9 @@ def invoke_validator_agent(
         }
 
     # Build A2A request payload
-    # NOTE: generated_code and execution_result are retrieved from Memory by Validator
+    # NOTE: Results are retrieved from Memory by Validator:
+    # - aws_api mode: get_remediation_result (generated_code, execution_result)
+    # - github_pr mode: get_pr_result (pr_info, files_changed)
     a2a_payload = {
         "task_id": task_id,
         "resource_arn": resource_arn,
@@ -103,7 +109,8 @@ def invoke_validator_agent(
         "actor_id": actor_id,
         "is_rollback": is_rollback,
         "rollback_failed": rollback_failed,
-        "error_message": error_message
+        "error_message": error_message,
+        "remediation_type": remediation_type
     }
 
     logger.info(f"Invoking Validator Agent for task {task_id}, is_rollback={is_rollback}")

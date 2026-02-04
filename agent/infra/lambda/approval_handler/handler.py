@@ -572,6 +572,9 @@ def handle_send_result_email(event: dict, context) -> dict:
     """处理发送结果邮件请求
 
     由 Validator Agent 的 trigger_result_email 工具调用。
+    支持两种修复类型:
+    - aws_api: AWS 配置修复，显示代码审查和验证结果
+    - github_pr: 容器漏洞修复，显示 PR 信息和文件变更
 
     Args:
         event: 邮件发送请求事件
@@ -584,14 +587,18 @@ def handle_send_result_email(event: dict, context) -> dict:
     resource_arn = event.get('resource_arn', '')
     control_id = event.get('control_id', '')
     email_type = event.get('email_type', 'remediation_result')
+    remediation_type = event.get('remediation_type', 'aws_api')
     is_rollback = event.get('is_rollback', False)
     rollback_failed = event.get('rollback_failed', False)
     include_rollback_link = event.get('include_rollback_link', not is_rollback)
     error_message = event.get('error_message')
     code_review = event.get('code_review', {})
     validation = event.get('validation', {})
+    # GitHub PR mode specific fields
+    pr_info = event.get('pr_info', {})
+    vulnerabilities = event.get('vulnerabilities', [])  # 漏洞列表从 Memory 获取，通过 event 传递
 
-    logger.info(f"Sending result email for task {task_id}, email_type={email_type}, is_rollback={is_rollback}")
+    logger.info(f"Sending result email for task {task_id}, email_type={email_type}, remediation_type={remediation_type}, is_rollback={is_rollback}")
 
     # 防重复检查: 根据操作类型检查对应的邮件发送状态
     if task_id:
@@ -649,30 +656,50 @@ def handle_send_result_email(event: dict, context) -> dict:
             base_url = API_GATEWAY_URL.rstrip('/') if API_GATEWAY_URL else 'https://your-api-gateway-url'
             rollback_url = f"{base_url}/api/v1/approvals/{task_id}/respond?token={rollback_token}&action=rollback"
 
-        # 格式化邮件内容
-        email_body = format_result_email_body(
-            task_id=task_id,
-            resource_arn=resource_arn,
-            control_id=control_id,
-            email_type=email_type,
-            code_review=code_review,
-            validation=validation,
-            rollback_url=rollback_url,
-            is_rollback=is_rollback,
-            rollback_failed=rollback_failed,
-            error_message=error_message,
-            task=task
-        )
-
-        # 确定邮件主题
-        if rollback_failed:
-            subject = f'[SHARA] ❌ 回滚失败 - {control_id}'
-        elif is_rollback:
-            subject = f'[SHARA] ↩️ 回滚完成 - {control_id}'
-        elif validation.get('passed', False):
-            subject = f'[SHARA] ✅ 修复成功 - {control_id}'
+        # 格式化邮件内容 - 根据 remediation_type 使用不同模板
+        if remediation_type == 'github_pr':
+            # GitHub PR 修复邮件
+            email_body = format_github_pr_result_email(
+                task_id=task_id,
+                resource_arn=resource_arn,
+                pr_info=pr_info,
+                validation=validation,
+                error_message=error_message,
+                vulnerabilities=vulnerabilities  # 从 Memory 获取，通过 event 传递
+            )
+            # GitHub PR 邮件主题
+            pr_number = pr_info.get('pr_number', 'N/A')
+            pr_state = pr_info.get('state', 'open')
+            if error_message:
+                subject = f'[SHARA] ❌ 容器漏洞修复失败 - PR #{pr_number}'
+            elif validation.get('pr_verified', False):
+                subject = f'[SHARA] ✅ 容器漏洞修复 PR 已创建 - #{pr_number}'
+            else:
+                subject = f'[SHARA] ⚠️ 容器漏洞修复 PR 待审核 - #{pr_number}'
         else:
-            subject = f'[SHARA] ⚠️ 修复完成(需验证) - {control_id}'
+            # AWS API 修复邮件 (原有逻辑)
+            email_body = format_result_email_body(
+                task_id=task_id,
+                resource_arn=resource_arn,
+                control_id=control_id,
+                email_type=email_type,
+                code_review=code_review,
+                validation=validation,
+                rollback_url=rollback_url,
+                is_rollback=is_rollback,
+                rollback_failed=rollback_failed,
+                error_message=error_message,
+                task=task
+            )
+            # AWS API 邮件主题
+            if rollback_failed:
+                subject = f'[SHARA] ❌ 回滚失败 - {control_id}'
+            elif is_rollback:
+                subject = f'[SHARA] ↩️ 回滚完成 - {control_id}'
+            elif validation.get('passed', False):
+                subject = f'[SHARA] ✅ 修复成功 - {control_id}'
+            else:
+                subject = f'[SHARA] ⚠️ 修复完成(需验证) - {control_id}'
 
         # 发送邮件 (HTML 格式)
         ses_client.send_email(
@@ -1019,6 +1046,303 @@ def format_result_email_body(
             <div class="info-box">
                 <p style="margin: 0;">此为回滚操作结果通知。</p>
                 <p style="margin: 8px 0 0 0;">回滚操作不提供二次回滚链接。</p>
+            </div>
+        </div>
+'''
+
+    html += '''
+        <!-- 页脚 -->
+        <div class="footer">
+            <p>SHARA - Security Hub Auto-Remediation Agent</p>
+            <p>Powered by AWS Bedrock</p>
+        </div>
+    </div>
+</body>
+</html>'''
+
+    return html
+
+
+def format_github_pr_result_email(
+    task_id: str,
+    resource_arn: str,
+    pr_info: dict,
+    validation: dict,
+    error_message: Optional[str],
+    vulnerabilities: list = None
+) -> str:
+    """格式化 GitHub PR 结果邮件内容 (HTML 格式)
+
+    用于容器漏洞修复的 PR 结果通知邮件。
+    漏洞信息从 Memory 获取，通过 event 传递。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 资源 ARN (ECR 镜像)
+        pr_info: PR 信息
+            - pr_number: PR 编号
+            - pr_url: PR 链接
+            - title: PR 标题
+            - state: PR 状态
+            - files_changed: 变更的文件列表
+        validation: 验证结果
+            - pr_verified: PR 是否已验证
+            - files_verified: 文件是否已验证
+            - summary: 验证摘要
+        error_message: 错误信息 (如果有)
+        task: 任务详情 (可选)
+
+    Returns:
+        str: HTML 格式的邮件内容
+    """
+    # 提取 PR 信息
+    pr_number = pr_info.get('pr_number', 'N/A')
+    pr_url = pr_info.get('pr_url', '#')
+    pr_title = pr_info.get('title', '容器漏洞修复')
+    pr_state = pr_info.get('state', 'open')
+    files_changed = pr_info.get('files_changed', [])
+
+    # 验证状态
+    pr_verified = validation.get('pr_verified', False)
+    files_verified = validation.get('files_verified', False)
+    validation_summary = validation.get('summary', '')
+
+    # 确定状态和颜色
+    if error_message:
+        status_icon = "❌"
+        status_text = "失败"
+        header_color = "#dc3545"
+    elif pr_verified and files_verified:
+        status_icon = "✅"
+        status_text = "成功"
+        header_color = "#28a745"
+    else:
+        status_icon = "⚠️"
+        status_text = "待审核"
+        header_color = "#ffc107"
+
+    # PR 状态显示
+    pr_state_display = {
+        'open': ('🟢 Open', '#28a745'),
+        'closed': ('🔴 Closed', '#dc3545'),
+        'merged': ('🟣 Merged', '#6f42c1')
+    }
+    pr_state_text, pr_state_color = pr_state_display.get(pr_state, ('⚪ Unknown', '#6c757d'))
+
+    # HTML 模板
+    html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 700px; margin: 0 auto; padding: 20px; }}
+        .header {{ background: {header_color}; color: white; padding: 20px; border-radius: 8px 8px 0 0; text-align: center; }}
+        .header h1 {{ margin: 0; font-size: 22px; }}
+        .content {{ background: #fff; border: 1px solid #e0e0e0; border-top: none; padding: 20px; border-radius: 0 0 8px 8px; }}
+        .section {{ margin-bottom: 24px; }}
+        .section-title {{ font-size: 15px; font-weight: 600; color: #333; border-bottom: 2px solid #1a73e8; padding-bottom: 8px; margin-bottom: 12px; }}
+        table {{ width: 100%; border-collapse: collapse; }}
+        td {{ padding: 8px 12px; vertical-align: top; }}
+        .label {{ font-weight: 500; color: #666; width: 120px; }}
+        .value {{ color: #333; }}
+        .badge {{ display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; }}
+        .result-box {{ background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 16px; margin-top: 8px; }}
+        .result-row {{ margin-bottom: 12px; }}
+        .result-row:last-child {{ margin-bottom: 0; }}
+        .result-label {{ font-weight: 500; color: #666; display: inline-block; width: 100px; }}
+        .btn {{ display: inline-block; padding: 12px 32px; border-radius: 6px; text-decoration: none; font-weight: 600; }}
+        .btn-pr {{ background: #28a745; color: #fff !important; }}
+        .btn-container {{ text-align: center; margin: 24px 0; }}
+        .footer {{ text-align: center; color: #666; font-size: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid #e0e0e0; }}
+        .error-box {{ background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; padding: 12px; margin: 16px 0; color: #721c24; }}
+        .info-box {{ background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 6px; padding: 12px; margin: 16px 0; color: #0c5460; }}
+        code {{ background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 13px; }}
+        .file-list {{ background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; margin-top: 8px; }}
+        .file-item {{ padding: 6px 0; border-bottom: 1px solid #e0e0e0; font-family: monospace; font-size: 13px; }}
+        .file-item:last-child {{ border-bottom: none; }}
+        .file-icon {{ margin-right: 8px; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{status_icon} SHARA 容器漏洞修复通知 - {status_text}</h1>
+    </div>
+    <div class="content">
+        <!-- 任务信息 -->
+        <div class="section">
+            <div class="section-title">📋 任务信息</div>
+            <table>
+                <tr><td class="label">任务 ID</td><td class="value"><code>{task_id}</code></td></tr>
+                <tr><td class="label">修复类型</td><td class="value">🐳 容器漏洞修复 (GitHub PR)</td></tr>
+                <tr><td class="label">镜像</td><td class="value"><code style="word-break: break-all;">{resource_arn}</code></td></tr>
+            </table>
+        </div>
+'''
+
+    # 错误信息 (如果有)
+    if error_message:
+        html += f'''
+        <!-- 错误信息 -->
+        <div class="section">
+            <div class="section-title">❌ 错误信息</div>
+            <div class="error-box">
+                {error_message}
+            </div>
+        </div>
+'''
+
+    # PR 信息
+    html += f'''
+        <!-- Pull Request 信息 -->
+        <div class="section">
+            <div class="section-title">🔀 Pull Request 信息</div>
+            <div class="result-box">
+                <div class="result-row">
+                    <span class="result-label">PR 编号</span>
+                    <span><strong>#{pr_number}</strong></span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">标题</span>
+                    <span>{pr_title}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">状态</span>
+                    <span class="badge" style="background:{pr_state_color};color:#fff">{pr_state_text}</span>
+                </div>
+            </div>
+'''
+
+    # PR 链接按钮
+    if pr_url and pr_url != '#':
+        html += f'''
+            <div class="btn-container">
+                <a href="{pr_url}" class="btn btn-pr" target="_blank">🔗 查看 Pull Request</a>
+            </div>
+'''
+
+    html += '        </div>\n'
+
+    # 漏洞列表 (从 Memory 获取，通过 vulnerabilities 参数传递)
+    vuln_list = vulnerabilities or []
+
+    if vuln_list:
+        # 按严重程度分组
+        critical_vulns = [v for v in vuln_list if v.get('severity') == 'CRITICAL']
+        high_vulns = [v for v in vuln_list if v.get('severity') == 'HIGH']
+        total_count = len(vuln_list)
+        critical_count = len(critical_vulns)
+        high_count = len(high_vulns)
+
+        html += f'''
+        <!-- 漏洞列表 -->
+        <div class="section">
+            <div class="section-title">🔒 修复的漏洞 (共 {total_count} 个)</div>
+            <div style="margin-bottom: 12px;">
+                <span class="badge" style="background:#dc3545;color:#fff">CRITICAL: {critical_count}</span>
+                <span class="badge" style="background:#fd7e14;color:#fff;margin-left:8px">HIGH: {high_count}</span>
+            </div>
+            <div class="result-box" style="max-height: 300px; overflow-y: auto;">
+'''
+        # 显示 CRITICAL 漏洞
+        if critical_vulns:
+            html += '                <div style="margin-bottom: 16px;"><strong style="color:#dc3545;">CRITICAL</strong></div>\n'
+            for vuln in critical_vulns[:5]:  # 最多显示 5 个
+                cve_id = vuln.get('cve_id', 'Unknown')
+                pkg_name = vuln.get('package_name', 'Unknown')
+                installed = vuln.get('installed_version', 'Unknown')
+                fixed = vuln.get('fixed_version', 'Unknown')
+                html += f'''                <div style="margin-bottom: 8px; padding: 8px; background: #fff; border-left: 3px solid #dc3545; border-radius: 4px;">
+                    <div><strong>{cve_id}</strong></div>
+                    <div style="font-size: 13px; color: #666;">{pkg_name}: {installed} → {fixed}</div>
+                </div>
+'''
+            if len(critical_vulns) > 5:
+                html += f'                <div style="color:#666;font-size:12px;margin-bottom:16px;">... 还有 {len(critical_vulns) - 5} 个 CRITICAL 漏洞</div>\n'
+
+        # 显示 HIGH 漏洞
+        if high_vulns:
+            html += '                <div style="margin-bottom: 16px;"><strong style="color:#fd7e14;">HIGH</strong></div>\n'
+            for vuln in high_vulns[:5]:  # 最多显示 5 个
+                cve_id = vuln.get('cve_id', 'Unknown')
+                pkg_name = vuln.get('package_name', 'Unknown')
+                installed = vuln.get('installed_version', 'Unknown')
+                fixed = vuln.get('fixed_version', 'Unknown')
+                html += f'''                <div style="margin-bottom: 8px; padding: 8px; background: #fff; border-left: 3px solid #fd7e14; border-radius: 4px;">
+                    <div><strong>{cve_id}</strong></div>
+                    <div style="font-size: 13px; color: #666;">{pkg_name}: {installed} → {fixed}</div>
+                </div>
+'''
+            if len(high_vulns) > 5:
+                html += f'                <div style="color:#666;font-size:12px;">... 还有 {len(high_vulns) - 5} 个 HIGH 漏洞</div>\n'
+
+        html += '''            </div>
+        </div>
+'''
+
+    # 变更文件列表
+    if files_changed:
+        html += '''
+        <!-- 变更文件 -->
+        <div class="section">
+            <div class="section-title">📁 变更文件</div>
+            <div class="file-list">
+'''
+        for file_path in files_changed[:10]:  # 最多显示10个文件
+            # 根据文件类型显示不同图标
+            if file_path.endswith('.yaml') or file_path.endswith('.yml'):
+                file_icon = '📄'
+            elif file_path.endswith('.json'):
+                file_icon = '📋'
+            elif file_path.endswith('Dockerfile'):
+                file_icon = '🐳'
+            elif file_path.endswith('.tf'):
+                file_icon = '🏗️'
+            else:
+                file_icon = '📝'
+            html += f'''                <div class="file-item"><span class="file-icon">{file_icon}</span>{file_path}</div>
+'''
+        html += '''            </div>
+'''
+        if len(files_changed) > 10:
+            html += f'            <p style="color:#666;font-size:12px;margin-top:4px;">... 还有 {len(files_changed) - 10} 个文件未显示</p>\n'
+        html += '        </div>\n'
+
+    # 验证结果
+    html += f'''
+        <!-- 验证结果 -->
+        <div class="section">
+            <div class="section-title">✓ 验证结果</div>
+            <div class="result-box">
+                <div class="result-row">
+                    <span class="result-label">PR 验证</span>
+                    <span class="badge" style="background:{'#28a745' if pr_verified else '#ffc107'};color:#fff">{'✅ 已验证' if pr_verified else '⏳ 待验证'}</span>
+                </div>
+                <div class="result-row">
+                    <span class="result-label">文件验证</span>
+                    <span class="badge" style="background:{'#28a745' if files_verified else '#ffc107'};color:#fff">{'✅ 已验证' if files_verified else '⏳ 待验证'}</span>
+                </div>
+            </div>
+'''
+
+    # 验证摘要
+    if validation_summary:
+        html += f'            <div style="margin-top: 12px;color:#555;"><strong>摘要:</strong> {validation_summary}</div>\n'
+
+    html += '        </div>\n'
+
+    # 下一步说明
+    html += '''
+        <!-- 下一步 -->
+        <div class="section">
+            <div class="section-title">📝 下一步</div>
+            <div class="info-box">
+                <p style="margin: 0;"><strong>请执行以下操作:</strong></p>
+                <ol style="margin: 8px 0 0 0; padding-left: 20px;">
+                    <li>点击上方按钮查看 Pull Request</li>
+                    <li>审核代码变更是否符合预期</li>
+                    <li>如无问题，合并 PR 以应用修复</li>
+                    <li>合并后，重新构建并部署容器镜像</li>
+                </ol>
             </div>
         </div>
 '''

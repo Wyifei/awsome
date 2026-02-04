@@ -74,11 +74,11 @@ resource "aws_ecr_lifecycle_policy" "remediator_agent" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep last 10 images"
+        description  = "Keep last 1 images"
         selection = {
           tagStatus     = "any"
           countType     = "imageCountMoreThan"
-          countNumber   = 10
+          countNumber   = 1
         }
         action = {
           type = "expire"
@@ -117,11 +117,11 @@ resource "aws_ecr_lifecycle_policy" "validator_agent" {
     rules = [
       {
         rulePriority = 1
-        description  = "Keep last 10 images"
+        description  = "Keep last 1 images"
         selection = {
           tagStatus     = "any"
           countType     = "imageCountMoreThan"
-          countNumber   = 10
+          countNumber   = 1
         }
         action = {
           type = "expire"
@@ -548,6 +548,29 @@ resource "aws_iam_role_policy" "agentcore_code_interpreter" {
           "bedrock-agentcore:ListCodeInterpreterSessions"
         ]
         Resource = "*"
+      }
+    ]
+  })
+}
+
+# Secrets Manager Policy (for GitHub PAT access to call GitHub MCP Server)
+# Used by Remediator Agent to create PRs for container vulnerability remediation
+resource "aws_iam_role_policy" "agentcore_secrets_manager" {
+  name = "${local.name_prefix}-agentcore-secrets-manager"
+  role = aws_iam_role.agentcore_runtime.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "GitHubPATAccess"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = [
+          "arn:aws:secretsmanager:${local.region}:${local.account_id}:secret:shara/github-pat-*"
+        ]
       }
     ]
   })

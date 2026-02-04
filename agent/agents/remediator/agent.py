@@ -2,6 +2,10 @@
 Remediator Agent - Phase 2 修复智能体
 
 负责生成修复代码并通过 Code Interpreter 执行，然后通过 A2A 协议调用 Validator Agent。
+
+支持两种修复类型:
+- aws_api: AWS 配置类问题，通过 execute_code 执行 boto3 代码
+- github_pr: 容器漏洞，通过 GitHub MCP 创建 Pull Request
 """
 import logging
 from typing import Optional
@@ -16,16 +20,25 @@ from shared.tools.memory_tools import (
     save_rollback_to_memory,
     get_rollback_from_memory,
     save_remediation_result,
+    save_pr_result,
 )
 from shared.tools.execution import execute_code, set_audit_context
 from shared.tools.aws_resources import get_resource_config
 from shared.tools.a2a_tools import invoke_validator_agent
 from shared.tools.code_check import pre_execution_check
+from shared.tools.github_mcp_client import (
+    read_github_file,
+    create_github_branch,
+    push_files_to_github,
+    create_pull_request,
+)
 
 logger = logging.getLogger(__name__)
 
-# Remediator Agent System Prompt
-REMEDIATOR_SYSTEM_PROMPT = """# 角色
+# ============================================================
+# AWS API 模式 System Prompt (标准 Security Hub 修复)
+# ============================================================
+AWS_API_REMEDIATOR_SYSTEM_PROMPT = """# 角色
 你是 SHARA (Security Hub Auto-Remediation Agent) 的修复智能体。
 你的任务是根据第一阶段的分析结果生成并执行修复代码，然后通过 A2A 协议调用 Validator Agent 进行验证。
 
@@ -37,109 +50,33 @@ REMEDIATOR_SYSTEM_PROMPT = """# 角色
 - **执行完成后必须调用 Validator Agent 进行代码审查和结果验证**
 
 # ⚠️ 关键规则：只执行 agent_actions
-第一阶段分析结果中的修复步骤分为三类：
-- **prerequisites**: 审批前人工需要确认的前置条件 → **不要执行**
+- **prerequisites**: 审批前人工需要确认 → **不要执行**
 - **agent_actions**: Agent 需要执行的 AWS API 操作 → **只执行这些**
-- **post_actions**: 修复后人工需要处理的后续操作 → **不要执行**
-
-你**只能**为 `agent_actions` 列表中的步骤生成和执行代码。
-prerequisites 和 post_actions 是给人工处理的，不在你的职责范围内。
+- **post_actions**: 修复后人工需要处理 → **不要执行**
 
 # 执行流程
-严格按以下步骤执行，**不要跳过任何步骤**：
 
 ## Phase A: 准备
 1. **获取分析上下文**: 使用 get_analysis_context 工具
-   - 返回值包含完整的 Finding 数据、分析结果、ASR Playbook、历史经验等
-   - 你需要从中提取修复所需的信息（Region、资源 ARN、配置等）
 2. **获取当前状态**: 使用 get_resource_config 工具获取 pre_state
 
-## Phase B: 代码生成 (两个代码都必须生成)
-3. **生成修复代码**:
-   - **优先使用 ASR 代码模板**: 如果 get_analysis_context 返回了 asr_playbook.code_template，
-     **必须基于该模板生成代码**，只需根据实际资源信息调整参数
-   - 如果没有 ASR 模板，则根据 agent_actions 创建 Python/Boto3 代码
-4. **[必须] 生成回滚代码**: 根据 pre_state 生成能恢复原始状态的代码
-   - **不执行回滚代码**，只生成备用
+## Phase B: 代码生成
+3. **生成修复代码**: 优先使用 ASR 代码模板
+4. **[必须] 生成回滚代码**: 根据 pre_state 生成
 
-## Phase C: 保存回滚数据 (执行前必须完成)
+## Phase C: 保存回滚数据
 5. **[必须] 保存回滚数据**: 使用 save_rollback_to_memory 工具
-   - task_id, resource_arn, resource_type, pre_state, rollback_code
-   - **如果跳过此步骤，用户无法回滚！**
 
-## Phase D: 执行修复 (含错误重试机制，同一沙箱 Session)
+## Phase D: 执行修复
 6. **验证修复代码**: 使用 pre_execution_check 工具
 7. **执行修复代码**: 使用 execute_code 工具
-   - 从 Finding 中提取 Region，传递给 `target_region` 参数
-   - **首次执行时设置 `close_session=False`**，保持 session 用于可能的重试
-   - 沙盒环境会设置 AWS_REGION 和 TARGET_REGION 环境变量
+   - 首次执行设置 `close_session=False`
+8. **错误分析与重试**: 最多重试 2 次
+9. **关闭沙箱 Session**
 
-8. **[重要] 错误分析与重试** (最多重试 2 次，在同一沙箱 Session 中):
-   如果 execute_code 返回 success=False:
-   a. **分析错误原因**: 仔细阅读 stderr 中的错误信息
-   b. **诊断问题**: 常见问题包括:
-      - 变量作用域问题 (如 `name 'xxx' is not defined`)
-      - 导入缺失
-      - API 参数错误
-      - 权限不足
-   c. **修复代码**: 根据错误原因修改代码
-   d. **重新执行**: 使用返回的 `session_id` 在同一沙箱中重试
-      - 第一次重试: `execute_code(fixed_code, session_id=xxx, close_session=False)`
-      - 第二次重试(最后): `execute_code(fixed_code, session_id=xxx, close_session=True)`
-
-   **Session 复用示例**:
-   ```
-   # 首次执行 (保持 session)
-   result1 = execute_code(code, target_region="ap-northeast-1", close_session=False)
-   # result1 = {"success": False, "stderr": "name 'region' is not defined", "session_id": "abc123"}
-
-   # 分析错误: 变量 region 在函数内使用但定义在外部
-   # 修复: 将 region 定义移到函数内部
-
-   # 第一次重试 (复用 session)
-   result2 = execute_code(fixed_code, session_id="abc123", close_session=False)
-   # 如果仍然失败，继续修复...
-
-   # 第二次重试 (最后一次，关闭 session)
-   result3 = execute_code(fixed_code2, session_id="abc123", close_session=True)
-   ```
-
-9. **关闭沙箱 Session**:
-   - 如果执行成功且未关闭 session，调用 `execute_code(code="", session_id=xxx, close_session=True)` 关闭
-   - 如果最后一次重试，设置 `close_session=True` 自动关闭
-
-## Phase E: 保存和通知 (无论成功失败都执行)
-9. **保存修复结果**: 使用 save_remediation_result 工具
-10. **调用 Validator**: 使用 invoke_validator_agent 工具
-
-# 代码生成指南
-
-## ⭐ ASR 代码模板优先
-如果 get_analysis_context 返回的数据中包含 `asr_playbook.code_template`：
-- **这是经过 AWS 验证的标准修复代码**
-- **必须以此模板为基础**，只替换资源标识符（如 bucket name、ARN 等）
-- 不要从头重写，只做必要的参数调整
-
-## 📖 参考历史经验
-如果 get_analysis_context 返回的数据中包含 `top_experience`：
-- 这是之前成功修复类似问题的经验
-- 参考其中的 `situation` 了解类似场景
-- 参考其中的 `key_insights` 获取修复经验教训
-- 避免重复之前遇到的问题
-
-## 通用指南
-- 所有 AWS 操作使用 boto3
-- 包含适当的 try/except 错误处理
-- 添加注释说明每个步骤
-- 尽可能使代码具有幂等性
-- 代码最后必须打印 JSON 格式的结果
-- 记录重要操作以便调试
-- **重要**: 生成的代码会被发送给 Validator 进行安全审查
-
-## 🔧 代码健壮性要求 (避免执行失败)
-- **变量定义在函数内部**: 所有变量（包括 region、资源名称等）都应在函数内部定义，避免作用域问题
-- **导入语句在顶部**: 确保所有需要的模块都已导入
-- **避免全局变量**: 沙盒环境可能有变量作用域限制
+## Phase E: 保存和通知
+10. **保存修复结果**: 使用 save_remediation_result 工具
+11. **调用 Validator**: 使用 invoke_validator_agent 工具
 
 # 代码模板
 ```python
@@ -148,101 +85,97 @@ import os
 import json
 
 def remediate():
-    \"\"\"执行修复\"\"\"
-    # Region 从环境变量获取 (execute_code 的 target_region 参数会设置这些变量)
     region = os.environ.get('AWS_REGION', 'ap-northeast-1')
-
-    # 初始化客户端
     client = boto3.client('service_name', region_name=region)
-
     try:
-        # 步骤 1: 描述操作
-        # ... 实现 ...
-
-        # 步骤 2: 描述操作
-        # ... 实现 ...
-
-        return {
-            'success': True,
-            'message': '修复成功完成',
-            'details': {...}  # 修复详情
-        }
+        # 执行修复...
+        return {'success': True, 'message': '修复成功完成'}
     except Exception as e:
-        return {
-            'success': False,
-            'error': str(e)
-        }
+        return {'success': False, 'error': str(e)}
 
-# 执行并输出结果
 result = remediate()
 print(json.dumps(result, default=str))
 ```
 
-**环境变量说明**:
-- `execute_code(code, target_region="ap-northeast-1")` 会在沙盒中设置:
-  - `AWS_REGION` = target_region
-  - `AWS_DEFAULT_REGION` = target_region
-  - `TARGET_REGION` = target_region
-- 代码中使用 `os.environ.get('AWS_REGION')` 获取
-
-# 输出格式
-返回以下结构的 JSON 对象：
-
-{
-  "phase1_context_retrieved": true,
-  "agent_actions_executed": [
-    "调用 API 修改配置",
-    "验证配置生效"
-  ],
-  "skipped_steps": {
-    "prerequisites": ["人工需要确认的前置条件..."],
-    "post_actions": ["人工需要处理的后续操作..."]
-  },
-  "rollback_data_saved": true,
-  "generated_code": {
-    "language": "python",
-    "code": "import boto3..."
-  },
-  "pre_execution_check": {
-    "safe_to_execute": true,
-    "blocked_reasons": [],
-    "warnings": []
-  },
-  "execution": {
-    "status": "success",
-    "exit_code": 0,
-    "stdout": "...",
-    "stderr": "",
-    "execution_time_ms": 1234
-  },
-  "validator_response": {
-    "success": true,
-    "code_review": {
-      "status": "passed",
-      "issues": [],
-      "risk_level": "low"
-    },
-    "verification": {
-      "passed": true,
-      "checks": [...]
-    },
-    "result_email": {
-      "sent": true,
-      "includes_rollback_link": true
-    }
-  }
-}
-
 # 重要安全规则
 - 绝不在保存回滚数据之前执行 execute_code
-- **绝不在 pre_execution_check 通过之前执行 execute_code**
-- 如果 pre_execution_check 返回 safe_to_execute=False，必须停止并重新生成代码
-- 遇到任何错误立即停止 - 不要继续进行部分更改
-- 记录所有操作以便审计
-- 如果第一阶段上下文表明操作具有破坏性，需要额外确认
-- **只执行 agent_actions，忽略 prerequisites 和 post_actions**
-- **代码执行后必须调用 Validator Agent 进行审查和验证**
+- 绝不在 pre_execution_check 通过之前执行 execute_code
+- 只执行 agent_actions
+- 代码执行后必须调用 Validator Agent
 """
+
+# ============================================================
+# GitHub PR 模式 System Prompt (容器漏洞修复)
+# ============================================================
+GITHUB_PR_REMEDIATOR_SYSTEM_PROMPT = """# 角色
+你是 SHARA (Security Hub Auto-Remediation Agent) 的修复智能体。
+你的任务是根据第一阶段的分析结果创建 GitHub Pull Request 修复容器漏洞。
+
+# 重要约束
+- 你在人工审批通过后执行
+- **不执行代码**，只创建 GitHub PR
+- 所有漏洞将在一个 PR 中统一修复
+- **执行完成后必须调用 Validator Agent**
+
+# 可用工具
+- **get_analysis_context**: 获取 Phase 1 分析结果
+- **read_github_file**: 读取 GitHub 仓库中的文件
+- **create_github_branch**: 创建修复分支
+- **push_files_to_github**: 推送文件变更
+- **create_pull_request**: 创建 Pull Request
+- **save_pr_result**: 保存 PR 结果到 Memory
+- **invoke_validator_agent**: 调用 Validator Agent
+
+# 执行流程
+
+## Phase A: 获取分析上下文
+1. **获取 Phase 1 分析结果**: 使用 get_analysis_context 工具
+   - 返回值包含 file_changes, pr_metadata, service_info, vulnerabilities
+
+## Phase B: 读取当前文件内容
+2. **读取需要修改的文件**: 使用 read_github_file 工具
+
+## Phase C: 创建分支和推送变更
+3. **创建修复分支**: 使用 create_github_branch 工具
+4. **推送文件变更**: 使用 push_files_to_github 工具
+   - commit message 根据漏洞数量生成
+
+## Phase D: 创建 Pull Request
+5. **创建 PR**: 使用 create_pull_request 工具
+
+## Phase E: 保存结果和通知
+6. **保存 PR 结果**: 使用 save_pr_result 工具
+7. **调用 Validator**: 使用 invoke_validator_agent 工具
+   - 传递 remediation_type: "github_pr"
+
+# 输出格式
+```json
+{
+  "phase1_context_retrieved": true,
+  "remediation_type": "github_pr",
+  "branch_created": "security/fix-my-service-cve-20240204",
+  "files_pushed": [...],
+  "pull_request": {
+    "number": 42,
+    "url": "https://github.com/owner/repo/pull/42",
+    "title": "[Security] 修复容器镜像漏洞",
+    "state": "open"
+  },
+  "pr_result_saved": true,
+  "validator_response": {...}
+}
+```
+
+# 注意事项
+- **不使用 execute_code**: PR 工作流不执行代码
+- **不使用 save_rollback_to_memory**: PR 可以通过关闭来回滚
+- **不使用 pre_execution_check**: PR 内容由人工 Review
+- **必须保存 PR 结果**: 使用 save_pr_result
+- **必须调用 Validator**: 使用 invoke_validator_agent
+"""
+
+# 向后兼容
+REMEDIATOR_SYSTEM_PROMPT = AWS_API_REMEDIATOR_SYSTEM_PROMPT
 
 
 def create_remediator_agent(
@@ -250,7 +183,8 @@ def create_remediator_agent(
     memory_session_id: str,
     memory_id: str,
     region: Optional[str] = None,
-    actor_id: Optional[str] = None
+    actor_id: Optional[str] = None,
+    remediation_type: str = "aws_api"
 ) -> Agent:
     """创建 Remediator Agent 实例。
 
@@ -260,6 +194,7 @@ def create_remediator_agent(
         memory_id: AgentCore Memory ID
         region: AWS Region (可选)
         actor_id: Actor ID (可选，需要与 Analyzer 使用相同的值)
+        remediation_type: 修复类型 ("aws_api" 或 "github_pr")，决定使用哪个 System Prompt
 
     Returns:
         Agent: 配置好的 Remediator Agent
@@ -325,20 +260,40 @@ def create_remediator_agent(
         streaming=False
     )
 
+    # 根据 remediation_type 选择 System Prompt 和工具
+    if remediation_type == "github_pr":
+        # GitHub PR 模式 - 容器漏洞修复
+        system_prompt = GITHUB_PR_REMEDIATOR_SYSTEM_PROMPT
+        tools = [
+            get_analysis_context,  # 获取分析上下文
+            read_github_file,  # 读取 GitHub 文件
+            create_github_branch,  # 创建分支
+            push_files_to_github,  # 推送文件
+            create_pull_request,  # 创建 PR
+            save_pr_result,  # 保存 PR 结果
+            invoke_validator_agent,  # 调用 Validator
+        ]
+        logger.info("Using GitHub PR mode - container vulnerability remediation")
+    else:
+        # AWS API 模式 - 标准 Security Hub 修复
+        system_prompt = AWS_API_REMEDIATOR_SYSTEM_PROMPT
+        tools = [
+            get_analysis_context,
+            save_rollback_to_memory,  # 保存回滚数据
+            get_rollback_from_memory,  # 获取回滚数据
+            save_remediation_result,  # 保存修复结果
+            pre_execution_check,  # 执行前安全检查
+            execute_code,  # Code Interpreter 执行
+            get_resource_config,
+            invoke_validator_agent,  # 调用 Validator
+        ]
+        logger.info("Using AWS API mode - standard Security Hub remediation")
+
     # 创建 Agent
     agent = Agent(
         model=model,
-        system_prompt=REMEDIATOR_SYSTEM_PROMPT,
-        tools=[
-            get_analysis_context,
-            save_rollback_to_memory,  # 保存回滚数据到 Memory
-            get_rollback_from_memory,  # 从 Memory 获取回滚数据
-            save_remediation_result,  # 保存修复代码和执行结果到 Memory (供 Validator 获取)
-            pre_execution_check,  # 执行前快速安全检查
-            execute_code,  # Code Interpreter 执行
-            get_resource_config,
-            invoke_validator_agent,  # A2A 调用 Validator Agent
-        ],
+        system_prompt=system_prompt,
+        tools=tools,
         session_manager=session_manager,
     )
 
@@ -606,3 +561,146 @@ Return a JSON summary with rollback_data_saved, execution_result, and validator_
         }
 
 
+def run_github_pr_remediator(
+    agent: Agent,
+    task_id: str,
+    resource_arn: str,
+    finding_id: str,
+    memory_session_id: str,
+    actor_id: str,
+    github_owner: str = "Wyifei",
+    github_repo: str = "awsome"
+) -> dict:
+    """运行 Remediator Agent 创建 GitHub PR 修复容器漏洞。
+
+    此函数用于 github_pr 模式，不执行代码，而是创建 Pull Request。
+
+    Args:
+        agent: Remediator Agent 实例
+        task_id: 任务 ID
+        resource_arn: 容器镜像 ARN
+        finding_id: Security Hub Finding ID
+        memory_session_id: Memory Session ID
+        actor_id: Actor ID
+        github_owner: GitHub 用户/组织
+        github_repo: GitHub 仓库名
+
+    Returns:
+        dict: 执行结果
+    """
+    prompt = f"""
+Execute GitHub PR remediation for container vulnerability:
+
+**Task ID:** {task_id}
+**Remediation Type:** github_pr
+**Resource ARN:** {resource_arn}
+**Finding ID:** {finding_id}
+**GitHub Repository:** {github_owner}/{github_repo}
+
+**CRITICAL: Follow the GitHub PR workflow exactly. Do NOT use execute_code.**
+
+**Instructions:**
+
+**PHASE A: Get Analysis Context**
+1. Get Phase 1 analysis context using get_analysis_context tool
+   - task_id: {task_id}
+   - This returns: file_changes, pr_metadata, service_info, vulnerabilities
+
+**PHASE B: Verify Current Files**
+2. For each file in file_changes, use read_github_file to verify:
+   - owner: {github_owner}
+   - repo: {github_repo}
+   - path: file_changes[].path
+   - Confirm current content matches file_changes[].current_content
+
+**PHASE C: Create Branch and Push Changes**
+3. Create a fix branch using create_github_branch:
+   - owner: {github_owner}
+   - repo: {github_repo}
+   - branch: pr_metadata.branch_name (e.g., "security/fix-service-cve-20240204")
+
+4. Push file changes using push_files_to_github:
+   - owner: {github_owner}
+   - repo: {github_repo}
+   - branch: the branch created in step 3
+   - files: array of {{path, content}} using file_changes[].suggested_content
+   - message: 根据漏洞数量生成，格式如:
+     - 单漏洞: "fix: Update PACKAGE to fix CVE-2024-xxxxx"
+     - 多漏洞: "fix: Update dependencies to fix N vulnerabilities (CVE-2024-xxx, CVE-2024-yyy, ...)"
+
+**PHASE D: Create Pull Request**
+5. Create PR using create_pull_request:
+   - owner: {github_owner}
+   - repo: {github_repo}
+   - title: pr_metadata.title
+   - body: pr_metadata.description
+   - head: the branch created in step 3
+   - base: "master" (or default branch)
+
+**PHASE E: Save and Notify**
+6. Save PR result using save_pr_result:
+   - task_id: {task_id}
+   - resource_arn: {resource_arn}
+   - pr_info: {{pr_number, pr_url, branch_name, title, state}}
+   - files_changed: list of {{path, change_type, description}}
+
+7. **[ALWAYS]** Call Validator using invoke_validator_agent:
+   - task_id: {task_id}
+   - resource_arn: {resource_arn}
+   - resource_type: "AwsEcrContainerImage"
+   - control_id: ""
+   - finding_id: {finding_id}
+   - memory_session_id: {memory_session_id}
+   - actor_id: {actor_id}
+   - is_rollback: false
+   - remediation_type: "github_pr"
+
+**CHECKLIST:**
+- [ ] Did you get analysis context? (Step 1)
+- [ ] Did you verify file contents? (Step 2)
+- [ ] Did you create branch? (Step 3)
+- [ ] Did you push files? (Step 4)
+- [ ] Did you create PR? (Step 5)
+- [ ] Did you save PR result? (Step 6)
+- [ ] Did you call invoke_validator_agent? (Step 7 - ALWAYS)
+
+Return a JSON summary with branch_created, files_pushed, pull_request, pr_result_saved, and validator_response.
+"""
+
+    logger.info(f"Running GitHub PR Remediator for task {task_id}")
+
+    try:
+        result = agent(prompt)
+
+        response_text = str(result.message) if hasattr(result, 'message') else str(result)
+
+        # 检查 PR 是否创建成功
+        pr_created = False
+        validator_called = False
+
+        if 'pull_request' in response_text.lower() and 'number' in response_text.lower():
+            pr_created = True
+
+        if 'validator_response' in response_text.lower() or 'invoke_validator' in response_text.lower():
+            validator_called = True
+
+        logger.info(f"GitHub PR Remediator completed for task {task_id}, pr_created={pr_created}, validator_called={validator_called}")
+
+        return {
+            "success": pr_created,
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "remediation_type": "github_pr",
+            "pr_created": pr_created,
+            "validator_called": validator_called,
+            "response": response_text
+        }
+
+    except Exception as e:
+        logger.exception(f"GitHub PR Remediator failed for task {task_id}: {e}")
+        return {
+            "success": False,
+            "task_id": task_id,
+            "remediation_type": "github_pr",
+            "error": str(e)
+        }

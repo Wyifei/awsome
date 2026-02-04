@@ -489,7 +489,12 @@ def save_analysis_result(
     remediation_description: str,
     finding: dict = None,
     asr_playbook: dict = None,
-    top_experience: dict = None
+    top_experience: dict = None,
+    # GitHub PR 模式额外字段
+    vulnerabilities: list = None,
+    service_info: dict = None,
+    file_changes: list = None,
+    remediation: dict = None
 ) -> dict:
     """保存分析结果到 Memory Session (供 Phase 2 使用)。
 
@@ -503,6 +508,10 @@ def save_analysis_result(
         finding: 原始 Finding 数据 (ASFF 格式)，包含完整的资源和 Region 信息
         asr_playbook: ASR Playbook 信息 (可选)
         top_experience: 最相关的历史修复经验 (可选)
+        vulnerabilities: 漏洞列表 (github_pr 模式)
+        service_info: 服务信息 (github_pr 模式)
+        file_changes: 文件变更列表 (github_pr 模式)
+        remediation: 修复方案信息 (github_pr 模式)
 
     Returns:
         dict: 保存结果
@@ -531,6 +540,17 @@ def save_analysis_result(
         # 包括: Region, Resources[].Id (ARN), Resources[].Type, Severity 等
         if finding:
             data["finding"] = finding
+
+        # GitHub PR 模式额外字段 - 保存漏洞、服务信息、文件变更等
+        if vulnerabilities:
+            data["vulnerabilities"] = vulnerabilities
+            logger.info(f"Saving {len(vulnerabilities)} vulnerabilities to Memory")
+        if service_info:
+            data["service_info"] = service_info
+        if file_changes:
+            data["file_changes"] = file_changes
+        if remediation:
+            data["remediation"] = remediation
 
         # 如果有 ASR playbook，保存代码模板供 Remediator 使用
         if asr_playbook and asr_playbook.get('matched'):
@@ -635,6 +655,15 @@ def get_analysis_context(task_id: str) -> dict:
                         # 如果有历史经验，也返回
                         if data.get('top_experience'):
                             result['top_experience'] = data.get('top_experience')
+                        # GitHub PR 模式额外字段
+                        if data.get('vulnerabilities'):
+                            result['vulnerabilities'] = data.get('vulnerabilities')
+                        if data.get('service_info'):
+                            result['service_info'] = data.get('service_info')
+                        if data.get('file_changes'):
+                            result['file_changes'] = data.get('file_changes')
+                        if data.get('remediation'):
+                            result['remediation'] = data.get('remediation')
                         return result
                 except json.JSONDecodeError:
                     continue
@@ -932,6 +961,151 @@ def get_remediation_result(task_id: str, resource_arn: str) -> dict:
 
     except Exception as e:
         logger.exception(f"Error getting remediation result from Memory: {e}")
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+@tool
+def save_pr_result(
+    task_id: str,
+    resource_arn: str,
+    pr_info: dict,
+    files_changed: list
+) -> dict:
+    """保存 GitHub PR 结果到 Memory STM。
+
+    Remediator (github_pr 模式) 在创建 PR 后调用此工具，
+    将 PR 信息和文件变更保存到 Memory，供 Validator 验证。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 容器镜像 ARN
+        pr_info: Pull Request 信息
+            - pr_number: int - PR 编号
+            - pr_url: str - PR URL
+            - branch_name: str - 分支名称
+            - title: str - PR 标题
+            - state: str - PR 状态
+        files_changed: 变更的文件列表
+            - path: str - 文件路径
+            - change_type: str - 变更类型 (modify/create/delete)
+            - description: str - 变更描述
+
+    Returns:
+        dict: 保存结果
+            - success: bool - 是否成功
+            - task_id: str - 任务 ID
+            - pr_number: int - PR 编号
+            - error: str - 错误信息 (如有)
+    """
+    session = get_memory_session()
+    if not session:
+        logger.error("Memory session not initialized")
+        return {"success": False, "error": "Memory session not initialized"}
+
+    try:
+        from bedrock_agentcore.memory.constants import ConversationalMessage, MessageRole
+
+        # 构建 PR 结果数据
+        data = {
+            "type": "pr_result",
+            "task_id": task_id,
+            "resource_arn": resource_arn,
+            "pr_info": pr_info,
+            "files_changed": files_changed,
+            "saved_at": datetime.now(timezone.utc).isoformat()
+        }
+
+        # 保存到 Memory STM
+        session.add_turns([
+            ConversationalMessage(
+                json.dumps(data),
+                MessageRole.ASSISTANT
+            )
+        ])
+
+        pr_number = pr_info.get('pr_number', 'unknown')
+        logger.info(f"="*50)
+        logger.info(f"[PR RESULT SAVED] task_id={task_id}")
+        logger.info(f"[PR RESULT SAVED] pr_number={pr_number}")
+        logger.info(f"[PR RESULT SAVED] files_changed={len(files_changed)}")
+        logger.info(f"="*50)
+
+        return {
+            "success": True,
+            "task_id": task_id,
+            "pr_number": pr_number
+        }
+
+    except Exception as e:
+        logger.exception(f"Error saving PR result to Memory: {e}")
+        return {
+            "success": False,
+            "task_id": task_id,
+            "error": str(e)
+        }
+
+
+@tool
+def get_pr_result(task_id: str, resource_arn: str) -> dict:
+    """从 Memory STM 获取 GitHub PR 结果。
+
+    Validator (github_pr 模式) 调用此工具从 Memory 获取 PR 信息，
+    用于验证 PR 是否正确创建。
+
+    Args:
+        task_id: 任务 ID
+        resource_arn: 容器镜像 ARN
+
+    Returns:
+        dict: PR 结果数据
+            - success: bool - 是否成功获取
+            - pr_info: dict - Pull Request 信息
+            - files_changed: list - 变更的文件列表
+            - error: str - 错误信息 (如有)
+    """
+    session = get_memory_session()
+    if not session:
+        logger.error("Memory session not initialized")
+        return {"success": False, "error": "Memory session not initialized"}
+
+    try:
+        # 获取最近的对话记录
+        turns = session.get_last_k_turns(k=50)
+
+        logger.info(f"Retrieved {len(turns)} turns from Memory for PR result search")
+
+        # 查找匹配的 PR 结果
+        for turn in reversed(turns):
+            content = turn.get('content', '')
+            if isinstance(content, str) and 'pr_result' in content:
+                try:
+                    data = json.loads(content)
+                    if (data.get('type') == 'pr_result' and
+                        data.get('task_id') == task_id and
+                        data.get('resource_arn') == resource_arn):
+                        logger.info(f"Retrieved PR result from Memory for task {task_id}")
+                        return {
+                            "success": True,
+                            "task_id": task_id,
+                            "resource_arn": resource_arn,
+                            "pr_info": data.get('pr_info', {}),
+                            "files_changed": data.get('files_changed', []),
+                            "saved_at": data.get('saved_at', '')
+                        }
+                except json.JSONDecodeError:
+                    continue
+
+        logger.warning(f"PR result not found in Memory for task {task_id}")
+        return {
+            "success": False,
+            "error": "PR result not found in Memory"
+        }
+
+    except Exception as e:
+        logger.exception(f"Error getting PR result from Memory: {e}")
         return {
             "success": False,
             "error": str(e)

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.config import get_config
-from validator.agent import create_validator_agent, run_validator
+from validator.agent import create_validator_agent, run_validator, run_github_pr_validator
 
 # Configure logging
 logging.basicConfig(
@@ -110,6 +110,9 @@ async def invocations(request: Request):
             error_message = prompt_data.get('error_message', '')
             session_id = body.get('session_id')
             actor_id = prompt_data.get('actor_id')
+            remediation_type = prompt_data.get('remediation_type', 'aws_api')
+            github_owner = prompt_data.get('github_owner', '')
+            github_repo = prompt_data.get('github_repo', '')
         else:
             # A2A 调用或直接调用
             task_id = body.get('task_id', 'unknown')
@@ -124,6 +127,9 @@ async def invocations(request: Request):
             error_message = body.get('error_message', '')
             session_id = body.get('session_id')
             actor_id = body.get('actor_id')
+            remediation_type = body.get('remediation_type', 'aws_api')
+            github_owner = body.get('github_owner', '')
+            github_repo = body.get('github_repo', '')
 
         # Detect A2A call source
         is_a2a_call = request.headers.get('X-A2A-Source') == 'remediator-agent'
@@ -136,10 +142,12 @@ async def invocations(request: Request):
             raise ValueError("finding_id is required for Validator Agent")
         if not resource_arn:
             raise ValueError("resource_arn is required for Validator Agent")
-        if not resource_type:
-            raise ValueError("resource_type is required for Validator Agent")
-        if not control_id:
-            raise ValueError("control_id is required for Validator Agent")
+        # resource_type and control_id are required for aws_api mode but optional for github_pr mode
+        if remediation_type != 'github_pr':
+            if not resource_type:
+                raise ValueError("resource_type is required for Validator Agent (not required for github_pr mode)")
+            if not control_id:
+                raise ValueError("control_id is required for Validator Agent (not required for github_pr mode)")
 
         config = get_config()
         # 优先使用 payload 中的 memory_id，否则使用环境变量
@@ -158,46 +166,87 @@ async def invocations(request: Request):
             actor_id=actor_id
         )
 
-        # Run validator
+        # Run validator - dispatch based on remediation_type
         # NOTE: generated_code and execution_result are retrieved from Memory by Validator Agent
         import asyncio
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_validator(
-                agent=agent,
-                task_id=task_id,
-                finding_id=finding_id,
-                resource_arn=resource_arn,
-                resource_type=resource_type,
-                control_id=control_id,
-                is_rollback=is_rollback,
-                rollback_failed=rollback_failed,
-                error_message=error_message
-            )
-        )
 
-        # 构建响应数据
-        response_data = {
-            "success": result.get('success', False),
-            "task_id": task_id,
-            "finding_id": finding_id,
-            "resource_arn": resource_arn,
-            "is_rollback": is_rollback,
-            "code_review_passed": result.get('code_review_passed', False),
-            "validation_passed": result.get('validation_passed', False),
-            "email_sent": result.get('email_sent', False),
-            "validation_result": result.get('validation_result', {}),
-            "response": result.get('response', ''),
-            "session_id": session_id,
-            "metadata": {
-                "task_id": task_id,
-                "agent_type": "validator",
+        if remediation_type == 'github_pr':
+            # GitHub PR mode - validate PR creation for container vulnerability
+            logger.info(f"Running GitHub PR Validator for task {task_id}")
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_github_pr_validator(
+                    agent=agent,
+                    task_id=task_id,
+                    finding_id=finding_id,
+                    resource_arn=resource_arn,
+                    github_owner=github_owner,
+                    github_repo=github_repo
+                )
+            )
+        else:
+            # AWS API mode - validate remediation execution
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_validator(
+                    agent=agent,
+                    task_id=task_id,
+                    finding_id=finding_id,
+                    resource_arn=resource_arn,
+                    resource_type=resource_type,
+                    control_id=control_id,
+                    is_rollback=is_rollback,
+                    rollback_failed=rollback_failed,
+                    error_message=error_message
+                )
+            )
+
+        # 构建响应数据 - 根据 remediation_type 使用不同格式
+        if remediation_type == 'github_pr':
+            # GitHub PR mode response
+            response_data = {
                 "success": result.get('success', False),
-                "is_rollback": is_rollback,
-                "a2a_source": "remediator" if is_a2a_call else None
+                "task_id": task_id,
+                "finding_id": finding_id,
+                "resource_arn": resource_arn,
+                "remediation_type": "github_pr",
+                "pr_verified": result.get('pr_verified', False),
+                "email_sent": result.get('email_sent', False),
+                "response": result.get('response', ''),
+                "session_id": session_id,
+                "metadata": {
+                    "task_id": task_id,
+                    "agent_type": "validator",
+                    "remediation_type": "github_pr",
+                    "success": result.get('success', False),
+                    "a2a_source": "remediator" if is_a2a_call else None
+                }
             }
-        }
+        else:
+            # AWS API mode response
+            response_data = {
+                "success": result.get('success', False),
+                "task_id": task_id,
+                "finding_id": finding_id,
+                "resource_arn": resource_arn,
+                "remediation_type": "aws_api",
+                "is_rollback": is_rollback,
+                "code_review_passed": result.get('code_review_passed', False),
+                "validation_passed": result.get('validation_passed', False),
+                "email_sent": result.get('email_sent', False),
+                "validation_result": result.get('validation_result', {}),
+                "response": result.get('response', ''),
+                "session_id": session_id,
+                "metadata": {
+                    "task_id": task_id,
+                    "agent_type": "validator",
+                    "remediation_type": "aws_api",
+                    "success": result.get('success', False),
+                    "is_rollback": is_rollback,
+                    "a2a_source": "remediator" if is_a2a_call else None
+                }
+            }
 
         if result.get('error'):
             response_data['error'] = result.get('error')

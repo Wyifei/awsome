@@ -1,7 +1,7 @@
 #!/bin/bash
 ###############################################################################
 # SHARA Agent - Build and Push to ECR Script
-# Builds Docker image and pushes to AWS ECR in one step
+# Builds Podman image and pushes to AWS ECR in one step
 ###############################################################################
 
 set -e
@@ -46,7 +46,7 @@ usage() {
     echo ""
     echo "Arguments:"
     echo "  AGENT_TYPE   Agent type to build (analyzer|remediator|validator|all). Default: all"
-    echo "  IMAGE_TAG    Docker image tag. Default: latest"
+    echo "  IMAGE_TAG    Container image tag. Default: latest"
     echo ""
     echo "Environment variables:"
     echo "  AWS_REGION    AWS region (default: ap-northeast-1)"
@@ -77,7 +77,7 @@ ecr_login() {
     local account_id="$1"
     log_info "Logging in to ECR..."
     aws ecr get-login-password --region "${AWS_REGION}" | \
-        docker login --username AWS --password-stdin \
+        podman login --username AWS --password-stdin \
         "${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 }
 
@@ -106,15 +106,15 @@ build_and_push_agent() {
     # Navigate to agents directory (context for shared modules)
     cd "${AGENTS_DIR}"
 
-    # Build the Docker image for ARM64
-    log_info "Building Docker image: ${full_image_tag}"
+    # Build the container image for ARM64
+    log_info "Building container image: ${full_image_tag}"
     log_info "Dockerfile: ${dockerfile_path}"
     log_info "Context: ${AGENTS_DIR}"
 
-    # Check if running on ARM64 Mac (M1/M2/M3) - can use regular docker build
+    # Check if running on ARM64 Mac (M1/M2/M3) - can use native build
     if [[ "$(uname -m)" == "arm64" ]]; then
         log_info "Detected ARM64 architecture, using native build..."
-        docker build \
+        podman build \
             --build-arg AGENT_TYPE="${agent_type}" \
             -t "${full_image_tag}" \
             -t "${ecr_uri}:${agent_type}-${IMAGE_TAG}" \
@@ -122,12 +122,11 @@ build_and_push_agent() {
             .
     else
         log_info "Cross-compiling for ARM64..."
-        docker buildx build \
+        podman build \
             --platform linux/arm64 \
             --build-arg AGENT_TYPE="${agent_type}" \
             -t "${full_image_tag}" \
             -t "${ecr_uri}:${agent_type}-${IMAGE_TAG}" \
-            --load \
             -f "${dockerfile_path}" \
             .
     fi
@@ -136,8 +135,8 @@ build_and_push_agent() {
 
     # Push the image
     log_step "Pushing ${agent_type} agent to ECR..."
-    docker push "${full_image_tag}"
-    docker push "${ecr_uri}:${agent_type}-${IMAGE_TAG}"
+    podman push "${full_image_tag}"
+    podman push "${ecr_uri}:${agent_type}-${IMAGE_TAG}"
 
     log_info "Push completed for ${agent_type}"
     echo ""
@@ -183,16 +182,11 @@ main() {
     account_id=$(get_account_id)
     log_info "Account ID: ${account_id}"
 
-    # Check if Docker is running
-    if ! docker info > /dev/null 2>&1; then
-        log_error "Docker is not running. Please start Docker and try again."
+    # Check if Podman is running
+    if ! podman info > /dev/null 2>&1; then
+        log_error "Podman is not running. Please start Podman and try again."
         exit 1
     fi
-
-    # Setup buildx for ARM64
-    # Use default builder to avoid pulling buildkit image
-    log_info "Using default docker builder..."
-    docker buildx use default 2>/dev/null || true
 
     # Login to ECR
     ecr_login "$account_id"

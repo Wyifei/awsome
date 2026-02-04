@@ -2,6 +2,9 @@
 Analyzer Agent - Phase 1 分析智能体
 
 负责分析 Security Hub Finding 并生成修复方案描述（不生成代码）。
+支持两种修复类型:
+- aws_api: AWS 配置类问题，通过 AWS API 直接修复
+- github_pr: 容器漏洞，通过 GitHub PR 修复源代码
 """
 import logging
 from typing import Optional
@@ -17,11 +20,18 @@ from shared.tools.memory_tools import (
     set_memory_session,
 )
 from shared.tools.aws_resources import get_resource_config
+from shared.tools.github_mcp_client import (
+    search_container_inventory,
+    get_service_metadata,
+    read_github_file,
+)
 
 logger = logging.getLogger(__name__)
 
-# Analyzer Agent System Prompt
-ANALYZER_SYSTEM_PROMPT = """# 角色
+# ============================================================
+# AWS API 模式 System Prompt (标准 Security Hub 配置修复)
+# ============================================================
+AWS_API_ANALYZER_SYSTEM_PROMPT = """# 角色
 你是 SHARA (Security Hub Auto-Remediation Agent) 的分析智能体。
 你的任务是分析 AWS Security Hub 安全发现并生成修复方案描述。
 
@@ -89,17 +99,11 @@ save_analysis_result(
   task_id="<任务 ID>",
   analysis=<分析结果 JSON 对象>,
   remediation_description="<修复方案描述>",
-  finding=<原始 Finding 数据>,  # 完整的 ASFF 格式 Finding
-  asr_playbook=<fetch_asr_playbook 的返回结果>,  # 如果有匹配
-  top_experience=<search_similar_findings 返回的第一条结果>  # 如果有结果
+  finding=<原始 Finding 数据>,
+  asr_playbook=<fetch_asr_playbook 的返回结果>,
+  top_experience=<search_similar_findings 返回的第一条结果>
 )
 ```
-
-**重要**: 必须传递完整的 `finding` 数据，Remediator 需要从中提取：
-- Region: 资源所在的 AWS 区域
-- Resources[].Id: 资源 ARN
-- Resources[].Type: 资源类型
-- 其他修复所需的上下文信息
 
 # 输出格式
 必须返回以下结构的 JSON 对象：
@@ -112,9 +116,7 @@ save_analysis_result(
     "resource_type": "AwsSnsTopic",
     "resource_id": "arn:aws:sns:...",
     "resource_exists": true,
-    "current_state": {
-      "KmsMasterKeyId": null
-    },
+    "current_state": {"KmsMasterKeyId": null},
     "risk_assessment": {
       "level": "HIGH",
       "factors": ["消息可能包含敏感信息"],
@@ -127,15 +129,7 @@ save_analysis_result(
     "confidence": 1.0,
     "message": "基于 Control ID 精确匹配 ASR Playbook"
   },
-  "similar_experiences": [
-    {
-      "similarity_score": 0.51,
-      "title": "S3 Block Public Access 配置修复",
-      "problem": "S3 存储桶的 Block Public Access 设置被禁用",
-      "solution": "通过 S3 API 启用所有四项公共访问阻止设置",
-      "result": "成功修复，符合 AWS 安全最佳实践"
-    }
-  ],
+  "similar_experiences": [...],
   "remediation": {
     "can_remediate": true,
     "cannot_remediate_reason": null,
@@ -151,196 +145,130 @@ save_analysis_result(
 }
 ```
 
-# 修复步骤分类说明（重要）
-在 remediation 对象中，必须将修复步骤分为三类：
-
-## 1. prerequisites（前置条件）
-**审批前人工需要确认的事项**，Agent 无法自动验证或执行。例如：
-- 确认替代访问路径存在（如 VPN、bastion host）
-- 确认业务影响已评估
-- 确认相关团队已通知
-- 验证依赖服务的连通性
-
-## 2. agent_actions（Agent 执行）
-**Agent 将通过 AWS API 自动执行的操作**。只包含可通过代码实现的步骤：
-- 调用 AWS API 修改资源配置
-- 等待资源状态变更
-- 验证配置是否生效
-- 创建/修改安全策略
-
-## 3. post_actions（后续操作）
-**修复完成后人工需要处理的事项**，Agent 无法自动完成。例如：
-- 更新 IaC 代码（Terraform/CloudFormation）保持一致性
-- 更新相关文档
-- 通知相关团队
-- 进行额外的安全审计
-
-## 分类原则
-- **可通过 AWS SDK/API 实现** → agent_actions
-- **需要访问外部系统或人工判断** → prerequisites 或 post_actions
-- **修复前需要确认** → prerequisites
-- **修复后需要跟进** → post_actions
-
-## 示例
-```json
-"remediation": {
-  "can_remediate": true,
-  "summary": "禁用 EKS 集群公共端点访问",
-  "prerequisites": [
-    "确认 VPC 内有可用的私有访问路径（bastion host/VPN/Direct Connect）",
-    "验证 kubectl 可通过私有端点连接集群"
-  ],
-  "agent_actions": [
-    "调用 EKS UpdateClusterConfig API 设置 EndpointPublicAccess=false",
-    "等待集群更新完成（状态变为 ACTIVE）",
-    "验证公共端点已禁用"
-  ],
-  "post_actions": [
-    "更新 Terraform/CloudFormation 代码保持配置一致性",
-    "通知 DevOps 团队配置变更"
-  ],
-  "estimated_impact": "MEDIUM",
-  "rollback_available": true,
-  "is_destructive": false
-}
-```
+# 修复步骤分类说明
+- **prerequisites**: 审批前人工需要确认的前置条件
+- **agent_actions**: Agent 将通过 AWS API 自动执行的操作
+- **post_actions**: 修复完成后人工需要处理的后续操作
 
 # can_remediate 字段说明
-**必须**在 remediation 对象中包含 can_remediate 字段：
+- **true**: AWS 配置类问题，有 ASR Playbook，可通过 AWS API 修复
+- **false**: 资源不存在、软件漏洞、需要手动干预、不支持的资源类型
 
-设置 `can_remediate: false` 的情况：
-1. **资源不存在** - 资源已被删除，无需修复
-2. **ECR/容器镜像漏洞** - 需要开发团队更新代码/镜像，无法通过 AWS API 自动修复
-3. **Inspector 软件漏洞** - 需要更新软件包，不是 AWS 配置问题
-4. **需要手动干预** - 例如需要业务决策、涉及第三方系统等
-5. **不支持的资源类型** - SHARA 当前不支持自动修复的资源
-
-设置 `can_remediate: true` 的情况：
-1. AWS 配置类问题（如 S3 加密、安全组规则、IAM 策略等）
-2. 有对应的 ASR Playbook
-3. 可以通过 AWS API 直接修改配置
-
-当 `can_remediate: false` 时，必须填写 `cannot_remediate_reason` 说明原因。
-
-# AWS Documentation MCP 工具 (可选)
-如果你有 AWS Documentation MCP 工具可用 (工具名以 `aws_doc_` 前缀开头)，可以在以下情况使用：
-
-## 何时使用 AWS Documentation MCP 工具
-1. **没有 ASR Playbook** - fetch_asr_playbook 返回 matched=false
-2. **没有相似经验** - search_similar_findings 返回空结果
-3. **不确定修复方法** - 对于不熟悉的 Control ID 或资源类型
-4. **需要了解 AWS 最佳实践** - 确认正确的安全配置方式
-
-## 可用的 MCP 工具
-- `aws_doc_search_documentation`: 搜索 AWS 官方文档，获取修复指南和最佳实践
-- `aws_doc_read_documentation`: 读取特定 AWS 文档页面获取详细信息
-- `aws_doc_recommend`: 获取相关文档推荐
-
-## 使用示例
-当遇到不熟悉的 Control ID 时：
-```
-aws_doc_search_documentation(
-  search_phrase="Security Hub <Control ID> remediation best practices"
-)
-```
-
-当需要阅读特定文档时：
-```
-aws_doc_read_documentation(
-  url="https://docs.aws.amazon.com/console/securityhub/<Control ID>/remediation"
-)
-```
-
-## 注意事项
-- MCP 工具是**辅助**工具，不是必须调用的
-- 优先使用 fetch_asr_playbook 和 search_similar_findings
-- 只有在缺乏信息时才查询 AWS 文档
-- 搜索时使用英文关键词效果更好
-
-# asr_match 字段说明
-ASR (Automated Security Response) 匹配基于 Control ID 精确匹配：
-- **matched=true**: 找到对应的 ASR Playbook，confidence 固定为 **1.0**（精确匹配）
-- **matched=false**: 未找到匹配，confidence 为 **0**
-- 不存在中间置信度，因为是基于 Control ID 的精确匹配
-
-# similar_experiences 字段说明
-**必须**将 search_similar_findings 工具返回的结果加工后放入此数组。
-
-## 如何使用 LTM 返回的经验
-search_similar_findings 会返回两种类型的经验，你需要区别对待：
-
-### 1. Reflection (type="reflection") - 方法论框架
-这是从多次修复中总结的**高级洞察和模式**。在分析过程中：
-- **主动应用**其中描述的分析方法和检查要点
-- 参考其中的风险评估标准和最佳实践
-- 将方法论融入你的 `risk_assessment` 和 `remediation` 设计
-
-### 2. Episode (type="episode") - 执行记录
-这是**具体的成功修复案例**，包含实际的场景、意图、操作和结果。用于：
-- 参考类似场景的**具体修复步骤**
-- 了解之前成功的**验证方法**
-- 在 `similar_experiences` 中**突出显示执行结果**（result 字段）
-
-**重要**: Reflection 指导"怎么做"，Episode 提供"做过什么"。两者都要参考。
-
-## 格式化要求
-LTM 返回的 content 是自然语言描述（英文），你需要从中提取关键信息，格式化为以下**固定格式**：
-
+# similar_experiences 格式化要求
+将 search_similar_findings 返回的英文内容翻译并格式化为：
 ```json
 {
   "type": "episode",
   "similarity_score": 0.51,
   "title": "S3 Block Public Access 配置修复",
-  "problem": "S3 存储桶的 Block Public Access 设置被禁用，存在数据泄露风险",
-  "solution": "通过 S3 API 启用所有四项公共访问阻止设置",
-  "result": "成功修复，符合 AWS 安全最佳实践"
+  "problem": "问题描述（中文）",
+  "solution": "解决方案（中文）",
+  "result": "修复结果（中文）"
 }
 ```
-
-## 字段说明（必须按此格式输出）
-- **type**: 经验类型（直接使用工具返回的 type: "reflection" 或 "episode"）
-- **similarity_score**: 相似度分数 (0-1，直接使用工具返回的值)
-- **title**: 经验标题（中文，10-20字，描述修复的核心内容）
-- **problem**: 问题描述（中文，简述发现的安全问题）
-- **solution**: 解决方案（中文，简述采取的修复措施）
-- **result**: 修复结果（中文，简述修复效果。Episode 类型应突出实际执行结果）
-
-## 格式化示例
-假设 search_similar_findings 返回:
-```
-{
-  "type": "episode",
-  "similarity_score": 0.51,
-  "content": "I conducted a security analysis on an S3 bucket and found that the Block Public Access settings were completely disabled, posing a high risk of accidental public exposure. I provided a detailed remediation plan to enable all four public access blocking settings through the S3 API, ensuring the bucket's data remains secure and compliant with AWS best practices."
-}
-```
-
-你应该输出:
-```json
-{
-  "type": "episode",
-  "similarity_score": 0.51,
-  "title": "S3 Block Public Access 配置修复",
-  "problem": "S3 存储桶的 Block Public Access 设置被禁用，存在公开暴露风险",
-  "solution": "通过 S3 API 启用所有四项公共访问阻止设置",
-  "result": "成功修复，验证通过，数据安全符合 AWS 最佳实践"
-}
-```
-
-## 重要说明 - 分数阈值
-- **Reflection (方法论)**: 只处理相似度 >= 0.5 的结果
-- **Episode (执行记录)**: 处理相似度 >= 0.35 的结果（因为包含实际执行结果，价值更高）
-- **必须翻译成中文**: 邮件内容需要中文显示
-- **参考历史经验**: 在分析和生成修复方案时，主动应用 Reflection 的方法论，参考 Episode 的执行结果
 
 # 重要指南
-- **【强制】必须调用 get_resource_config**: 这是第一个必须执行的工具调用
-- **【强制】必须调用 save_analysis_result**: 这是最后一个必须执行的工具调用，保存分析结果供 Phase 2 使用
-- **【强制】必须设置 can_remediate 字段**: 明确指示此 Finding 是否可自动修复
-- **asr_match 必须如实反映 fetch_asr_playbook 的返回结果**，confidence 按上述规则设置
-- 如果资源不存在，设置 resource_exists: false 且 can_remediate: false
+- 【强制】必须调用 get_resource_config 和 save_analysis_result
+- 【强制】必须设置 can_remediate 字段
 - 绝不在响应中包含可执行代码
 """
+
+# ============================================================
+# GitHub PR 模式 System Prompt (容器漏洞修复)
+# ============================================================
+GITHUB_PR_ANALYZER_SYSTEM_PROMPT = """# 角色
+你是 SHARA (Security Hub Auto-Remediation Agent) 的分析智能体。
+你的任务是分析容器镜像漏洞并生成修复方案。
+
+# 重要约束
+- 你只负责分析漏洞和建议文件修改
+- PR 创建由 Remediator 负责，你不需要生成 PR 标题/描述
+- 所有漏洞将在一个 PR 中统一修复
+
+# ⚠️ 强制要求：工具调用顺序
+
+**第一步: search_container_inventory** - 查找容器对应的服务目录
+**第二步: get_service_metadata** - 读取服务元数据
+**第三步: read_github_file** - 读取需要修改的文件
+**第四步: 分析漏洞和生成修复方案**
+**第五步（强制）: save_analysis_result** - 保存分析结果
+
+# 输出格式 (GitHub PR 模式)
+
+```json
+{
+  "analysis": {
+    "control_id": null,
+    "finding_type": "容器镜像漏洞",
+    "resource_type": "AwsEcrContainerImage",
+    "resource_id": "arn:aws:ecr:...",
+    "resource_exists": true,
+    "current_state": {
+      "image_digest": "sha256:...",
+      "repository": "my-service",
+      "vulnerabilities_count": 5
+    },
+    "risk_assessment": {
+      "level": "HIGH",
+      "factors": ["包含 3 个 CRITICAL 漏洞"],
+      "justification": "..."
+    }
+  },
+  "service_info": {
+    "name": "my-service",
+    "path": "application/services/my-service",
+    "language": "python",
+    "dockerfile": "Dockerfile",
+    "dependency_file": "requirements.txt",
+    "github_owner": "owner",
+    "github_repo": "repo"
+  },
+  "vulnerabilities": [
+    {
+      "cve_id": "CVE-2024-12345",
+      "severity": "CRITICAL",
+      "package_name": "requests",
+      "installed_version": "2.25.0",
+      "fixed_version": "2.32.0",
+      "description": "远程代码执行漏洞"
+    }
+  ],
+  "file_changes": [
+    {
+      "path": "application/services/my-service/requirements.txt",
+      "change_type": "modify",
+      "current_content": "requests==2.25.0",
+      "suggested_content": "requests>=2.32.0",
+      "description": "升级 requests 到安全版本"
+    }
+  ],
+  "remediation": {
+    "can_remediate": true,
+    "remediation_type": "github_pr",
+    "summary": "通过 GitHub PR 修复容器镜像漏洞",
+    "description": "升级存在漏洞的依赖包到安全版本",
+    "prerequisites": ["确认升级不会破坏应用兼容性"],
+    "estimated_impact": "LOW",
+    "rollback_available": true,
+    "is_destructive": false
+  }
+}
+```
+
+# 注意事项
+1. **必须先确认服务存在**: search_container_inventory 必须返回 found: true
+2. **如果服务不在清单中**: 设置 can_remediate: false
+3. **file_changes 必须完整**: 包含修改前后的完整文件内容
+4. **所有漏洞合并处理**: 不要为每个漏洞单独分析
+
+# 重要指南
+- 【强制】必须调用 save_analysis_result 保存分析结果
+- 【强制】service_info 中必须包含 github_owner 和 github_repo
+- Remediator 将负责创建 PR（标题、描述、分支名等）
+"""
+
+# 向后兼容：保留原变量名
+ANALYZER_SYSTEM_PROMPT = AWS_API_ANALYZER_SYSTEM_PROMPT
 
 
 def create_analyzer_agent(
@@ -349,7 +277,8 @@ def create_analyzer_agent(
     session_id: str,
     region: Optional[str] = None,
     actor_id: Optional[str] = None,
-    mcp_tools: Optional[list] = None
+    mcp_tools: Optional[list] = None,
+    remediation_type: str = "aws_api"
 ) -> Agent:
     """创建 Analyzer Agent 实例。
 
@@ -360,6 +289,7 @@ def create_analyzer_agent(
         region: AWS Region (可选，默认从环境变量获取)
         actor_id: Actor ID (可选，默认使用 task_id)
         mcp_tools: AWS MCP Server 提供的工具列表 (可选)
+        remediation_type: 修复类型 ("aws_api" 或 "github_pr")，决定使用哪个 System Prompt
 
     Returns:
         Agent: 配置好的 Analyzer Agent
@@ -437,23 +367,37 @@ def create_analyzer_agent(
         streaming=False
     )
 
-    # 构建工具列表
-    tools = [
-        get_resource_config,  # 第一个必须调用的工具
-        fetch_asr_playbook,
-        search_similar_findings,
-        save_analysis_result,  # 保存分析结果供 Phase 2 使用
-    ]
+    # 根据 remediation_type 选择 System Prompt 和工具
+    if remediation_type == "github_pr":
+        # GitHub PR 模式 - 容器漏洞修复
+        system_prompt = GITHUB_PR_ANALYZER_SYSTEM_PROMPT
+        tools = [
+            search_container_inventory,  # 搜索容器清单
+            get_service_metadata,  # 读取服务元数据
+            read_github_file,  # 读取 GitHub 文件
+            save_analysis_result,  # 保存分析结果
+        ]
+        logger.info("Using GitHub PR mode - container vulnerability analysis")
+    else:
+        # AWS API 模式 - 标准 Security Hub 配置修复
+        system_prompt = AWS_API_ANALYZER_SYSTEM_PROMPT
+        tools = [
+            get_resource_config,  # 验证资源存在性
+            fetch_asr_playbook,  # 获取 ASR Playbook
+            search_similar_findings,  # 搜索相似经验
+            save_analysis_result,  # 保存分析结果
+        ]
+        logger.info("Using AWS API mode - standard Security Hub remediation")
 
-    # 添加 AWS MCP 工具 (如果可用)
-    if mcp_tools:
-        tools.extend(mcp_tools)
-        logger.info(f"Added {len(mcp_tools)} AWS MCP tools to agent")
+        # AWS API 模式下添加 MCP 工具 (如果可用)
+        if mcp_tools:
+            tools.extend(mcp_tools)
+            logger.info(f"Added {len(mcp_tools)} AWS MCP tools to agent")
 
     # 创建 Agent
     agent = Agent(
         model=model,
-        system_prompt=ANALYZER_SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         tools=tools,
         session_manager=session_manager,
     )
@@ -466,7 +410,10 @@ def run_analyzer(
     agent: Agent,
     finding: dict,
     control_id: str,
-    task_id: str
+    task_id: str,
+    remediation_type: str = "auto",
+    github_owner: str = "",
+    github_repo: str = ""
 ) -> dict:
     """运行 Analyzer Agent 分析 Finding。
 
@@ -475,12 +422,20 @@ def run_analyzer(
         finding: Security Hub Finding (ASFF 格式)
         control_id: Control ID
         task_id: 任务 ID
+        remediation_type: 修复类型 ("auto" 或 "github_pr")
+        github_owner: GitHub 用户/组织 (github_pr 模式必需)
+        github_repo: GitHub 仓库名 (可选，留空则动态搜索)
 
     Returns:
         dict: 分析结果
     """
     import json
 
+    # 如果是 github_pr 模式，调用专门的容器分析函数
+    if remediation_type == "github_pr":
+        return _run_github_pr_analyzer(agent, finding, task_id, github_owner, github_repo)
+
+    # 以下是 aws_api 模式（默认）
     # 提取资源信息供 prompt 使用
     resources = finding.get('Resources', [{}])
     resource_arn = resources[0].get('Id', '') if resources else ''
@@ -581,6 +536,293 @@ Remember: Generate DESCRIPTIONS only, not executable code. Return result as JSON
         return {
             "success": False,
             "task_id": task_id,
+            "error": str(e)
+        }
+
+
+def _run_github_pr_analyzer(
+    agent: Agent,
+    finding: dict,
+    task_id: str,
+    github_owner: str,
+    github_repo: str = ""
+) -> dict:
+    """GitHub PR 模式的分析入口函数。
+
+    从 Finding 中提取容器和漏洞信息，然后调用 run_container_analyzer。
+
+    Args:
+        agent: Analyzer Agent 实例
+        finding: Security Hub Finding (ASFF 格式)
+        task_id: 任务 ID
+        github_owner: GitHub 用户/组织
+        github_repo: GitHub 仓库名 (可选，留空则动态搜索)
+
+    Returns:
+        dict: 分析结果
+    """
+    # 从 Finding 中提取容器信息
+    resources = finding.get('Resources', [{}])
+    resource = resources[0] if resources else {}
+    resource_arn = resource.get('Id', '')
+
+    # 解析 ECR ARN: arn:aws:ecr:region:account:repository/name/image/sha256:digest
+    container_info = {
+        'repo_name': '',
+        'image_tag': '',
+        'image_digest': ''
+    }
+
+    if 'ecr' in resource_arn.lower():
+        # 从 ARN 中提取仓库名
+        # 格式: arn:aws:ecr:ap-northeast-1:870414140965:repository/shara-dev-validator-agent/image/sha256:xxx
+        parts = resource_arn.split('/')
+        if len(parts) >= 2:
+            container_info['repo_name'] = parts[1] if 'repository' in parts[0] else parts[0].split(':')[-1]
+        if 'sha256:' in resource_arn:
+            container_info['image_digest'] = 'sha256:' + resource_arn.split('sha256:')[-1]
+
+    # 从 Finding 中提取漏洞信息
+    # Inspector findings 的漏洞信息可能在 Vulnerabilities 或 ProductFields 中
+    aggregated_vulnerabilities = []
+
+    # 检查是否有 Vulnerabilities 数组 (Inspector v2 格式)
+    vulns = finding.get('Vulnerabilities', [])
+    for vuln in vulns:
+        vuln_info = {
+            'cve_id': vuln.get('Id', ''),
+            'severity': finding.get('Severity', {}).get('Label', 'UNKNOWN'),
+            'package_name': '',
+            'installed_version': '',
+            'fixed_version': '',
+            'description': vuln.get('Description', '') or finding.get('Description', '')
+        }
+
+        # 提取包信息
+        packages = vuln.get('VulnerablePackages', [])
+        if packages:
+            pkg = packages[0]
+            vuln_info['package_name'] = pkg.get('Name', '')
+            vuln_info['installed_version'] = pkg.get('Version', '')
+            vuln_info['fixed_version'] = pkg.get('FixedInVersion', '')
+
+        if vuln_info['cve_id']:
+            aggregated_vulnerabilities.append(vuln_info)
+
+    # 如果 Vulnerabilities 为空，尝试从 ProductFields 提取
+    if not aggregated_vulnerabilities:
+        product_fields = finding.get('ProductFields', {})
+        # Inspector 可能把漏洞信息放在不同字段
+        cve_id = (
+            finding.get('Title', '').split(' - ')[0] if ' - ' in finding.get('Title', '')
+            else product_fields.get('CVE', '')
+        )
+        if cve_id:
+            aggregated_vulnerabilities.append({
+                'cve_id': cve_id,
+                'severity': finding.get('Severity', {}).get('Label', 'UNKNOWN'),
+                'package_name': product_fields.get('PackageName', ''),
+                'installed_version': product_fields.get('InstalledVersion', ''),
+                'fixed_version': product_fields.get('FixedVersion', ''),
+                'description': finding.get('Description', '')
+            })
+
+    logger.info(f"Extracted container info: {container_info}, vulnerabilities: {len(aggregated_vulnerabilities)}")
+
+    # 调用容器分析器
+    return run_container_analyzer(
+        agent=agent,
+        finding=finding,
+        task_id=task_id,
+        aggregated_vulnerabilities=aggregated_vulnerabilities,
+        container_info=container_info,
+        github_owner=github_owner,
+        github_repo=github_repo  # 如果有值则直接使用，否则由 Agent 动态搜索
+    )
+
+
+def run_container_analyzer(
+    agent: Agent,
+    finding: dict,
+    task_id: str,
+    aggregated_vulnerabilities: list,
+    container_info: dict,
+    github_owner: str = "Wyifei",
+    github_repo: str = "awsome"
+) -> dict:
+    """运行 Analyzer Agent 分析容器漏洞 Finding。
+
+    Args:
+        agent: Analyzer Agent 实例
+        finding: Security Hub Finding (ASFF 格式)
+        task_id: 任务 ID
+        aggregated_vulnerabilities: 聚合后的漏洞列表
+        container_info: 容器信息 (repo_name, image_tag, image_digest)
+        github_owner: GitHub 用户/组织
+        github_repo: GitHub 仓库名
+
+    Returns:
+        dict: 分析结果
+    """
+    import json
+
+    # 提取容器信息
+    repo_name = container_info.get('repo_name', '')
+    image_tag = container_info.get('image_tag', '')
+    image_digest = container_info.get('image_digest', '')
+
+    # 格式化漏洞列表
+    vuln_summary = []
+    for vuln in aggregated_vulnerabilities[:10]:  # 最多显示 10 个
+        vuln_summary.append({
+            "cve_id": vuln.get("cve_id"),
+            "severity": vuln.get("severity"),
+            "package_name": vuln.get("package_name"),
+            "installed_version": vuln.get("installed_version"),
+            "fixed_version": vuln.get("fixed_version"),
+        })
+
+    prompt = f"""
+Analyze this Container Vulnerability Finding and generate a GitHub PR remediation plan:
+
+**Task ID:** {task_id}
+**Remediation Type:** github_pr
+
+**Container Information:**
+- ECR Repository: {repo_name}
+- Image Tag: {image_tag}
+- Image Digest: {image_digest}
+
+**Aggregated Vulnerabilities ({len(aggregated_vulnerabilities)} total):**
+```json
+{json.dumps(vuln_summary, indent=2, default=str)}
+```
+
+**Finding (ASFF Format):**
+```json
+{json.dumps(finding, indent=2, default=str)}
+```
+
+**GitHub Configuration:**
+- Owner: {github_owner}
+- Repo: {github_repo if github_repo else "(动态搜索 - 将通过 GitHub Code Search 自动发现)"}
+
+**⚠️ 必须按以下顺序执行工具调用 (GitHub PR 模式):**
+
+**步骤 1 [强制]: 搜索容器清单**
+调用 search_container_inventory 工具:
+```
+search_container_inventory(
+  ecr_repository="{repo_name}",
+  github_owner="{github_owner}"{"," if github_repo else ""}
+  {f'github_repo="{github_repo}"' if github_repo else "# github_repo 留空，工具会自动通过 GitHub Code Search 查找包含此 ECR 镜像的仓库"}
+)
+```
+如果返回 found=false，设置 can_remediate=false 并说明原因。
+**重要**: 如果搜索成功，记住返回的 `github_repo` 值，后续步骤需要使用。
+
+**步骤 2: 读取服务元数据**
+如果步骤 1 找到匹配的服务，调用 get_service_metadata:
+```
+get_service_metadata(
+  service_path="<步骤 1 返回的 path>",
+  github_owner="{github_owner}",
+  github_repo="<步骤 1 返回的 github_repo>"
+)
+```
+
+**步骤 3: 读取依赖文件**
+根据 SERVICE.yaml 中的配置，使用 read_github_file 读取需要修改的文件:
+- Dockerfile (查看 base image)
+- 依赖文件 (requirements.txt, package.json 等)
+
+**步骤 4: 分析漏洞并生成修复方案**
+⚠️ **关键**: 所有漏洞将合并处理！
+- 分析所有 {len(aggregated_vulnerabilities)} 个漏洞，确定哪些依赖需要升级
+- 生成 file_changes 列表（可能包含多个文件修改，所有修复合并在一起）
+- 生成 remediation 对象，包含 can_remediate, summary, description 等
+
+**步骤 5 [强制]: 保存分析结果**
+调用 save_analysis_result 工具，传递分析结果:
+- task_id: {task_id}
+- analysis: 步骤 4 生成的 analysis 对象
+- remediation_description: 修复方案描述
+- finding: 完整的原始 Finding 数据
+- **vulnerabilities**: 漏洞列表 (⚠️ 必须传递！邮件通知需要)
+- **service_info**: 服务信息 (包含 github_owner, github_repo)
+- **file_changes**: 文件变更列表
+- **remediation**: 修复方案信息
+
+**步骤 6 [强制]: 返回完整 JSON 响应**
+⚠️ 你必须在响应末尾返回完整的 JSON 输出，格式如下：
+```json
+{{
+  "analysis": {{ ... }},
+  "service_info": {{ ... }},
+  "vulnerabilities": [ ... ],
+  "file_changes": [ ... ],
+  "remediation": {{ ... }}
+}}
+```
+
+**重要提示:**
+- 这是容器漏洞修复分析，PR 创建由 Remediator 负责
+- **必须**传递 vulnerabilities 参数，邮件通知需要显示漏洞列表
+- **必须**在 service_info 中包含 github_owner 和 github_repo
+- **必须**在响应末尾返回完整的 JSON
+- Remediator 将根据这些信息创建 PR
+"""
+
+    logger.info(f"Running Container Analyzer Agent for task {task_id}, repo {repo_name}")
+
+    try:
+        result = agent(prompt)
+
+        # 正确提取响应文本
+        response_text = ""
+        if hasattr(result, 'message'):
+            msg = result.message
+            if isinstance(msg, dict):
+                content = msg.get('content', [])
+                if content and isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and 'text' in item:
+                            response_text += item['text']
+                        elif isinstance(item, str):
+                            response_text += item
+            elif isinstance(msg, str):
+                response_text = msg
+            else:
+                response_text = str(msg)
+        else:
+            response_text = str(result)
+
+        logger.info(f"Container Analyzer completed for task {task_id}")
+
+        # 从 Agent 响应中提取 JSON 结构
+        # Agent 已通过 save_analysis_result 将数据保存到 Memory（供 Remediator 使用）
+        # 同时 Agent 应该在响应末尾返回完整的 JSON（供我们直接提取）
+        analysis_data = _extract_json_from_response(response_text)
+
+        return {
+            "success": True,
+            "task_id": task_id,
+            "remediation_type": "github_pr",
+            "analysis": analysis_data.get('analysis', {}),
+            "service_info": analysis_data.get('service_info', {}),
+            "vulnerabilities": analysis_data.get('vulnerabilities', []),
+            "file_changes": analysis_data.get('file_changes', []),
+            "pr_metadata": analysis_data.get('pr_metadata', {}),
+            "remediation": analysis_data.get('remediation', {}),
+            "raw_response": response_text
+        }
+
+    except Exception as e:
+        logger.exception(f"Container Analyzer failed for task {task_id}: {e}")
+        return {
+            "success": False,
+            "task_id": task_id,
+            "remediation_type": "github_pr",
             "error": str(e)
         }
 

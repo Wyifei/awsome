@@ -17,7 +17,7 @@ from pydantic import BaseModel
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from shared.config import get_config
-from remediator.agent import create_remediator_agent, run_remediator
+from remediator.agent import create_remediator_agent, run_remediator, run_github_pr_remediator
 
 # Configure logging
 logging.basicConfig(
@@ -97,6 +97,9 @@ async def invocations(request: Request):
             is_rollback = prompt_data.get('is_rollback', False)
             session_id = body.get('session_id')
             actor_id = prompt_data.get('actor_id')
+            remediation_type = prompt_data.get('remediation_type', 'aws_api')
+            github_owner = prompt_data.get('github_owner', '')
+            github_repo = prompt_data.get('github_repo', '')
         else:
             task_id = body.get('task_id', 'unknown')
             memory_session_id = body.get('memory_session_id')
@@ -108,6 +111,9 @@ async def invocations(request: Request):
             is_rollback = body.get('is_rollback', False)
             session_id = body.get('session_id')
             actor_id = body.get('actor_id')
+            remediation_type = body.get('remediation_type', 'aws_api')
+            github_owner = body.get('github_owner', '')
+            github_repo = body.get('github_repo', '')
 
         if not memory_session_id:
             raise ValueError("memory_session_id is required for Remediator Agent")
@@ -124,51 +130,96 @@ async def invocations(request: Request):
             logger.warning("memory_id is empty - Memory features will be disabled")
 
         # actor_id 已在上面解析
+        # 确定实际的 remediation_type
+        effective_remediation_type = "github_pr" if remediation_type == "github_pr" else "aws_api"
 
-        # Create agent for this request
+        # Create agent for this request - 根据 remediation_type 选择不同的 Prompt
         agent = create_remediator_agent(
             task_id=task_id,
             memory_session_id=memory_session_id,
             memory_id=memory_id,
             region=config.region,
-            actor_id=actor_id
+            actor_id=actor_id,
+            remediation_type=effective_remediation_type  # 传递 remediation_type 以选择 Prompt
         )
 
-        # Run remediator
+        logger.info(f"Created Remediator Agent with remediation_type={effective_remediation_type}")
+
+        # Run remediator - 根据 remediation_type 选择不同的运行函数
         import asyncio
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            None,
-            lambda: run_remediator(
-                agent=agent,
-                task_id=task_id,
-                resource_arn=resource_arn,
-                resource_type=resource_type,
-                control_id=control_id,
-                finding_id=finding_id,
-                memory_session_id=memory_session_id,
-                actor_id=actor_id,
-                is_rollback=is_rollback
-            )
-        )
 
-        # 构建响应数据
-        response_data = {
-            "success": result.get('success', False),
-            "task_id": task_id,
-            "resource_arn": resource_arn,
-            "is_rollback": is_rollback,
-            "validator_called": result.get('validator_called', False),
-            "response": result.get('response', ''),
-            "session_id": session_id,
-            "metadata": {
-                "task_id": task_id,
-                "agent_type": "remediator",
+        if effective_remediation_type == "github_pr":
+            # GitHub PR 模式 - 容器漏洞修复
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_github_pr_remediator(
+                    agent=agent,
+                    task_id=task_id,
+                    resource_arn=resource_arn,
+                    finding_id=finding_id,
+                    memory_session_id=memory_session_id,
+                    actor_id=actor_id,
+                    github_owner=github_owner,
+                    github_repo=github_repo
+                )
+            )
+        else:
+            # AWS API 模式 - 标准 Security Hub 修复
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_remediator(
+                    agent=agent,
+                    task_id=task_id,
+                    resource_arn=resource_arn,
+                    resource_type=resource_type,
+                    control_id=control_id,
+                    finding_id=finding_id,
+                    memory_session_id=memory_session_id,
+                    actor_id=actor_id,
+                    is_rollback=is_rollback
+                )
+            )
+
+        # 构建响应数据 - 根据 remediation_type 使用不同格式
+        if effective_remediation_type == "github_pr":
+            response_data = {
                 "success": result.get('success', False),
-                "is_rollback": is_rollback,
-                "validator_called": result.get('validator_called', False)
+                "task_id": task_id,
+                "resource_arn": resource_arn,
+                "remediation_type": "github_pr",
+                "pr_created": result.get('pr_created', False),
+                "validator_called": result.get('validator_called', False),
+                "response": result.get('response', ''),
+                "session_id": session_id,
+                "metadata": {
+                    "task_id": task_id,
+                    "agent_type": "remediator",
+                    "remediation_type": "github_pr",
+                    "success": result.get('success', False),
+                    "pr_created": result.get('pr_created', False),
+                    "validator_called": result.get('validator_called', False)
+                }
             }
-        }
+        else:
+            response_data = {
+                "success": result.get('success', False),
+                "task_id": task_id,
+                "resource_arn": resource_arn,
+                "remediation_type": "aws_api",
+                "is_rollback": is_rollback,
+                "validator_called": result.get('validator_called', False),
+                "response": result.get('response', ''),
+                "session_id": session_id,
+                "metadata": {
+                    "task_id": task_id,
+                    "agent_type": "remediator",
+                    "remediation_type": "aws_api",
+                    "success": result.get('success', False),
+                    "is_rollback": is_rollback,
+                    "validator_called": result.get('validator_called', False)
+                }
+            }
 
         if result.get('error'):
             response_data['error'] = result.get('error')
