@@ -20,8 +20,13 @@ agents:
       s3_path: null
       s3_auto_create: false
       network_configuration:
-        network_mode: PUBLIC
-        network_mode_config: null
+        network_mode: VPC
+        network_mode_config:
+          subnets:
+            - subnet-05b55061262c1e816
+            - subnet-0f7b2ba4b3c191cb7
+          security_groups:
+            - sg-0bdcc02db19b7134f
       protocol_configuration:
         server_protocol: HTTP
       observability:
@@ -80,8 +85,13 @@ agents:
       s3_path: null
       s3_auto_create: false
       network_configuration:
-        network_mode: PUBLIC
-        network_mode_config: null
+        network_mode: VPC
+        network_mode_config:
+          subnets:
+            - subnet-05b55061262c1e816
+            - subnet-0f7b2ba4b3c191cb7
+          security_groups:
+            - sg-0bdcc02db19b7134f
       protocol_configuration:
         server_protocol: HTTP
       observability:
@@ -140,8 +150,13 @@ agents:
       s3_path: null
       s3_auto_create: false
       network_configuration:
-        network_mode: PUBLIC
-        network_mode_config: null
+        network_mode: VPC
+        network_mode_config:
+          subnets:
+            - subnet-05b55061262c1e816
+            - subnet-0f7b2ba4b3c191cb7
+          security_groups:
+            - sg-0bdcc02db19b7134f
       protocol_configuration:
         server_protocol: HTTP
       observability:

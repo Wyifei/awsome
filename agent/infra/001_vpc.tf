@@ -272,3 +272,20 @@ resource "aws_vpc_endpoint" "logs" {
     Name = "${local.name_prefix}-logs-endpoint"
   }
 }
+
+# Bedrock AgentCore Interface Endpoint
+# Required for Lambda to invoke AgentCore Runtime when both are in VPC
+resource "aws_vpc_endpoint" "bedrock_agentcore" {
+  count = var.enable_vpc_endpoints ? 1 : 0
+
+  vpc_id              = aws_vpc.main.id
+  service_name        = "com.amazonaws.${local.region}.bedrock-agentcore"
+  vpc_endpoint_type   = "Interface"
+  subnet_ids          = aws_subnet.private[*].id
+  security_group_ids  = [aws_security_group.vpc_endpoints[0].id]
+  private_dns_enabled = true
+
+  tags = {
+    Name = "${local.name_prefix}-bedrock-agentcore-endpoint"
+  }
+}

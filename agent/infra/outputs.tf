@@ -178,3 +178,17 @@ output "agentcore_memory_id" {
   description = "AgentCore Memory ID for session management"
   value       = var.agentcore_memory_id
 }
+
+#------------------------------------------------------------------------------
+# AgentCore Runtime Security Group
+#------------------------------------------------------------------------------
+
+output "agentcore_runtime_security_group_id" {
+  description = "Security Group ID for AgentCore Runtime (VPC mode)"
+  value       = aws_security_group.agentcore_runtime.id
+}
+
+output "agentcore_runtime_security_group_name" {
+  description = "Security Group name for AgentCore Runtime"
+  value       = aws_security_group.agentcore_runtime.name
+}

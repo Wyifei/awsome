@@ -1,0 +1,521 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.3.6 Chrome/140.0.7339.249 Electron/38.8.0 Safari/537.36" version="29.3.6">
+  <diagram name="SHARA Agent Workflow" id="shara-agent-workflow">
+    <mxGraphModel dx="1426" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2000" pageHeight="1300" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;fontSize=24;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;" value="SHARA Agent Workflow - 智能体工作流详解" vertex="1">
+          <mxGeometry height="50" width="600" x="600" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="phase1-header" parent="1" style="text;html=1;fontSize=18;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fillColor=#E8F4FD;strokeColor=#147EBA;rounded=1;" value="Phase 1: Analysis &amp; Approval (审批前)" vertex="1">
+          <mxGeometry height="40" width="600" x="40" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="phase2-header" parent="1" style="text;html=1;fontSize=18;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fillColor=#FEF3E8;strokeColor=#ED7100;rounded=1;" value="Phase 2: Remediation &amp; Validation (审批后)" vertex="1">
+          <mxGeometry height="40" width="600" x="700" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="memory-header" parent="1" style="text;html=1;fontSize=18;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fillColor=#E6F2E6;strokeColor=#1E8900;rounded=1;" value="AgentCore Memory" vertex="1">
+          <mxGeometry height="40" width="300" x="1360" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F4FD;strokeColor=#147EBA;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="680" width="600" x="40" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-title" parent="1" style="text;html=1;fontSize=16;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fillColor=#147EBA;fontColor=#FFFFFF;rounded=1;" value="Analyzer Agent (分析智能体)" vertex="1">
+          <mxGeometry height="35" width="280" x="60" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-input" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#147EBA;strokeWidth=1;fontSize=12;fontFamily=Noto Sans JP;" value="Input: Security Hub Finding" vertex="1">
+          <mxGeometry height="40" width="200" x="60" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="70" width="560" x="60" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step1-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#147EBA;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Noto Sans JP;" value="1" vertex="1">
+          <mxGeometry height="25" width="25" x="70" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step1-title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="get_resource_config" vertex="1">
+          <mxGeometry height="20" width="180" x="105" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step1-desc" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 调用 AWS API 获取资源当前配置&lt;br&gt;• 验证资源是否存在，提取资源类型、ARN、配置详情" vertex="1">
+          <mxGeometry height="35" width="500" x="105" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="85" width="560" x="60" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step2-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#147EBA;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Noto Sans JP;" value="2" vertex="1">
+          <mxGeometry height="25" width="25" x="70" y="365" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step2-title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="fetch_asr_playbook" vertex="1">
+          <mxGeometry height="20" width="180" x="105" y="365" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step2-desc" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 从 S3 获取 ASR (Automated Security Response) Playbook&lt;br&gt;• 根据 Control ID (如 S3.1) 精确匹配&lt;br&gt;• 返回预定义的修复描述和代码模板" vertex="1">
+          <mxGeometry height="50" width="500" x="105" y="385" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-asr-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="180" x="420" y="360" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-asr-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="S3: ASR Playbook" vertex="1">
+          <mxGeometry height="20" width="160" x="430" y="365" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-asr-content" parent="1" style="text;html=1;fontSize=9;fontFamily=monospace;align=left;verticalAlign=top;" value="├── index.json&lt;br&gt;└── playbooks/{control_id}/&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;├── playbook.json&lt;br&gt;&amp;nbsp;&amp;nbsp;&amp;nbsp;&amp;nbsp;└── code.py" vertex="1">
+          <mxGeometry height="50" width="160" x="430" y="385" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6D9F2;strokeColor=#9673A6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="85" width="560" x="60" y="455" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step3-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#147EBA;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Noto Sans JP;" value="3" vertex="1">
+          <mxGeometry height="25" width="25" x="70" y="465" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step3-title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="search_similar_findings" vertex="1">
+          <mxGeometry height="20" width="200" x="105" y="465" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step3-desc" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 搜索 AgentCore Memory LTM&lt;br&gt;• 语义搜索相似的历史修复经验&lt;br&gt;• 返回 Episodes (具体执行记录) 和 Reflections (方法论)" vertex="1">
+          <mxGeometry height="50" width="400" x="105" y="485" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-search-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="180" x="420" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-search-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="LTM Search" vertex="1">
+          <mxGeometry height="20" width="160" x="430" y="465" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-search-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Namespace: /remediation/actors/{accountId}/&lt;br&gt;Episodes: min_relevance=0.35&lt;br&gt;Reflections: min_relevance=0.5" vertex="1">
+          <mxGeometry height="45" width="165" x="430" y="485" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#D4EDDA;strokeColor=#28A745;strokeWidth=1;dashed=1;" value="" vertex="1">
+          <mxGeometry height="85" width="560" x="60" y="555" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step4-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#147EBA;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Noto Sans JP;" value="4" vertex="1">
+          <mxGeometry height="25" width="25" x="70" y="565" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step4-title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="aws_doc_search_documentation (MCP) [可选]" vertex="1">
+          <mxGeometry height="20" width="350" x="105" y="565" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step4-desc" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 当缺乏信息时查询 AWS 官方文档 (MCP Server)&lt;br&gt;• 触发条件: 无 ASR Playbook、无相似经验、不确定修复方法&lt;br&gt;• 获取修复指南和 AWS 最佳实践" vertex="1">
+          <mxGeometry height="50" width="500" x="105" y="585" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F8E8;strokeColor=#28A745;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="180" x="420" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-box-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="AWS MCP Server" vertex="1">
+          <mxGeometry height="20" width="160" x="430" y="565" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp-box-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• search_documentation&lt;br&gt;• read_documentation&lt;br&gt;• recommend" vertex="1">
+          <mxGeometry height="45" width="160" x="430" y="585" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6EFCE;strokeColor=#1E8900;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="70" width="560" x="60" y="655" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step5-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#147EBA;fontColor=#FFFFFF;fontStyle=1;fontSize=12;fontFamily=Noto Sans JP;" value="5" vertex="1">
+          <mxGeometry height="25" width="25" x="70" y="665" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step5-title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="save_analysis_result" vertex="1">
+          <mxGeometry height="20" width="180" x="105" y="665" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-step5-desc" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 保存分析结果到 Memory STM&lt;br&gt;• 数据: finding, resource_config, asr_playbook, similar_experiences, remediation_description" vertex="1">
+          <mxGeometry height="35" width="500" x="105" y="685" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-output" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#147EBA;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="85" width="560" x="60" y="740" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-output-title" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Output: Analysis Result (JSON)" vertex="1">
+          <mxGeometry height="20" width="250" x="70" y="745" as="geometry" />
+        </mxCell>
+        <mxCell id="analyzer-output-content" parent="1" style="text;html=1;fontSize=9;fontFamily=monospace;align=left;verticalAlign=top;" value="{&lt;br&gt;&amp;nbsp;&amp;nbsp;&quot;analysis&quot;: { &quot;risk_level&quot;: &quot;high&quot;, &quot;resource_state&quot;: {...} },&lt;br&gt;&amp;nbsp;&amp;nbsp;&quot;asr_match&quot;: { &quot;confidence&quot;: 1.0, &quot;playbook&quot;: {...} },&lt;br&gt;&amp;nbsp;&amp;nbsp;&quot;remediation&quot;: { &quot;description&quot;: &quot;修复方案文字描述&quot;, ... }&lt;br&gt;}" vertex="1">
+          <mxGeometry height="55" width="540" x="70" y="765" as="geometry" />
+        </mxCell>
+        <mxCell id="approval-flow" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="150" width="600" x="40" y="860" as="geometry" />
+        </mxCell>
+        <mxCell id="approval-title" parent="1" style="text;html=1;fontSize=14;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;fontColor=#D6B656;" value="Approval Flow (审批流程)" vertex="1">
+          <mxGeometry height="25" width="200" x="60" y="870" as="geometry" />
+        </mxCell>
+        <mxCell id="email-icon" parent="1" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.simple_email_service;labelPosition=center;verticalLabelPosition=bottom;align=center;verticalAlign=top;pointerEvents=1;" value="" vertex="1">
+          <mxGeometry height="50" width="50" x="80" y="900" as="geometry" />
+        </mxCell>
+        <mxCell id="email-label" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="SES&lt;br&gt;审批邮件" vertex="1">
+          <mxGeometry height="40" width="80" x="65" y="955" as="geometry" />
+        </mxCell>
+        <mxCell id="token-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="90" width="180" x="180" y="900" as="geometry" />
+        </mxCell>
+        <mxCell id="token-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="Token 生成" vertex="1">
+          <mxGeometry height="20" width="170" x="185" y="905" as="geometry" />
+        </mxCell>
+        <mxCell id="token-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="approve_token = sha256(task_id + &quot;approve&quot; + nonce)&lt;br&gt;reject_token = sha256(task_id + &quot;reject&quot; + nonce)&lt;br&gt;TTL: 24 hours" vertex="1">
+          <mxGeometry height="60" width="170" x="185" y="925" as="geometry" />
+        </mxCell>
+        <mxCell id="user-click" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#D6B656;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="90" width="220" x="400" y="900" as="geometry" />
+        </mxCell>
+        <mxCell id="user-click-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="User Action" vertex="1">
+          <mxGeometry height="20" width="210" x="405" y="905" as="geometry" />
+        </mxCell>
+        <mxCell id="user-click-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="[Approve] → Approval Handler → Remediator&lt;br&gt;[Reject] → Approval Handler → Update Status&lt;br&gt;[Rollback] → Approval Handler → Remediator" vertex="1">
+          <mxGeometry height="60" width="210" x="405" y="928" as="geometry" />
+        </mxCell>
+        <mxCell id="remediator-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF3E8;strokeColor=#ED7100;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="870" width="600" x="700" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="remediator-title" parent="1" style="text;html=1;fontSize=16;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fillColor=#ED7100;fontColor=#FFFFFF;rounded=1;" value="Remediator Agent (修复智能体)" vertex="1">
+          <mxGeometry height="35" width="280" x="720" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="remediator-input" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#ED7100;strokeWidth=1;fontSize=12;fontFamily=Noto Sans JP;" value="Input: task_id, resource_arn, is_rollback" vertex="1">
+          <mxGeometry height="40" width="250" x="720" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="normal-section" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#ED7100;strokeWidth=1;dashed=1;" value="" vertex="1">
+          <mxGeometry height="440" width="560" x="720" y="297" as="geometry" />
+        </mxCell>
+        <mxCell id="normal-title" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;fontColor=#ED7100;" value="Normal Remediation (is_rollback=false)" vertex="1">
+          <mxGeometry height="20" width="300" x="730" y="302" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="540" x="730" y="327" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step1-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="1" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="337" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step1-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="get_analysis_context - 从 Memory STM 获取 Phase 1 分析结果" vertex="1">
+          <mxGeometry height="30" width="490" x="770" y="337" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="540" x="730" y="387" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step2-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="2" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="397" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step2-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="get_resource_config - 获取资源最新状态作为 pre_state (用于回滚)" vertex="1">
+          <mxGeometry height="30" width="490" x="770" y="397" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F2E6;strokeColor=#1E8900;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="540" x="730" y="447" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step3-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="3" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="457" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step3-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="[LLM] 生成 Python/Boto3 修复代码 (优先使用 ASR 模板)" vertex="1">
+          <mxGeometry height="30" width="490" x="770" y="457" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F2E6;strokeColor=#1E8900;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="540" x="730" y="507" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step4-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="4" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="517" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step4-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="[LLM] 基于 pre_state 生成回滚代码" vertex="1">
+          <mxGeometry height="30" width="490" x="770" y="517" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="50" width="540" x="730" y="567" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step5-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="5" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="577" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step5-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;fontStyle=1;" value="save_rollback_to_memory - 在执行前保存回滚代码" vertex="1">
+          <mxGeometry height="30" width="490" x="770" y="577" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="540" x="730" y="627" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step6-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="6" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="637" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step6-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="pre_execution_check - 快速代码安全检查 (正则匹配危险模式)" vertex="1">
+          <mxGeometry height="30" width="490" x="770" y="637" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6EFCE;strokeColor=#1E8900;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="55" width="540" x="730" y="687" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step7-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#ED7100;fontColor=#FFFFFF;fontStyle=1;fontSize=11;fontFamily=Noto Sans JP;" value="7" vertex="1">
+          <mxGeometry height="22" width="22" x="740" y="692" as="geometry" />
+        </mxCell>
+        <mxCell id="rem-step7-text" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;fontStyle=1;" value="execute_code - 在 Code Interpreter 沙盒中执行 (max 2 retries)&lt;br&gt;&lt;span style=&quot;font-weight:normal;color:#666;&quot;&gt;→ 自动上传审计日志到 S3: code.py, execution.log, metadata.json&lt;/span&gt;" vertex="1">
+          <mxGeometry height="40" width="490" x="770" y="692" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-audit-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="55" width="170" x="1100" y="687" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-audit-title" parent="1" style="text;html=1;fontSize=10;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="S3: Audit Logs" vertex="1">
+          <mxGeometry height="15" width="150" x="1110" y="690" as="geometry" />
+        </mxCell>
+        <mxCell id="s3-audit-content" parent="1" style="text;html=1;fontSize=8;fontFamily=monospace;align=left;verticalAlign=top;" value="tasks/{task_id}/{op}_{ts}/&lt;br&gt;├── code.py&lt;br&gt;├── execution.log&lt;br&gt;└── metadata.json" vertex="1">
+          <mxGeometry height="40" width="150" x="1110" y="705" as="geometry" />
+        </mxCell>
+        <mxCell id="rollback-section" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B85450;strokeWidth=1;dashed=1;" value="" vertex="1">
+          <mxGeometry height="90" width="560" x="720" y="766" as="geometry" />
+        </mxCell>
+        <mxCell id="rollback-title" parent="1" style="text;html=1;fontSize=12;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;fontColor=#B85450;" value="Rollback Operation (is_rollback=true)" vertex="1">
+          <mxGeometry height="20" width="300" x="730" y="771" as="geometry" />
+        </mxCell>
+        <mxCell id="rollback-step1" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="1. get_rollback_from_memory - 获取预存的回滚代码" vertex="1">
+          <mxGeometry height="20" width="350" x="740" y="796" as="geometry" />
+        </mxCell>
+        <mxCell id="rollback-step2" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="2. execute_code - 执行预存的回滚代码 → 自动上传审计日志到 S3" vertex="1">
+          <mxGeometry height="20" width="450" x="740" y="816" as="geometry" />
+        </mxCell>
+        <mxCell id="a2a-call" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6D9F2;strokeColor=#8B5CF6;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="70" width="560" x="720" y="871" as="geometry" />
+        </mxCell>
+        <mxCell id="a2a-title" parent="1" style="text;html=1;fontSize=13;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;fontColor=#8B5CF6;" value="invoke_validator_agent" vertex="1">
+          <mxGeometry height="20" width="250" x="740" y="881" as="geometry" />
+        </mxCell>
+        <mxCell id="a2a-content" parent="1" style="text;html=1;fontSize=11;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 使用 bedrock-agentcore invoke_agent_runtime API&lt;br&gt;• 传递: task_id, resource_arn, is_rollback" vertex="1">
+          <mxGeometry height="35" width="400" x="740" y="901" as="geometry" />
+        </mxCell>
+        <mxCell id="memory-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6F2E6;strokeColor=#1E8900;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="870" width="300" x="1360" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="420" width="260" x="1380" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-title" parent="1" style="text;html=1;fontSize=14;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="STM (Short-Term Memory)" vertex="1">
+          <mxGeometry height="25" width="240" x="1390" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-desc" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="Session ID: 由 Event Handler 创建&lt;br&gt;三个 Agent 共享同一 Session" vertex="1">
+          <mxGeometry height="30" width="240" x="1390" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="240" x="1390" y="245" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data1-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="phase1_analysis" vertex="1">
+          <mxGeometry height="20" width="140" x="1400" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data1-writer" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=right;verticalAlign=top;fontColor=#147EBA;" value="Writer: Analyzer" vertex="1">
+          <mxGeometry height="15" width="85" x="1540" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data1-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="finding, resource_config,&lt;br&gt;asr_playbook, similar_experiences,&lt;br&gt;remediation_description" vertex="1">
+          <mxGeometry height="45" width="220" x="1400" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="240" x="1390" y="330" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data2-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="rollback_data" vertex="1">
+          <mxGeometry height="20" width="140" x="1400" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data2-writer" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=right;verticalAlign=top;fontColor=#ED7100;" value="Writer: Remediator" vertex="1">
+          <mxGeometry height="15" width="100" x="1525" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data2-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="pre_state: 修复前的资源配置&lt;br&gt;rollback_code: 回滚用 Python 代码" vertex="1">
+          <mxGeometry height="40" width="220" x="1400" y="355" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="240" x="1390" y="415" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data3-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="remediation_result" vertex="1">
+          <mxGeometry height="20" width="140" x="1400" y="420" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data3-writer" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=right;verticalAlign=top;fontColor=#ED7100;" value="Writer: Remediator" vertex="1">
+          <mxGeometry height="15" width="100" x="1525" y="420" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data3-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="generated_code: 生成的修复代码&lt;br&gt;execution_result: 执行结果" vertex="1">
+          <mxGeometry height="40" width="220" x="1400" y="440" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="240" x="1390" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data4-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="experience_events" vertex="1">
+          <mxGeometry height="20" width="140" x="1400" y="505" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data4-writer" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=right;verticalAlign=top;fontColor=#8B5CF6;" value="Writer: Validator" vertex="1">
+          <mxGeometry height="15" width="90" x="1535" y="505" as="geometry" />
+        </mxCell>
+        <mxCell id="stm-data4-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="对话格式 (USER/ASSISTANT/TOOL)&lt;br&gt;→ Memory 异步提取为 LTM Episodes" vertex="1">
+          <mxGeometry height="40" width="220" x="1400" y="525" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="260" width="260" x="1380" y="610" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-title" parent="1" style="text;html=1;fontSize=14;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="LTM (Long-Term Memory)" vertex="1">
+          <mxGeometry height="25" width="240" x="1390" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-ns" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=center;verticalAlign=top;" value="Namespace: /remediation/actors/{accountId}/" vertex="1">
+          <mxGeometry height="20" width="240" x="1390" y="645" as="geometry" />
+        </mxCell>
+        <mxCell id="episodes-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B85450;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="85" width="240" x="1390" y="675" as="geometry" />
+        </mxCell>
+        <mxCell id="episodes-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Episodes (执行记录)" vertex="1">
+          <mxGeometry height="20" width="150" x="1400" y="680" as="geometry" />
+        </mxCell>
+        <mxCell id="episodes-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 具体的修复执行案例&lt;br&gt;• 索引字段: intent (意图描述)&lt;br&gt;• 最小相关度: 0.35" vertex="1">
+          <mxGeometry height="45" width="220" x="1400" y="700" as="geometry" />
+        </mxCell>
+        <mxCell id="reflections-box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#B85450;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="75" width="240" x="1390" y="770" as="geometry" />
+        </mxCell>
+        <mxCell id="reflections-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Reflections (方法论)" vertex="1">
+          <mxGeometry height="20" width="150" x="1400" y="775" as="geometry" />
+        </mxCell>
+        <mxCell id="reflections-content" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 抽象的修复模式和最佳实践&lt;br&gt;• 索引字段: use_cases (适用场景)&lt;br&gt;• 最小相关度: 0.5" vertex="1">
+          <mxGeometry height="45" width="220" x="1400" y="795" as="geometry" />
+        </mxCell>
+        <mxCell id="ltm-rw" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=center;verticalAlign=top;fontColor=#B85450;" value="Read: Analyzer (search)&lt;br&gt;Write: Memory 异步从 STM 提取" vertex="1">
+          <mxGeometry height="30" width="240" x="1390" y="895" as="geometry" />
+        </mxCell>
+        <mxCell id="validator-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E6D9F2;strokeColor=#8B5CF6;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="200" width="1260" x="40" y="1030" as="geometry" />
+        </mxCell>
+        <mxCell id="validator-title" parent="1" style="text;html=1;fontSize=16;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;fillColor=#8B5CF6;fontColor=#FFFFFF;rounded=1;" value="Validator Agent (验证智能体) - via A2A from Remediator" vertex="1">
+          <mxGeometry height="35" width="450" x="60" y="1050" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="190" x="60" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step1-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#8B5CF6;fontColor=#FFFFFF;fontStyle=1;fontSize=10;fontFamily=Noto Sans JP;" value="1" vertex="1">
+          <mxGeometry height="20" width="20" x="70" y="1110" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step1-text" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="get_remediation_result&lt;br&gt;从 STM 获取代码和结果" vertex="1">
+          <mxGeometry height="40" width="150" x="95" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE6CC;strokeColor=#D79B00;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="190" x="265" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step2-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#8B5CF6;fontColor=#FFFFFF;fontStyle=1;fontSize=10;fontFamily=Noto Sans JP;" value="2" vertex="1">
+          <mxGeometry height="20" width="20" x="275" y="1110" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step2-text" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="review_code_security&lt;br&gt;LLM 全面代码审查" vertex="1">
+          <mxGeometry height="40" width="150" x="300" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6EFCE;strokeColor=#1E8900;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="190" x="470" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step3-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#8B5CF6;fontColor=#FFFFFF;fontStyle=1;fontSize=10;fontFamily=Noto Sans JP;" value="3" vertex="1">
+          <mxGeometry height="20" width="20" x="480" y="1110" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step3-text" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="verify_resource_state&lt;br&gt;验证资源达到安全配置" vertex="1">
+          <mxGeometry height="40" width="150" x="505" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DAE8FC;strokeColor=#6C8EBF;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="190" x="675" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step4-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#8B5CF6;fontColor=#FFFFFF;fontStyle=1;fontSize=10;fontFamily=Noto Sans JP;" value="4" vertex="1">
+          <mxGeometry height="20" width="20" x="685" y="1110" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step4-text" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="update_security_hub&lt;br&gt;Finding → RESOLVED/NEW" vertex="1">
+          <mxGeometry height="40" width="150" x="710" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8CECC;strokeColor=#B85450;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="190" x="880" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step5-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#8B5CF6;fontColor=#FFFFFF;fontStyle=1;fontSize=10;fontFamily=Noto Sans JP;" value="5" vertex="1">
+          <mxGeometry height="20" width="20" x="890" y="1110" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step5-text" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="save_experience_to_ltm&lt;br&gt;保存到 STM → 异步提取 LTM" vertex="1">
+          <mxGeometry height="40" width="160" x="910" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF2CC;strokeColor=#D6B656;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="50" width="190" x="1085" y="1100" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step6-num" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#8B5CF6;fontColor=#FFFFFF;fontStyle=1;fontSize=10;fontFamily=Noto Sans JP;" value="6" vertex="1">
+          <mxGeometry height="20" width="20" x="1095" y="1110" as="geometry" />
+        </mxCell>
+        <mxCell id="val-step6-text" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=middle;" value="trigger_result_email&lt;br&gt;发送结果邮件 (含回滚链接)" vertex="1">
+          <mxGeometry height="40" width="150" x="1120" y="1105" as="geometry" />
+        </mxCell>
+        <mxCell id="val-logic" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#8B5CF6;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="55" width="600" x="60" y="1165" as="geometry" />
+        </mxCell>
+        <mxCell id="val-logic-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Validation Logic" vertex="1">
+          <mxGeometry height="20" width="120" x="70" y="1170" as="geometry" />
+        </mxCell>
+        <mxCell id="val-logic-content" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• is_rollback=false: 验证资源达到安全配置 → Finding RESOLVED → 保存 LTM → 邮件含回滚链接&lt;br&gt;• is_rollback=true: 验证恢复到 pre_state → Finding NEW → 不保存 LTM → 邮件不含回滚链接" vertex="1">
+          <mxGeometry height="30" width="580" x="70" y="1185" as="geometry" />
+        </mxCell>
+        <mxCell id="ci-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C6EFCE;strokeColor=#1E8900;strokeWidth=2;" value="" vertex="1">
+          <mxGeometry height="55" width="600" x="680" y="1165" as="geometry" />
+        </mxCell>
+        <mxCell id="ci-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Code Interpreter (Sandbox)" vertex="1">
+          <mxGeometry height="20" width="200" x="695" y="1170" as="geometry" />
+        </mxCell>
+        <mxCell id="ci-content" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="• 隔离的 Python 执行环境，支持 Session 复用 (close_session=False)&lt;br&gt;• 执行失败可在同一 Session 重试 (max 2 retries)，保持 import 和变量状态" vertex="1">
+          <mxGeometry height="30" width="570" x="695" y="1184" as="geometry" />
+        </mxCell>
+        <mxCell id="flow1" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#147EBA;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="660" y="690" />
+              <mxPoint x="660" y="285" />
+            </Array>
+            <mxPoint x="620" y="690" as="sourcePoint" />
+            <mxPoint x="1390" y="285" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="flow1-label" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fontColor=#147EBA;" value="save_analysis_result" vertex="1">
+          <mxGeometry height="20" width="120" x="660" y="260" as="geometry" />
+        </mxCell>
+        <mxCell id="flow2" edge="1" parent="1" source="rem-step5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#ED7100;endArrow=classic;exitX=1;exitY=0.5;entryX=0;entryY=0.5;exitDx=0;exitDy=0;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1330" y="592" />
+              <mxPoint x="1330" y="370" />
+            </Array>
+            <mxPoint x="1270" y="560" as="sourcePoint" />
+            <mxPoint x="1390" y="370" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="flow2-label" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fontColor=#ED7100;" value="save_rollback&lt;br&gt;save_result" vertex="1">
+          <mxGeometry height="30" width="70" x="1320" y="420" as="geometry" />
+        </mxCell>
+        <mxCell id="flow3" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#B85450;endArrow=classic;dashed=1;exitX=0;exitY=0.5;entryX=1;entryY=0.5;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="750" />
+              <mxPoint x="650" y="500" />
+            </Array>
+            <mxPoint x="1390" y="750" as="sourcePoint" />
+            <mxPoint x="620" y="500" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="flow3-label" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fontColor=#B85450;" value="search LTM" vertex="1">
+          <mxGeometry height="20" width="70" x="660" y="570" as="geometry" />
+        </mxCell>
+        <mxCell id="approval-arrow" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#D6B656;endArrow=classic;exitX=1;exitY=0.5;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="680" y="935" />
+              <mxPoint x="680" y="350" />
+              <mxPoint x="730" y="350" />
+            </Array>
+            <mxPoint x="640" y="935" as="sourcePoint" />
+            <mxPoint x="730" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="approval-arrow-label" parent="1" style="text;html=1;fontSize=10;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fontColor=#D6B656;" value="User Approval" vertex="1">
+          <mxGeometry height="20" width="90" x="650" y="320" as="geometry" />
+        </mxCell>
+        <mxCell id="a2a-arrow" edge="1" parent="1" source="a2a-call" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;strokeColor=#8B5CF6;endArrow=classic;dashed=1;exitX=0;exitY=0.5;entryX=0.5;entryY=0;exitDx=0;exitDy=0;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="660" y="906" />
+            </Array>
+            <mxPoint x="720" y="875" as="sourcePoint" />
+            <mxPoint x="660" y="1030" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a2a-arrow-label" parent="1" style="text;html=1;fontSize=10;fontStyle=1;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fontColor=#8B5CF6;" value="A2A" vertex="1">
+          <mxGeometry height="20" width="40" x="620" y="940" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-bg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#232F3E;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="70" width="260" x="1390" y="1160" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-title" parent="1" style="text;html=1;fontSize=11;fontStyle=1;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="Legend" vertex="1">
+          <mxGeometry height="20" width="60" x="1400" y="1165" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-items" parent="1" style="text;html=1;fontSize=10;fontFamily=Noto Sans JP;align=left;verticalAlign=top;" value="🔵 Analyzer &amp;nbsp; 🟠 Remediator &amp;nbsp; 🟣 Validator&lt;br&gt;🟢 Execution/MCP &amp;nbsp; 🔴 LTM &amp;nbsp; 🟡 Approval" vertex="1">
+          <mxGeometry height="40" width="240" x="1400" y="1185" as="geometry" />
+        </mxCell>
+        <mxCell id="KlrJJI8yTY63JDqRqegT-3" parent="1" style="text;html=1;fontSize=9;fontFamily=Noto Sans JP;align=center;verticalAlign=middle;fontColor=light-dark(#6446aa, #d86d0c);" value="save validation&lt;br&gt;result" vertex="1">
+          <mxGeometry height="30" width="70" x="1330" y="562.5" as="geometry" />
+        </mxCell>
+        <mxCell id="KlrJJI8yTY63JDqRqegT-2" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fillColor=#6a00ff;strokeColor=light-dark(#674ab5, #efc0ff);strokeWidth=2;" target="stm-data4" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="990" y="1060" />
+              <mxPoint x="1340" y="1060" />
+              <mxPoint x="1340" y="538" />
+            </Array>
+            <mxPoint x="990" y="1100" as="sourcePoint" />
+            <mxPoint x="1380" y="1130" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
