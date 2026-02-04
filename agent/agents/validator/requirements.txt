@@ -22,3 +22,7 @@ botocore>=1.34.0
 # Utilities
 python-json-logger>=2.0.0
 tenacity>=8.2.0
+
+# Security: Pinned versions to fix vulnerabilities
+# CVE-2026-0994: DoS vulnerability in protobuf json_format.ParseDict()
+protobuf>=6.33.5
