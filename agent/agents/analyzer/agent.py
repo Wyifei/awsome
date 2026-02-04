@@ -812,7 +812,6 @@ get_service_metadata(
             "service_info": analysis_data.get('service_info', {}),
             "vulnerabilities": analysis_data.get('vulnerabilities', []),
             "file_changes": analysis_data.get('file_changes', []),
-            "pr_metadata": analysis_data.get('pr_metadata', {}),
             "remediation": analysis_data.get('remediation', {}),
             "raw_response": response_text
         }

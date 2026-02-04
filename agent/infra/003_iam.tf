@@ -300,6 +300,52 @@ resource "aws_iam_role_policy" "lambda_self_invoke" {
 }
 
 #------------------------------------------------------------------------------
+# Amazon Inspector Access Policy (容器漏洞查询)
+#------------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "inspector_access" {
+  statement {
+    sid    = "InspectorAccess"
+    effect = "Allow"
+    actions = [
+      "inspector2:ListFindings",
+      "inspector2:GetFindingsReportStatus",
+      "inspector2:ListCoverage",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "inspector_access" {
+  name   = "inspector-access"
+  role   = aws_iam_role.lambda_execution.id
+  policy = data.aws_iam_policy_document.inspector_access.json
+}
+
+#------------------------------------------------------------------------------
+# Secrets Manager Access Policy (获取 GitHub PAT)
+#------------------------------------------------------------------------------
+
+data "aws_iam_policy_document" "secrets_manager_access" {
+  statement {
+    sid    = "SecretsManagerAccess"
+    effect = "Allow"
+    actions = [
+      "secretsmanager:GetSecretValue",
+    ]
+    resources = [
+      "arn:aws:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:shara/*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "secrets_manager_access" {
+  name   = "secrets-manager-access"
+  role   = aws_iam_role.lambda_execution.id
+  policy = data.aws_iam_policy_document.secrets_manager_access.json
+}
+
+#------------------------------------------------------------------------------
 # X-Ray Tracing Policy
 #------------------------------------------------------------------------------
 
