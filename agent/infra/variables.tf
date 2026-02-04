@@ -180,3 +180,15 @@ variable "approval_expiry_hours" {
   type        = number
   default     = 24
 }
+
+variable "github_owner" {
+  description = "GitHub owner/organization for container vulnerability remediation"
+  type        = string
+  default     = "Wyifei"
+}
+
+variable "github_repo" {
+  description = "GitHub repository name for container vulnerability remediation"
+  type        = string
+  default     = "awsome"
+}

@@ -39,8 +39,9 @@ MEMORY_ID = os.environ.get('AGENTCORE_MEMORY_ID', '')
 ANALYZER_RUNTIME_ARN = os.environ.get('ANALYZER_RUNTIME_ARN', '')  # Analyzer Agent Runtime ARN
 STAGE = os.environ.get('STAGE', 'dev')
 REGION = os.environ.get('AWS_REGION', 'us-east-1')
-# GitHub 配置 (用于容器漏洞修复的动态仓库搜索)
+# GitHub 配置 (用于容器漏洞修复)
 GITHUB_OWNER = os.environ.get('GITHUB_OWNER', 'Wyifei')  # GitHub 用户名/组织名
+GITHUB_REPO = os.environ.get('GITHUB_REPO', 'awsome')  # GitHub 仓库名 (直接指定，避免动态搜索)
 APPROVAL_EMAIL = os.environ.get('APPROVAL_EMAIL', '')  # 审批者邮箱
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')  # 发件人邮箱
 API_GATEWAY_URL = os.environ.get('API_GATEWAY_URL', '')  # API Gateway URL
@@ -1763,8 +1764,9 @@ def run_phase1_container_analysis(
             'summary': summary,
             'memory_session_id': memory_session_id,
             'actor_id': actor_id,
-            # GitHub 配置 (仅传 owner，repo 由 Agent 动态搜索)
-            'github_owner': GITHUB_OWNER
+            # GitHub 配置 (直接指定 repo，避免动态搜索失败)
+            'github_owner': GITHUB_OWNER,
+            'github_repo': GITHUB_REPO
         }
 
         # 使用 boto3 调用 AgentCore Runtime

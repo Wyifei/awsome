@@ -99,6 +99,9 @@ resource "aws_lambda_function" "event_handler" {
       APPROVAL_EXPIRY_HOURS  = tostring(var.approval_expiry_hours)
       STAGE                  = var.stage
       LOG_LEVEL              = var.stage == "prod" ? "INFO" : "DEBUG"
+      # GitHub 配置 (容器漏洞修复)
+      GITHUB_OWNER           = var.github_owner
+      GITHUB_REPO            = var.github_repo
     }
   }
 
