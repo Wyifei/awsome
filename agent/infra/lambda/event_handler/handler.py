@@ -880,6 +880,7 @@ def process_container_cve_finding(finding: dict, classification: dict, context) 
     try:
         analysis_result = run_phase1_container_analysis(
             task_id=task_id,
+            finding=finding,
             container_details=container_details,
             vulnerabilities=aggregated['vulnerabilities'],
             summary=aggregated['summary'],
@@ -1721,6 +1722,7 @@ def _fallback_analysis(task_id: str, finding: dict, control_id: str) -> dict:
 
 def run_phase1_container_analysis(
     task_id: str,
+    finding: dict,
     container_details: dict,
     vulnerabilities: list,
     summary: dict,
@@ -1731,6 +1733,7 @@ def run_phase1_container_analysis(
 
     Args:
         task_id: 任务 ID
+        finding: Security Hub Finding (ASFF 格式)
         container_details: 容器镜像详情
         vulnerabilities: 聚合后的漏洞列表
         summary: 漏洞摘要
@@ -1742,13 +1745,14 @@ def run_phase1_container_analysis(
     """
     if not ANALYZER_RUNTIME_ARN:
         logger.warning("ANALYZER_RUNTIME_ARN not configured, using fallback")
-        return _fallback_container_analysis(task_id, container_details, vulnerabilities, summary)
+        return _fallback_container_analysis(task_id, finding, container_details, vulnerabilities, summary)
 
     try:
         # 构建 Agent 输入 (容器漏洞专用格式)
         agent_input = {
             'task_id': task_id,
             'remediation_type': 'github_pr',  # 标记为 GitHub PR 修复流程
+            'finding': finding,  # 传递完整的 Security Hub Finding
             'container': container_details,
             'vulnerabilities': vulnerabilities,
             'summary': summary,
@@ -1829,6 +1833,7 @@ def run_phase1_container_analysis(
 
 def _fallback_container_analysis(
     task_id: str,
+    finding: dict,
     container_details: dict,
     vulnerabilities: list,
     summary: dict
