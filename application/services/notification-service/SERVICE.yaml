@@ -1,0 +1,47 @@
+name: notification-service
+description: Email notification microservice via AWS SES
+type: container
+team: application
+
+container:
+  ecr_pattern: "notification-service"
+  dockerfile: ./Dockerfile
+  base_image: public.ecr.aws/docker/library/amazoncorretto:21-alpine
+  port: 8080
+  health_check: /actuator/health
+
+language: java
+framework: spring-boot
+runtime: java21
+
+dependencies:
+  - path: ./pom.xml
+    type: maven
+    description: Maven project dependencies
+
+vulnerability_remediation:
+  base_image:
+    file: ./Dockerfile
+    pattern: "FROM public.ecr.aws/docker/library/amazoncorretto:21-alpine"
+    line_prefix: "FROM"
+  packages:
+    - file: ./pom.xml
+      type: maven
+      format: "<version>{version}</version>"
+      xpath: "//dependency[groupId='{groupId}' and artifactId='{artifactId}']/version"
+
+deployment:
+  platform: eks
+  namespace: application
+  replicas: 2
+
+integrations:
+  - aws-ses
+
+tags:
+  - microservice
+  - notification
+  - email
+  - spring-boot
+  - eks
+  - aws-ses

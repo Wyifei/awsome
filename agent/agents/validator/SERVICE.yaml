@@ -1,0 +1,36 @@
+name: validator
+description: AI agent that validates remediation results and sends approval requests
+type: container
+team: platform
+
+container:
+  ecr_pattern: "shara-validator"
+  dockerfile: ./Dockerfile
+  base_image: python:3.12-slim
+  port: 8082
+  health_check: /ping
+
+language: python
+framework: fastapi
+runtime: python3.12
+
+dependencies:
+  - path: ./requirements.txt
+    type: pip
+    description: Python package dependencies
+
+vulnerability_remediation:
+  base_image:
+    file: ./Dockerfile
+    pattern: "FROM python:3.12-slim"
+    line_prefix: "FROM"
+  packages:
+    - file: ./requirements.txt
+      type: pip
+      format: "{package}=={version}"
+
+tags:
+  - ai-agent
+  - security
+  - bedrock-agentcore
+  - approval-workflow
