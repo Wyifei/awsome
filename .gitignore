@@ -95,3 +95,6 @@ logs/
 
 repo/
 agent/.venv/
+
+# ===== Test files with sensitive data =====
+agent/agents/test/

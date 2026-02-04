@@ -1,7 +1,0 @@
-TASK_ID="test-1770027471"
-MEMORY_SESSION_ID="session-task-test-1770027471"
-ACTOR_ID="870414140965"
-CONTROL_ID="S3.1"
-FINDING_ID="arn:aws:securityhub:ap-northeast-1:870414140965:finding/test-finding-id"
-RESOURCE_ARN="arn:aws:s3:::test-agent-bucket-870414140965"
-RESOURCE_TYPE="AwsS3Bucket"
