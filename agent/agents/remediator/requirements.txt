@@ -25,3 +25,6 @@ tenacity>=8.2.0
 
 # MCP Client (for GitHub integration)
 mcp>=1.0.0
+
+# Security fixes - pinned versions to address vulnerabilities
+protobuf>=6.33.5
