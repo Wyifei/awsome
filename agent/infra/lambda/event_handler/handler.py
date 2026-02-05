@@ -1473,9 +1473,9 @@ def format_github_pr_approval_email(
     critical_count = sum(1 for v in vulnerabilities if v.get('severity') == 'CRITICAL')
     high_count = sum(1 for v in vulnerabilities if v.get('severity') == 'HIGH')
 
-    # 构建漏洞列表 HTML
+    # 构建漏洞列表 HTML - 显示所有漏洞
     vuln_rows = ''
-    for v in vulnerabilities[:10]:  # 最多显示 10 个
+    for v in vulnerabilities:  # 显示所有漏洞
         severity = v.get('severity', 'UNKNOWN')
         severity_color = '#dc3545' if severity == 'CRITICAL' else '#fd7e14' if severity == 'HIGH' else '#6c757d'
         # 兼容两种字段名：installed_version (Analyzer) 和 current_version (旧格式)
@@ -1488,8 +1488,6 @@ def format_github_pr_approval_email(
                 <td style="padding:8px;border-bottom:1px solid #eee;"><code>{current_ver}</code> → <code style="color:#28a745;">{v.get('fixed_version', 'N/A')}</code></td>
             </tr>
 '''
-    if total_vulns > 10:
-        vuln_rows += f'<tr><td colspan="4" style="padding:8px;color:#666;text-align:center;">... 还有 {total_vulns - 10} 个漏洞</td></tr>'
 
     # 构建文件变更列表
     file_changes_html = ''
@@ -1953,7 +1951,7 @@ def _fallback_container_analysis(
                 'body': f"## Summary\n\nUpdate dependencies to fix {summary['total']} vulnerabilities "
                         f"({summary['critical']} CRITICAL, {summary['high']} HIGH).\n\n"
                         f"## CVEs Fixed\n\n" +
-                        '\n'.join([f"- {v['cve_id']} ({v['severity']}) - {v['package_name']}" for v in vulnerabilities[:10]]),
+                        '\n'.join([f"- {v['cve_id']} ({v['severity']}) - {v['package_name']}" for v in vulnerabilities]),
                 'branch_name': f"fix/container-cve-{container_details.get('ecr_repository', 'unknown')[:20]}",
                 'base_branch': 'main'
             },

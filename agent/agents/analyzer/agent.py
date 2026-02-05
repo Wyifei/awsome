@@ -725,44 +725,53 @@ def run_container_analyzer(
             "fixed_version": vuln.get("fixed_version"),
         })
 
+    # 统计受影响的包（去重）
+    affected_packages = list(set(v.get("package_name", "") for v in aggregated_vulnerabilities if v.get("package_name")))
+    critical_count = sum(1 for v in aggregated_vulnerabilities if v.get("severity") == "CRITICAL")
+    high_count = sum(1 for v in aggregated_vulnerabilities if v.get("severity") == "HIGH")
+
     prompt = f"""
 Analyze this Container Vulnerability Finding and generate a GitHub PR remediation plan:
 
 **Task ID:** {task_id}
 **Remediation Type:** github_pr
 
+**⚠️⚠️⚠️ 关键指令 - 必须首先执行 ⚠️⚠️⚠️**
+
+**步骤 1 [强制 - 必须首先执行]: 搜索容器清单**
+调用 search_container_inventory 工具定位源代码:
+```
+search_container_inventory(
+  ecr_repository="{repo_name}",
+  github_owner="{github_owner}"{"," if github_repo else ""}
+  {f'github_repo="{github_repo}"' if github_repo else "# github_repo 留空，工具会自动通过 GitHub Code Search 查找"}
+)
+```
+⚠️ 如果返回 found=false，设置 can_remediate=false 并说明原因。
+⚠️ 如果搜索成功，记住返回的 `github_repo` 和 `path` 值，后续步骤需要使用。
+
+---
+
 **Container Information:**
 - ECR Repository: {repo_name}
 - Image Tag: {image_tag}
 - Image Digest: {image_digest}
 
-**Aggregated Vulnerabilities ({len(aggregated_vulnerabilities)} total):**
+**GitHub Configuration:**
+- Owner: {github_owner}
+- Repo: {github_repo if github_repo else "(需要通过步骤 1 动态搜索)"}
+
+**Vulnerability Summary ({len(aggregated_vulnerabilities)} total: {critical_count} CRITICAL, {high_count} HIGH):**
+- Affected Packages: {', '.join(affected_packages[:10])}{'...' if len(affected_packages) > 10 else ''}
+
+**Full Vulnerability List (for reference):**
 ```json
 {json.dumps(vuln_summary, indent=2, default=str)}
 ```
 
-**Finding (ASFF Format):**
-```json
-{json.dumps(finding, indent=2, default=str)}
-```
+---
 
-**GitHub Configuration:**
-- Owner: {github_owner}
-- Repo: {github_repo if github_repo else "(动态搜索 - 将通过 GitHub Code Search 自动发现)"}
-
-**⚠️ 必须按以下顺序执行工具调用 (GitHub PR 模式):**
-
-**步骤 1 [强制]: 搜索容器清单**
-调用 search_container_inventory 工具:
-```
-search_container_inventory(
-  ecr_repository="{repo_name}",
-  github_owner="{github_owner}"{"," if github_repo else ""}
-  {f'github_repo="{github_repo}"' if github_repo else "# github_repo 留空，工具会自动通过 GitHub Code Search 查找包含此 ECR 镜像的仓库"}
-)
-```
-如果返回 found=false，设置 can_remediate=false 并说明原因。
-**重要**: 如果搜索成功，记住返回的 `github_repo` 值，后续步骤需要使用。
+**继续执行以下步骤:**
 
 **步骤 2: 读取服务元数据**
 如果步骤 1 找到匹配的服务，调用 get_service_metadata:

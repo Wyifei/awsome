@@ -658,17 +658,41 @@ def search_repo_for_container(
 
             # 搜索包含该 ECR 名称的 container-inventory.json 文件
             # 使用 GitHub 代码搜索语法
-            search_query = f"{ecr_repository} filename:container-inventory.json user:{github_owner}"
+            # ECR 名称可能包含前缀 (如 auth-platform-production/user-service)
+            # 需要同时尝试完整名称和基础名称
+            search_names = [ecr_repository]
+            if "/" in ecr_repository:
+                # 提取最后一段作为基础名称 (user-service)
+                base_name = ecr_repository.split("/")[-1]
+                search_names.append(base_name)
+                logger.info(f"[GitHub MCP] ECR has prefix, will also search for base name: {base_name}")
 
-            with mcp_client:
-                result = mcp_client.call_tool_sync(
-                    tool_use_id=f"search-code-{datetime.now(timezone.utc).timestamp()}",
-                    name="search_code",
-                    arguments={
-                        "query": search_query,
-                        "perPage": 5
-                    }
-                )
+            result = None
+            for search_name in search_names:
+                search_query = f"{search_name} filename:container-inventory.json user:{github_owner}"
+                logger.info(f"[GitHub MCP] Searching with query: {search_query}")
+
+                with mcp_client:
+                    result = mcp_client.call_tool_sync(
+                        tool_use_id=f"search-code-{datetime.now(timezone.utc).timestamp()}",
+                        name="search_code",
+                        arguments={
+                            "query": search_query,
+                            "perPage": 5
+                        }
+                    )
+
+                # 检查是否找到结果
+                if result.get("status") == "success":
+                    content_text = result.get("content", [{}])[0].get("text", "")
+                    try:
+                        search_data = json.loads(content_text)
+                        items = search_data.get("items", [])
+                        if items and len(items) > 0:
+                            logger.info(f"[GitHub MCP] Found match with search name: {search_name}")
+                            break  # 找到结果，退出循环
+                    except json.JSONDecodeError:
+                        pass
 
             if result.get("status") == "success":
                 content_text = result.get("content", [{}])[0].get("text", "")
@@ -817,8 +841,17 @@ def search_container_inventory(
         containers = inventory.get("containers", [])
         for container in containers:
             ecr_pattern = container.get("ecr_pattern", "")
-            # 支持精确匹配和模式匹配
-            if ecr_pattern and (ecr_pattern == ecr_repository or ecr_repository.endswith(ecr_pattern)):
+            if not ecr_pattern:
+                continue
+            # 支持多种匹配方式：
+            # 1. 精确匹配: user-service == user-service
+            # 2. 带前缀匹配: auth-platform-production/user-service 匹配 user-service
+            #    检查以 /<pattern> 结尾，避免 admin-user-service 错误匹配 user-service
+            is_match = (
+                ecr_pattern == ecr_repository or  # 精确匹配
+                ecr_repository.endswith(f"/{ecr_pattern}")  # 带前缀匹配
+            )
+            if is_match:
                 logger.info(f"[GitHub MCP] Found matching service: {container.get('name')}")
                 return {
                     "success": True,
