@@ -108,70 +108,33 @@ print(json.dumps(result, default=str))
 # GitHub PR 模式 System Prompt (容器漏洞修复)
 # ============================================================
 GITHUB_PR_REMEDIATOR_SYSTEM_PROMPT = """# 角色
-你是 SHARA (Security Hub Auto-Remediation Agent) 的修复智能体。
-你的任务是根据第一阶段的分析结果创建 GitHub Pull Request 修复容器漏洞。
+你是 SHARA 的修复智能体，负责创建 GitHub PR 修复容器漏洞。
 
-# 重要约束
-- 你在人工审批通过后执行
-- **不执行代码**，只创建 GitHub PR
-- 所有漏洞将在一个 PR 中统一修复
-- **执行完成后必须调用 Validator Agent**
+# ⚠️ 关键约束
+- **直接执行，不要验证** - Analyzer 已验证文件，你只需使用 file_changes 数据
+- **不使用 read_github_file** - 不需要验证文件内容
+- **不使用 execute_code** - PR 工作流不执行代码
+- **必须调用 Validator** - 完成后必须调用 invoke_validator_agent
 
-# 可用工具
-- **get_analysis_context**: 获取 Phase 1 分析结果
-- **read_github_file**: 读取 GitHub 仓库中的文件
-- **create_github_branch**: 创建修复分支
-- **push_files_to_github**: 推送文件变更
-- **create_pull_request**: 创建 Pull Request
-- **save_pr_result**: 保存 PR 结果到 Memory
-- **invoke_validator_agent**: 调用 Validator Agent
+# 可用工具 (按顺序使用)
+1. **get_analysis_context** - 获取 file_changes 和 service_info
+2. **create_github_branch** - 创建修复分支
+3. **push_files_to_github** - 推送文件变更
+4. **create_pull_request** - 创建 PR
+5. **save_pr_result** - 保存 PR 结果
+6. **invoke_validator_agent** - 调用 Validator
 
-# 执行流程
+# 简化执行流程 (5 步)
+1. get_analysis_context → 获取 file_changes
+2. create_github_branch → 创建分支
+3. push_files_to_github → 使用 file_changes 的 suggested_content 推送
+4. create_pull_request → 创建 PR
+5. save_pr_result + invoke_validator_agent → 保存并验证
 
-## Phase A: 获取分析上下文
-1. **获取 Phase 1 分析结果**: 使用 get_analysis_context 工具
-   - 返回值包含 file_changes, pr_metadata, service_info, vulnerabilities
-
-## Phase B: 读取当前文件内容
-2. **读取需要修改的文件**: 使用 read_github_file 工具
-
-## Phase C: 创建分支和推送变更
-3. **创建修复分支**: 使用 create_github_branch 工具
-4. **推送文件变更**: 使用 push_files_to_github 工具
-   - commit message 根据漏洞数量生成
-
-## Phase D: 创建 Pull Request
-5. **创建 PR**: 使用 create_pull_request 工具
-
-## Phase E: 保存结果和通知
-6. **保存 PR 结果**: 使用 save_pr_result 工具
-7. **调用 Validator**: 使用 invoke_validator_agent 工具
-   - 传递 remediation_type: "github_pr"
-
-# 输出格式
-```json
-{
-  "phase1_context_retrieved": true,
-  "remediation_type": "github_pr",
-  "branch_created": "security/fix-my-service-cve-20240204",
-  "files_pushed": [...],
-  "pull_request": {
-    "number": 42,
-    "url": "https://github.com/owner/repo/pull/42",
-    "title": "[Security] 修复容器镜像漏洞",
-    "state": "open"
-  },
-  "pr_result_saved": true,
-  "validator_response": {...}
-}
-```
-
-# 注意事项
-- **不使用 execute_code**: PR 工作流不执行代码
-- **不使用 save_rollback_to_memory**: PR 可以通过关闭来回滚
-- **不使用 pre_execution_check**: PR 内容由人工 Review
-- **必须保存 PR 结果**: 使用 save_pr_result
-- **必须调用 Validator**: 使用 invoke_validator_agent
+# 注意
+- file_changes 包含所有需要修改的文件和新内容
+- 直接使用 suggested_content，不需要验证
+- PR 标题和描述使用中文
 """
 
 # 向后兼容
@@ -589,108 +552,115 @@ def run_github_pr_remediator(
         dict: 执行结果
     """
     prompt = f"""
+**⚠️⚠️⚠️ 简化工作流 - 直接执行，不要验证 ⚠️⚠️⚠️**
+
 执行容器漏洞的 GitHub PR 修复:
 
 **任务 ID:** {task_id}
-**修复类型:** github_pr
-**资源 ARN:** {resource_arn}
-**Finding ID:** {finding_id}
 **GitHub 仓库:** {github_owner}/{github_repo}
 
-**重要: 严格按照 GitHub PR 工作流执行。不要使用 execute_code。**
+**重要约束:**
+- 严格按顺序执行以下 5 个步骤
+- **不要**使用 read_github_file 验证文件（Analyzer 已验证）
+- **不要**使用 execute_code
+- 使用中文编写 PR 标题和描述
 
-**⚠️ 语言要求: PR 标题、描述、commit message 必须使用中文！**
+---
 
-**执行步骤:**
+**步骤 1 [必须首先执行]: 获取分析上下文**
+```
+get_analysis_context(task_id="{task_id}")
+```
+返回内容包含: file_changes, service_info, vulnerabilities
+⚠️ 记住 file_changes 的内容，后续步骤需要使用
 
-**阶段 A: 获取分析上下文**
-1. 使用 get_analysis_context 工具获取 Phase 1 分析结果
-   - task_id: {task_id}
-   - 返回内容: file_changes, service_info, vulnerabilities
+---
 
-**阶段 B: 验证当前文件**
-2. 对于 file_changes 中的每个文件，使用 read_github_file 验证:
-   - owner: {github_owner}
-   - repo: {github_repo}
-   - path: file_changes[].path
+**步骤 2: 创建修复分支**
+```
+create_github_branch(
+  owner="{github_owner}",
+  repo="{github_repo}",
+  branch="security/fix-<服务名>-<日期>"
+)
+```
 
-**阶段 C: 创建分支并推送变更**
-3. 使用 create_github_branch 创建修复分支:
-   - owner: {github_owner}
-   - repo: {github_repo}
-   - branch: 格式为 "security/fix-服务名-cve-日期" (如 "security/fix-analyzer-cve-20240204")
+---
 
-4. 使用 push_files_to_github 推送文件变更:
-   - owner: {github_owner}
-   - repo: {github_repo}
-   - branch: 步骤 3 创建的分支
-   - files: 使用 file_changes[].suggested_content 构建 {{path, content}} 数组
-   - message: **必须中文**，格式如:
-     - 单漏洞: "fix(security): 升级 PACKAGE 修复 CVE-2024-xxxxx"
-     - 多漏洞: "fix(security): 升级依赖修复 N 个漏洞 (CVE-2024-xxx, CVE-2024-yyy)"
+**步骤 3: 推送文件变更**
+使用步骤 1 获取的 file_changes，构建 files 数组:
+```
+push_files_to_github(
+  owner="{github_owner}",
+  repo="{github_repo}",
+  branch="<步骤2创建的分支>",
+  files=[{{"path": "<file_changes[i].path>", "content": "<file_changes[i].suggested_content>"}}],
+  commit_message="fix(security): 升级依赖修复安全漏洞"
+)
+```
 
-**阶段 D: 创建 Pull Request**
-5. 使用 create_pull_request 创建 PR:
-   - owner: {github_owner}
-   - repo: {github_repo}
-   - title: **必须中文**，格式: "[安全] 修复 服务名 容器镜像漏洞 (N 个 CVE)"
-   - body: **必须中文**，包含以下内容:
-     ```
-     ## 概述
-     修复 服务名 容器镜像中的 N 个安全漏洞。
+---
 
-     ## 修复的漏洞
-     | CVE ID | 严重性 | 软件包 | 当前版本 | 修复版本 |
-     |--------|--------|--------|----------|----------|
-     | CVE-xxx | HIGH | package | 1.0.0 | 2.0.0 |
+**步骤 4: 创建 Pull Request**
+```
+create_pull_request(
+  owner="{github_owner}",
+  repo="{github_repo}",
+  title="[安全] 修复容器镜像漏洞",
+  body="## 概述\\n修复容器镜像中的安全漏洞。\\n\\n## 变更内容\\n- 升级存在漏洞的依赖包\\n\\n---\\n🤖 由 SHARA 自动生成",
+  head="<步骤2创建的分支>",
+  base="master"
+)
+```
 
-     ## 变更内容
-     - 更新 `path/to/file` 中的依赖版本
+---
 
-     ## 测试建议
-     - 构建镜像并运行测试
-     - 验证应用功能正常
+**步骤 5 [必须]: 保存结果并调用 Validator**
 
-     ---
-     🤖 由 SHARA 自动生成
-     ```
-   - head: 步骤 3 创建的分支
-   - base: "master"
+5a. 保存 PR 结果:
+```
+save_pr_result(
+  task_id="{task_id}",
+  resource_arn="{resource_arn}",
+  pr_info={{"pr_number": <PR编号>, "pr_url": "<PR链接>", "branch_name": "<分支名>", "title": "<PR标题>", "state": "open"}},
+  files_changed=[{{"path": "<文件路径>", "change_type": "modify", "description": "升级依赖"}}]
+)
+```
 
-**阶段 E: 保存结果并通知**
-6. 使用 save_pr_result 保存 PR 结果:
-   - task_id: {task_id}
-   - resource_arn: {resource_arn}
-   - pr_info: {{pr_number, pr_url, branch_name, title, state}}
-   - files_changed: {{path, change_type, description}} 列表
+5b. 调用 Validator:
+```
+invoke_validator_agent(
+  task_id="{task_id}",
+  resource_arn="{resource_arn}",
+  resource_type="AwsEcrContainerImage",
+  control_id="",
+  finding_id="{finding_id}",
+  memory_session_id="{memory_session_id}",
+  actor_id="{actor_id}",
+  is_rollback=false,
+  remediation_type="github_pr"
+)
+```
 
-7. **[必须]** 使用 invoke_validator_agent 调用 Validator:
-   - task_id: {task_id}
-   - resource_arn: {resource_arn}
-   - resource_type: "AwsEcrContainerImage"
-   - control_id: ""
-   - finding_id: {finding_id}
-   - memory_session_id: {memory_session_id}
-   - actor_id: {actor_id}
-   - is_rollback: false
-   - remediation_type: "github_pr"
+---
 
-**检查清单:**
-- [ ] 获取分析上下文? (步骤 1)
-- [ ] 验证文件内容? (步骤 2)
-- [ ] 创建分支? (步骤 3)
-- [ ] 推送文件? (步骤 4)
-- [ ] 创建 PR (中文标题和描述)? (步骤 5)
-- [ ] 保存 PR 结果? (步骤 6)
-- [ ] 调用 invoke_validator_agent? (步骤 7 - 必须)
+**执行检查清单:**
+1. ✅ get_analysis_context
+2. ✅ create_github_branch
+3. ✅ push_files_to_github
+4. ✅ create_pull_request
+5. ✅ save_pr_result + invoke_validator_agent
 
-返回 JSON 摘要，包含 branch_created, files_pushed, pull_request, pr_result_saved, validator_response。
+完成后返回简短 JSON 摘要。
 """
 
     logger.info(f"Running GitHub PR Remediator for task {task_id}")
+    logger.info(f"GitHub PR params: owner={github_owner}, repo={github_repo}, resource_arn={resource_arn}")
 
     try:
+        logger.info(f"Starting Agent execution for task {task_id}...")
         result = agent(prompt)
+        logger.info(f"Agent execution completed for task {task_id}")
 
         response_text = str(result.message) if hasattr(result, 'message') else str(result)
 
@@ -717,10 +687,15 @@ def run_github_pr_remediator(
         }
 
     except Exception as e:
+        import traceback
+        error_traceback = traceback.format_exc()
         logger.exception(f"GitHub PR Remediator failed for task {task_id}: {e}")
+        logger.error(f"Full traceback:\n{error_traceback}")
         return {
             "success": False,
             "task_id": task_id,
             "remediation_type": "github_pr",
-            "error": str(e)
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "traceback": error_traceback[:1000]  # 保留部分 traceback 供调试
         }

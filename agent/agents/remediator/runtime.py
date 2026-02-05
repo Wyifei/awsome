@@ -234,7 +234,24 @@ async def invocations(request: Request):
 
     except Exception as e:
         logger.exception(f"Invocation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        # 返回详细错误信息而不是抛出 HTTPException
+        # 这样 AgentCore Runtime 可以记录 response_payload
+        error_response = {
+            "success": False,
+            "task_id": task_id if 'task_id' in dir() else 'unknown',
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "metadata": {
+                "agent_type": "remediator",
+                "error": str(e)
+            }
+        }
+        from starlette.responses import Response
+        return Response(
+            content=json.dumps(error_response, ensure_ascii=False, default=str),
+            media_type="application/json; charset=utf-8",
+            status_code=500
+        )
 
 
 if __name__ == "__main__":

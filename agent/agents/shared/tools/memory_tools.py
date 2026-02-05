@@ -658,10 +658,15 @@ def get_analysis_context(task_id: str) -> dict:
                         # GitHub PR 模式额外字段
                         if data.get('vulnerabilities'):
                             result['vulnerabilities'] = data.get('vulnerabilities')
+                            logger.info(f"[get_analysis_context] Found {len(data.get('vulnerabilities', []))} vulnerabilities")
                         if data.get('service_info'):
                             result['service_info'] = data.get('service_info')
+                            logger.info(f"[get_analysis_context] Found service_info: {data.get('service_info', {}).get('name', 'unknown')}")
                         if data.get('file_changes'):
                             result['file_changes'] = data.get('file_changes')
+                            logger.info(f"[get_analysis_context] Found {len(data.get('file_changes', []))} file_changes")
+                        else:
+                            logger.warning(f"[get_analysis_context] No file_changes found in Phase 1 analysis!")
                         if data.get('remediation'):
                             result['remediation'] = data.get('remediation')
                         return result

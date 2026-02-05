@@ -65,11 +65,16 @@ def get_github_mcp_client():
     global _github_mcp_client
 
     if _github_mcp_client is None:
+        logger.info("[GitHub MCP] Initializing MCP Client (first call)...")
         try:
+            logger.info("[GitHub MCP] Importing MCP client dependencies...")
             from mcp.client.streamable_http import streamablehttp_client
             from strands.tools.mcp.mcp_client import MCPClient
+            logger.info("[GitHub MCP] MCP client dependencies imported successfully")
 
+            logger.info("[GitHub MCP] Getting GitHub PAT from Secrets Manager...")
             pat = get_github_pat()
+            logger.info(f"[GitHub MCP] GitHub PAT retrieved successfully (length: {len(pat) if pat else 0})")
 
             def transport_factory():
                 return streamablehttp_client(
@@ -78,13 +83,19 @@ def get_github_mcp_client():
                 )
 
             _github_mcp_client = MCPClient(transport_factory)
-            logger.info(f"GitHub MCP Client created successfully, endpoint: {GITHUB_MCP_URL}")
+            logger.info(f"[GitHub MCP] GitHub MCP Client created successfully, endpoint: {GITHUB_MCP_URL}")
         except ImportError as e:
-            logger.error(f"Failed to import MCP client dependencies: {e}")
+            logger.error(f"[GitHub MCP] Failed to import MCP client dependencies: {e}")
+            import traceback
+            logger.error(f"[GitHub MCP] Import traceback:\n{traceback.format_exc()}")
             raise
         except Exception as e:
-            logger.error(f"Failed to create GitHub MCP Client: {e}")
+            logger.error(f"[GitHub MCP] Failed to create GitHub MCP Client: {e}")
+            import traceback
+            logger.error(f"[GitHub MCP] Creation traceback:\n{traceback.format_exc()}")
             raise
+    else:
+        logger.debug("[GitHub MCP] Using existing MCP Client instance")
 
     return _github_mcp_client
 

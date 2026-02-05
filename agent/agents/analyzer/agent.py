@@ -237,9 +237,9 @@ GITHUB_PR_ANALYZER_SYSTEM_PROMPT = """# 角色
     {
       "path": "application/services/my-service/requirements.txt",
       "change_type": "modify",
-      "current_content": "requests==2.25.0",
-      "suggested_content": "requests>=2.32.0",
-      "description": "升级 requests 到安全版本"
+      "current_content": "# 原始完整文件内容\nrequests==2.25.0\nurllib3==1.26.0\nboto3>=1.34.0",
+      "suggested_content": "# 修改后的完整文件内容 (必须是完整文件！)\nrequests>=2.32.0\nurllib3>=2.0.0\nboto3>=1.34.0",
+      "description": "升级 requests 和 urllib3 到安全版本"
     }
   ],
   "remediation": {
@@ -258,7 +258,10 @@ GITHUB_PR_ANALYZER_SYSTEM_PROMPT = """# 角色
 # 注意事项
 1. **必须先确认服务存在**: search_container_inventory 必须返回 found: true
 2. **如果服务不在清单中**: 设置 can_remediate: false
-3. **file_changes 必须完整**: 包含修改前后的完整文件内容
+3. **⚠️ file_changes.suggested_content 必须是完整文件内容**:
+   - 不是单行修改，是整个文件的内容
+   - Remediator 会直接用这个内容创建 PR
+   - 先用 read_github_file 读取原文件，修改后作为 suggested_content
 4. **所有漏洞合并处理**: 不要为每个漏洞单独分析
 
 # 重要指南
@@ -791,7 +794,10 @@ get_service_metadata(
 **步骤 4: 分析漏洞并生成修复方案**
 ⚠️ **关键**: 所有漏洞将合并处理！
 - 分析所有 {len(aggregated_vulnerabilities)} 个漏洞，确定哪些依赖需要升级
-- 生成 file_changes 列表（可能包含多个文件修改，所有修复合并在一起）
+- 生成 file_changes 列表:
+  - **⚠️ suggested_content 必须是完整文件内容！**
+  - 基于步骤 3 读取的原文件，修改依赖版本后作为 suggested_content
+  - Remediator 会直接用 suggested_content 创建 PR，不会再次读取文件
 - 生成 remediation 对象，包含 can_remediate, summary, description 等
 
 **步骤 5 [强制]: 保存分析结果**
@@ -864,15 +870,44 @@ get_service_metadata(
             logger.warning(f"LLM did not return vulnerabilities, using original list ({len(aggregated_vulnerabilities)} items)")
             llm_vulnerabilities = aggregated_vulnerabilities
 
+        file_changes = analysis_data.get('file_changes', [])
+        service_info = analysis_data.get('service_info', {})
+        remediation = analysis_data.get('remediation', {})
+
+        # ⚠️ FALLBACK: 如果 LLM 没有正确调用 save_analysis_result 保存 file_changes，
+        # 我们在这里手动保存，确保 Remediator 能从 Memory 获取数据
+        if file_changes:
+            logger.info(f"[Container Analyzer] Ensuring analysis data is saved to Memory (file_changes count: {len(file_changes)})")
+            try:
+                # 调用 save_analysis_result 保存完整数据
+                save_result = save_analysis_result(
+                    task_id=task_id,
+                    analysis=analysis_data.get('analysis', {}),
+                    remediation_description=remediation.get('description', ''),
+                    finding=finding,
+                    vulnerabilities=llm_vulnerabilities,
+                    service_info=service_info,
+                    file_changes=file_changes,
+                    remediation=remediation
+                )
+                if save_result.get('success'):
+                    logger.info(f"[Container Analyzer] Analysis data saved to Memory successfully")
+                else:
+                    logger.warning(f"[Container Analyzer] Failed to save analysis to Memory: {save_result.get('error')}")
+            except Exception as save_error:
+                logger.warning(f"[Container Analyzer] Exception saving analysis to Memory: {save_error}")
+        else:
+            logger.warning(f"[Container Analyzer] No file_changes found in LLM response - Remediator may fail")
+
         return {
             "success": True,
             "task_id": task_id,
             "remediation_type": "github_pr",
             "analysis": analysis_data.get('analysis', {}),
-            "service_info": analysis_data.get('service_info', {}),
+            "service_info": service_info,
             "vulnerabilities": llm_vulnerabilities,
-            "file_changes": analysis_data.get('file_changes', []),
-            "remediation": analysis_data.get('remediation', {}),
+            "file_changes": file_changes,
+            "remediation": remediation,
             "raw_response": response_text
         }
 
