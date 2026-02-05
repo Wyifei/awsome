@@ -177,6 +177,10 @@ async def invocations(request: Request):
             remediation_type = prompt_data.get('remediation_type', 'auto')
             github_owner = prompt_data.get('github_owner', '')
             github_repo = prompt_data.get('github_repo', '')  # 可选，留空则动态搜索
+            # 容器 CVE 模式的额外参数 (从 Lambda 传入)
+            container_details = prompt_data.get('container', {})
+            vulnerabilities = prompt_data.get('vulnerabilities', [])
+            vulnerability_summary = prompt_data.get('summary', {})
         else:
             # 直接调用方式 (curl 或其他 HTTP 客户端)
             task_id = body.get('task_id', 'unknown')
@@ -187,6 +191,10 @@ async def invocations(request: Request):
             remediation_type = body.get('remediation_type', 'auto')  # auto 或 github_pr
             github_owner = body.get('github_owner', '')
             github_repo = body.get('github_repo', '')  # 可选，留空则动态搜索
+            # 容器 CVE 模式的额外参数
+            container_details = body.get('container', {})
+            vulnerabilities = body.get('vulnerabilities', [])
+            vulnerability_summary = body.get('summary', {})
 
         # 验证必需字段
         if not finding:
@@ -238,7 +246,11 @@ async def invocations(request: Request):
                 agent, finding, control_id, task_id,
                 remediation_type=remediation_type,
                 github_owner=github_owner,
-                github_repo=github_repo
+                github_repo=github_repo,
+                # 容器 CVE 模式的额外参数 (从 Lambda 传入的预聚合数据)
+                container_details=container_details,
+                vulnerabilities=vulnerabilities,
+                vulnerability_summary=vulnerability_summary
             )
         )
 

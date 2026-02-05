@@ -1,0 +1,381 @@
+{
+  "vulnerabilities": [
+    {
+      "cve_id": "CVE-2025-22235",
+      "severity": "HIGH",
+      "cvss_score": 7.3,
+      "package_name": "org.springframework.boot:spring-boot",
+      "current_version": "3.2.0",
+      "fixed_version": "3.4.5",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "EndpointRequest.to() creates a matcher for null/** if the actuator endpoint, for which the EndpointR..."
+    },
+    {
+      "cve_id": "CVE-2024-38816",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.springframework:spring-webmvc",
+      "current_version": "6.1.1",
+      "fixed_version": "6.1.13",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Applications serving static resources through the functional web frameworks WebMvc.fn or WebFlux.fn ..."
+    },
+    {
+      "cve_id": "CVE-2025-41249",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.springframework:spring-core",
+      "current_version": "6.1.1",
+      "fixed_version": "6.2.11",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "The Spring Framework annotation detection mechanism may not correctly resolve annotations on methods..."
+    },
+    {
+      "cve_id": "CVE-2024-38821",
+      "severity": "CRITICAL",
+      "cvss_score": 9.1,
+      "package_name": "org.springframework.security:spring-security-web",
+      "current_version": "6.2.0",
+      "fixed_version": "6.3.4",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Spring WebFlux applications that have Spring Security authorization rules on static resources can be..."
+    },
+    {
+      "cve_id": "CVE-2025-49124",
+      "severity": "HIGH",
+      "cvss_score": 8.4,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.8",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Untrusted Search Path vulnerability in Apache Tomcat installer for Windows. During installation, the..."
+    },
+    {
+      "cve_id": "CVE-2025-58056",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "io.netty:netty-codec-http",
+      "current_version": "4.1.101.Final",
+      "fixed_version": "4.2.5.Final",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Netty is an asynchronous event-driven network application framework for development of maintainable ..."
+    },
+    {
+      "cve_id": "CVE-2024-38819",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.springframework:spring-webmvc",
+      "current_version": "6.1.1",
+      "fixed_version": "6.1.14",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Applications serving static resources through the functional web frameworks WebMvc.fn or WebFlux.fn ..."
+    },
+    {
+      "cve_id": "CVE-2024-56337",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.2",
+      "package_manager": "java",
+      "exploit_available": true,
+      "description": "Time-of-check Time-of-use (TOCTOU) Race Condition vulnerability in Apache Tomcat.\n\nThis issue affect..."
+    },
+    {
+      "cve_id": "CVE-2023-6378",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "ch.qos.logback:logback-classic",
+      "current_version": "1.4.11",
+      "fixed_version": "1.4.12",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "A serialization vulnerability in logback receiver component part of logback version 1.4.11 allows an..."
+    },
+    {
+      "cve_id": "CVE-2024-50379",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.2",
+      "package_manager": "java",
+      "exploit_available": true,
+      "description": "Time-of-check Time-of-use (TOCTOU) Race Condition vulnerability during JSP compilation in Apache Tom..."
+    },
+    {
+      "cve_id": "CVE-2025-24970",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "io.netty:netty-handler",
+      "current_version": "4.1.101.Final",
+      "fixed_version": "4.1.118.Final",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Netty, an asynchronous, event-driven network application framework, has a vulnerability starting in ..."
+    },
+    {
+      "cve_id": "CVE-2024-22259",
+      "severity": "HIGH",
+      "cvss_score": 8.1,
+      "package_name": "org.springframework:spring-web",
+      "current_version": "6.1.1",
+      "fixed_version": "6.1.5",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Applications that use UriComponentsBuilder in Spring Framework to parse an externally provided URL (..."
+    },
+    {
+      "cve_id": "CVE-2025-31650",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.6",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Improper Input Validation vulnerability in Apache Tomcat. Incorrect error handling for some invalid ..."
+    },
+    {
+      "cve_id": "CVE-2025-48988",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.8",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Allocation of Resources Without Limits or Throttling vulnerability in Apache Tomcat.\n\nThis issue aff..."
+    },
+    {
+      "cve_id": "CVE-2025-24813",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.3",
+      "package_manager": "java",
+      "exploit_available": true,
+      "description": "Path Equivalence: 'file.Name' (Internal Dot) leading to Remote Code Execution and/or Information dis..."
+    },
+    {
+      "cve_id": "CVE-2024-22234",
+      "severity": "HIGH",
+      "cvss_score": 7.4,
+      "package_name": "org.springframework.security:spring-security-core",
+      "current_version": "6.2.0",
+      "fixed_version": "6.2.2",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "In Spring Security, versions 6.1.x prior to 6.1.7 and versions 6.2.x prior to 6.2.2, an application ..."
+    },
+    {
+      "cve_id": "CVE-2024-22243",
+      "severity": "HIGH",
+      "cvss_score": 8.1,
+      "package_name": "org.springframework:spring-web",
+      "current_version": "6.1.1",
+      "fixed_version": "6.1.4",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Applications that use UriComponentsBuilder to parse an externally provided URL (e.g. through a query..."
+    },
+    {
+      "cve_id": "CVE-2025-55754",
+      "severity": "CRITICAL",
+      "cvss_score": 9.6,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.11",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Improper Neutralization of Escape, Meta, or Control Sequences vulnerability in Apache Tomcat.\n\nTomca..."
+    },
+    {
+      "cve_id": "CVE-2024-22257",
+      "severity": "HIGH",
+      "cvss_score": 8.2,
+      "package_name": "org.springframework.security:spring-security-core",
+      "current_version": "6.2.0",
+      "fixed_version": "6.2.3",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "In Spring Security, versions 5.7.x prior to 5.7.12, 5.8.x prior to 5.8.11, versions 6.0.x prior to 6..."
+    },
+    {
+      "cve_id": "CVE-2025-48989",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.10",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Improper Resource Shutdown or Release vulnerability in Apache Tomcat made Tomcat vulnerable to the m..."
+    },
+    {
+      "cve_id": "CVE-2025-58057",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "io.netty:netty-codec",
+      "current_version": "4.1.101.Final",
+      "fixed_version": "4.1.125.Final",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Netty is an asynchronous event-driven network application framework for rapid development of maintai..."
+    },
+    {
+      "cve_id": "CVE-2025-55752",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.11",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Relative Path Traversal vulnerability in Apache Tomcat.\n\nThe fix for bug 60013 introduced a regressi..."
+    },
+    {
+      "cve_id": "CVE-2023-52428",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "com.nimbusds:nimbus-jose-jwt",
+      "current_version": "9.24.4",
+      "fixed_version": "9.37.2",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "In Connect2id Nimbus JOSE+JWT before 9.37.2, an attacker can cause a denial of service (resource con..."
+    },
+    {
+      "cve_id": "CVE-2025-46701",
+      "severity": "HIGH",
+      "cvss_score": 7.3,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.7",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Improper Handling of Case Sensitivity vulnerability in Apache Tomcat's GCI servlet allows security c..."
+    },
+    {
+      "cve_id": "CVE-2024-24549",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.0-M17",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Denial of Service due to improper input validation vulnerability for HTTP/2 requests in Apache Tomca..."
+    },
+    {
+      "cve_id": "CVE-2025-22228",
+      "severity": "HIGH",
+      "cvss_score": 7.4,
+      "package_name": "org.springframework.security:spring-security-crypto",
+      "current_version": "6.2.0",
+      "fixed_version": "6.4.4",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "BCryptPasswordEncoder.matches(CharSequence,String) will incorrectly return true for passwords larger..."
+    },
+    {
+      "cve_id": "CVE-2024-22262",
+      "severity": "HIGH",
+      "cvss_score": 8.1,
+      "package_name": "org.springframework:spring-web",
+      "current_version": "6.1.1",
+      "fixed_version": "6.1.6",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Applications that use UriComponentsBuilder to parse an externally provided URL (e.g. through a query..."
+    },
+    {
+      "cve_id": "CVE-2025-49125",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.8",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Authentication Bypass Using an Alternate Path or Channel vulnerability in Apache Tomcat.  When using..."
+    },
+    {
+      "cve_id": "CVE-2024-34750",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.0-M21",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Improper Handling of Exceptional Conditions, Uncontrolled Resource Consumption vulnerability in Apac..."
+    },
+    {
+      "cve_id": "CVE-2024-1597",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "package_name": "org.postgresql:postgresql",
+      "current_version": "42.6.0",
+      "fixed_version": "42.7.2",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "pgjdbc, the PostgreSQL JDBC Driver, allows attacker to inject SQL if using PreferQueryMode=SIMPLE. N..."
+    },
+    {
+      "cve_id": "CVE-2025-55163",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "package_name": "io.netty:netty-codec-http2",
+      "current_version": "4.1.101.Final",
+      "fixed_version": "4.2.4.Final",
+      "package_manager": "java",
+      "exploit_available": false,
+      "description": "Netty is an asynchronous, event-driven network application framework. Prior to versions 4.1.124.Fina..."
+    },
+    {
+      "cve_id": "CVE-2025-31651",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "package_name": "org.apache.tomcat.embed:tomcat-embed-core",
+      "current_version": "10.1.16",
+      "fixed_version": "11.0.6",
+      "package_manager": "java",
+      "exploit_available": true,
+      "description": "Improper Neutralization of Escape, Meta, or Control Sequences vulnerability in Apache Tomcat. For a ..."
+    }
+  ],
+  "summary": {
+    "total": 32,
+    "critical": 7,
+    "high": 25
+  },
+  "packages_affected": [
+    "org.springframework.boot:spring-boot",
+    "io.netty:netty-codec-http",
+    "org.springframework.security:spring-security-web",
+    "org.springframework:spring-webmvc",
+    "org.springframework.security:spring-security-core",
+    "com.nimbusds:nimbus-jose-jwt",
+    "io.netty:netty-handler",
+    "org.springframework:spring-web",
+    "io.netty:netty-codec",
+    "org.postgresql:postgresql",
+    "org.springframework.security:spring-security-crypto",
+    "ch.qos.logback:logback-classic",
+    "org.springframework:spring-core",
+    "io.netty:netty-codec-http2",
+    "org.apache.tomcat.embed:tomcat-embed-core"
+  ],
+  "package_managers": [
+    "java"
+  ]
+}

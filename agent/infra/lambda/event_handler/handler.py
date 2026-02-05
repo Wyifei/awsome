@@ -803,6 +803,44 @@ def process_container_cve_finding(finding: dict, classification: dict, context) 
             'existing_task_id': existing_record.get('taskId')
         }
 
+    # 生成任务 ID 并立即创建占位记录，防止并发处理
+    task_id = str(uuid.uuid4())
+    memory_session_id = f"session-task-{task_id}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # 创建占位任务 (status: collecting)，让后续的 Lambda 能检测到去重
+    try:
+        tasks_table.put_item(
+            Item={
+                'PK': f'TASK#{task_id}',
+                'SK': 'METADATA',
+                'GSI1PK': 'STATUS#collecting',
+                'GSI1SK': now,
+                'GSI2PK': dedup_key,  # 关键：设置去重键
+                'GSI2SK': now,
+                'taskId': task_id,
+                'findingId': finding_id,
+                'findingType': 'CONTAINER_CVE',
+                'status': 'collecting',  # 正在收集漏洞
+                'phase': 'pre_approval',
+                'container': convert_floats_to_decimals(container_details),
+                'createdAt': now,
+                'updatedAt': now,
+            },
+            ConditionExpression='attribute_not_exists(PK)'  # 确保不覆盖已有任务
+        )
+        logger.info(f"Created placeholder task {task_id} for image {image_digest[:20]}...")
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+            logger.info(f"Task already exists, skipping duplicate")
+            return {
+                'finding_id': finding_id,
+                'status': 'skipped',
+                'reason': 'duplicate_task_creation',
+                'image_digest': image_digest
+            }
+        raise
+
     # 等待 Inspector 完成扫描
     # 当收到第一个漏洞 Finding 时，Inspector 可能还没扫描完所有漏洞
     # 等待一段时间可以确保获取到更完整的漏洞列表
@@ -839,6 +877,12 @@ def process_container_cve_finding(finding: dict, classification: dict, context) 
 
     if aggregated['summary']['total'] == 0:
         logger.info(f"No HIGH/CRITICAL vulnerabilities found for {container_details['ecr_repository']}:{container_details['image_tag']}")
+        # 删除占位任务
+        try:
+            tasks_table.delete_item(Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'})
+            logger.info(f"Deleted placeholder task {task_id} (no vulnerabilities found)")
+        except Exception as e:
+            logger.warning(f"Failed to delete placeholder task: {e}")
         return {
             'finding_id': finding_id,
             'status': 'skipped',
@@ -848,66 +892,65 @@ def process_container_cve_finding(finding: dict, classification: dict, context) 
 
     logger.info(f"Aggregated {aggregated['summary']['total']} vulnerabilities for container image")
 
-    # 创建任务
-    task_id = str(uuid.uuid4())
-    memory_session_id = f"session-task-{task_id}"
+    # 更新占位任务为完整任务 (task_id 和 memory_session_id 已在前面创建)
     now = datetime.now(timezone.utc).isoformat()
     task_ttl = int((datetime.now(timezone.utc) + timedelta(hours=APPROVAL_EXPIRY_HOURS)).timestamp())
 
-    task_item = {
-        # Keys
-        'PK': f'TASK#{task_id}',
-        'SK': 'METADATA',
-        'GSI1PK': 'STATUS#pending',
-        'GSI1SK': now,
-        'GSI2PK': dedup_key,  # CVE_RESOURCE#CONTAINER_CVE#{image_digest}
-        'GSI2SK': now,
-        'GSI3PK': f'ACCOUNT#{finding.get("AwsAccountId", "")}',
-        'GSI3SK': now,
-
-        # 核心控制字段
-        'taskId': task_id,
-        'findingId': finding_id,
-        'findingType': 'CONTAINER_CVE',
-        'remediationType': 'github_pr',  # 标记为 GitHub PR 修复
-        'status': 'pending',
-        'phase': 'pre_approval',
-        'severity': severity,
-
-        # 容器镜像信息
-        'container': convert_floats_to_decimals(container_details),
-
-        # 漏洞列表
-        'vulnerabilities': convert_floats_to_decimals(aggregated['vulnerabilities']),
-        'vulnerabilitySummary': convert_floats_to_decimals(aggregated['summary']),
-        'packagesAffected': aggregated['packages_affected'],
-        'packageManagers': aggregated['package_managers'],
-
-        # 资源标识
-        'resourceType': resource.get('Type', ''),
-        'resourceId': resource_id,
-        'awsAccountId': finding.get('AwsAccountId', ''),
-        'region': finding.get('Region', REGION),
-
-        # Agent 会话
-        'memorySessionId': memory_session_id,
-        'actorId': finding.get('AwsAccountId', ''),
-
-        # 元数据
-        'createdAt': now,
-        'updatedAt': now,
-        'version': 1,
-        'traceId': context.aws_request_id if context else None,
-        'ttl': task_ttl
-    }
-
-    # 设置状态为 analyzing
-    task_item['status'] = 'analyzing'
-    task_item['GSI1PK'] = 'STATUS#analyzing'
-
-    # 保存任务
-    tasks_table.put_item(Item=task_item)
-    logger.info(f"Created container CVE task {task_id} for image {container_details['ecr_repository']}:{container_details['image_tag']}")
+    # 更新任务，添加漏洞数据
+    tasks_table.update_item(
+        Key={'PK': f'TASK#{task_id}', 'SK': 'METADATA'},
+        UpdateExpression='''
+            SET GSI1PK = :gsi1pk,
+                GSI3PK = :gsi3pk,
+                GSI3SK = :gsi3sk,
+                remediationType = :remediation_type,
+                #status = :status,
+                severity = :severity,
+                vulnerabilities = :vulnerabilities,
+                vulnerabilitySummary = :vuln_summary,
+                packagesAffected = :packages_affected,
+                packageManagers = :package_managers,
+                resourceType = :resource_type,
+                resourceId = :resource_id,
+                awsAccountId = :aws_account_id,
+                #region = :region,
+                memorySessionId = :memory_session_id,
+                actorId = :actor_id,
+                updatedAt = :updated_at,
+                #version = :version,
+                traceId = :trace_id,
+                #ttl = :ttl
+        ''',
+        ExpressionAttributeNames={
+            '#status': 'status',
+            '#region': 'region',
+            '#version': 'version',
+            '#ttl': 'ttl'
+        },
+        ExpressionAttributeValues={
+            ':gsi1pk': 'STATUS#analyzing',
+            ':gsi3pk': f'ACCOUNT#{finding.get("AwsAccountId", "")}',
+            ':gsi3sk': now,
+            ':remediation_type': 'github_pr',
+            ':status': 'analyzing',
+            ':severity': severity,
+            ':vulnerabilities': convert_floats_to_decimals(aggregated['vulnerabilities']),
+            ':vuln_summary': convert_floats_to_decimals(aggregated['summary']),
+            ':packages_affected': aggregated['packages_affected'],
+            ':package_managers': aggregated['package_managers'],
+            ':resource_type': resource.get('Type', ''),
+            ':resource_id': resource_id,
+            ':aws_account_id': finding.get('AwsAccountId', ''),
+            ':region': finding.get('Region', REGION),
+            ':memory_session_id': memory_session_id,
+            ':actor_id': finding.get('AwsAccountId', ''),
+            ':updated_at': now,
+            ':version': 1,
+            ':trace_id': context.aws_request_id if context else None,
+            ':ttl': task_ttl
+        }
+    )
+    logger.info(f"Updated container CVE task {task_id} with {aggregated['summary']['total']} vulnerabilities")
 
     # 调用 Analyzer Agent
     actor_id = finding.get('AwsAccountId', '')
@@ -981,11 +1024,18 @@ def extract_container_details(resource: dict) -> Optional[dict]:
 
     # 提取 ECR 仓库名称
     repo_name = details.get('RepositoryName', '')
-    if not repo_name and '/' in resource_id:
-        # 从 ARN 中提取
-        parts = resource_id.split('/')
-        if len(parts) >= 2:
-            repo_name = parts[1]
+    if not repo_name and '/repository/' in resource_id:
+        # 从 ARN 中提取完整的仓库路径
+        # ARN 格式: arn:aws:ecr:region:account:repository/prefix/repo-name/image/sha256:digest
+        # 需要提取 repository/ 和 /image/ 之间的所有内容
+        after_repo = resource_id.split('/repository/')[-1]  # prefix/repo-name/image/sha256:xxx
+        if '/image/' in after_repo:
+            repo_name = after_repo.split('/image/')[0]  # prefix/repo-name
+        else:
+            # 兼容没有 /image/ 的格式
+            parts = after_repo.split('/')
+            if len(parts) >= 2:
+                repo_name = '/'.join(parts[:-1])  # 去掉最后一段 (可能是 sha256)
 
     # 提取镜像标签
     image_tags = details.get('ImageTags', [])

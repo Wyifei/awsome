@@ -413,7 +413,11 @@ def run_analyzer(
     task_id: str,
     remediation_type: str = "auto",
     github_owner: str = "",
-    github_repo: str = ""
+    github_repo: str = "",
+    # 容器 CVE 模式的额外参数 (从 Lambda 传入的预聚合数据)
+    container_details: dict = None,
+    vulnerabilities: list = None,
+    vulnerability_summary: dict = None
 ) -> dict:
     """运行 Analyzer Agent 分析 Finding。
 
@@ -425,6 +429,9 @@ def run_analyzer(
         remediation_type: 修复类型 ("auto" 或 "github_pr")
         github_owner: GitHub 用户/组织 (github_pr 模式必需)
         github_repo: GitHub 仓库名 (可选，留空则动态搜索)
+        container_details: 容器镜像详情 (github_pr 模式，从 Lambda 传入)
+        vulnerabilities: 预聚合的漏洞列表 (github_pr 模式，从 Lambda 传入)
+        vulnerability_summary: 漏洞摘要 (github_pr 模式，从 Lambda 传入)
 
     Returns:
         dict: 分析结果
@@ -433,7 +440,12 @@ def run_analyzer(
 
     # 如果是 github_pr 模式，调用专门的容器分析函数
     if remediation_type == "github_pr":
-        return _run_github_pr_analyzer(agent, finding, task_id, github_owner, github_repo)
+        return _run_github_pr_analyzer(
+            agent, finding, task_id, github_owner, github_repo,
+            container_details=container_details,
+            vulnerabilities=vulnerabilities,
+            vulnerability_summary=vulnerability_summary
+        )
 
     # 以下是 aws_api 模式（默认）
     # 提取资源信息供 prompt 使用
@@ -545,11 +557,15 @@ def _run_github_pr_analyzer(
     finding: dict,
     task_id: str,
     github_owner: str,
-    github_repo: str = ""
+    github_repo: str = "",
+    # 从 Lambda 传入的预聚合数据 (优先使用)
+    container_details: dict = None,
+    vulnerabilities: list = None,
+    vulnerability_summary: dict = None
 ) -> dict:
     """GitHub PR 模式的分析入口函数。
 
-    从 Finding 中提取容器和漏洞信息，然后调用 run_container_analyzer。
+    优先使用 Lambda 传入的预聚合数据，否则从单个 Finding 中提取。
 
     Args:
         agent: Analyzer Agent 实例
@@ -557,77 +573,104 @@ def _run_github_pr_analyzer(
         task_id: 任务 ID
         github_owner: GitHub 用户/组织
         github_repo: GitHub 仓库名 (可选，留空则动态搜索)
+        container_details: 容器镜像详情 (从 Lambda 传入，已包含完整 repo path)
+        vulnerabilities: 预聚合的漏洞列表 (从 Lambda 传入，包含所有 HIGH/CRITICAL)
+        vulnerability_summary: 漏洞摘要 (从 Lambda 传入)
 
     Returns:
         dict: 分析结果
     """
-    # 从 Finding 中提取容器信息
-    resources = finding.get('Resources', [{}])
-    resource = resources[0] if resources else {}
-    resource_arn = resource.get('Id', '')
+    # 优先使用 Lambda 传入的预聚合数据
+    if vulnerabilities and container_details:
+        logger.info(f"Using pre-aggregated data from Lambda: {len(vulnerabilities)} vulnerabilities")
+        container_info = {
+            'repo_name': container_details.get('ecr_repository', ''),
+            'image_tag': container_details.get('image_tag', ''),
+            'image_digest': container_details.get('image_digest', '')
+        }
+        # 转换漏洞格式以匹配 run_container_analyzer 的期望
+        aggregated_vulnerabilities = []
+        for vuln in vulnerabilities:
+            aggregated_vulnerabilities.append({
+                'cve_id': vuln.get('cve_id', ''),
+                'severity': vuln.get('severity', 'UNKNOWN'),
+                'package_name': vuln.get('package_name', ''),
+                'installed_version': vuln.get('current_version', ''),
+                'fixed_version': vuln.get('fixed_version', ''),
+                'description': vuln.get('description', ''),
+                'cvss_score': vuln.get('cvss_score', 0.0),
+                'exploit_available': vuln.get('exploit_available', False)
+            })
+        logger.info(f"Container info: {container_info}, vulnerabilities: {len(aggregated_vulnerabilities)}")
+    else:
+        # 降级: 从单个 Finding 中提取 (只会有 1 个漏洞)
+        logger.warning("No pre-aggregated data from Lambda, extracting from single Finding (will only get 1 CVE)")
 
-    # 解析 ECR ARN: arn:aws:ecr:region:account:repository/name/image/sha256:digest
-    container_info = {
-        'repo_name': '',
-        'image_tag': '',
-        'image_digest': ''
-    }
+        # 从 Finding 中提取容器信息
+        resources = finding.get('Resources', [{}])
+        resource = resources[0] if resources else {}
+        resource_arn = resource.get('Id', '')
 
-    if 'ecr' in resource_arn.lower():
-        # 从 ARN 中提取仓库名
-        # 格式: arn:aws:ecr:ap-northeast-1:870414140965:repository/shara-dev-validator-agent/image/sha256:xxx
-        parts = resource_arn.split('/')
-        if len(parts) >= 2:
-            container_info['repo_name'] = parts[1] if 'repository' in parts[0] else parts[0].split(':')[-1]
-        if 'sha256:' in resource_arn:
-            container_info['image_digest'] = 'sha256:' + resource_arn.split('sha256:')[-1]
-
-    # 从 Finding 中提取漏洞信息
-    # Inspector findings 的漏洞信息可能在 Vulnerabilities 或 ProductFields 中
-    aggregated_vulnerabilities = []
-
-    # 检查是否有 Vulnerabilities 数组 (Inspector v2 格式)
-    vulns = finding.get('Vulnerabilities', [])
-    for vuln in vulns:
-        vuln_info = {
-            'cve_id': vuln.get('Id', ''),
-            'severity': finding.get('Severity', {}).get('Label', 'UNKNOWN'),
-            'package_name': '',
-            'installed_version': '',
-            'fixed_version': '',
-            'description': vuln.get('Description', '') or finding.get('Description', '')
+        # 解析 ECR ARN: arn:aws:ecr:region:account:repository/name/image/sha256:digest
+        container_info = {
+            'repo_name': '',
+            'image_tag': '',
+            'image_digest': ''
         }
 
-        # 提取包信息
-        packages = vuln.get('VulnerablePackages', [])
-        if packages:
-            pkg = packages[0]
-            vuln_info['package_name'] = pkg.get('Name', '')
-            vuln_info['installed_version'] = pkg.get('Version', '')
-            vuln_info['fixed_version'] = pkg.get('FixedInVersion', '')
+        if 'ecr' in resource_arn.lower():
+            # 从 ARN 中提取仓库名 (完整路径)
+            if '/repository/' in resource_arn:
+                after_repo = resource_arn.split('/repository/')[-1]
+                if '/image/' in after_repo:
+                    container_info['repo_name'] = after_repo.split('/image/')[0]
+            if 'sha256:' in resource_arn:
+                container_info['image_digest'] = 'sha256:' + resource_arn.split('sha256:')[-1]
 
-        if vuln_info['cve_id']:
-            aggregated_vulnerabilities.append(vuln_info)
+        # 从 Finding 中提取漏洞信息 (只会有 1 个)
+        aggregated_vulnerabilities = []
 
-    # 如果 Vulnerabilities 为空，尝试从 ProductFields 提取
-    if not aggregated_vulnerabilities:
-        product_fields = finding.get('ProductFields', {})
-        # Inspector 可能把漏洞信息放在不同字段
-        cve_id = (
-            finding.get('Title', '').split(' - ')[0] if ' - ' in finding.get('Title', '')
-            else product_fields.get('CVE', '')
-        )
-        if cve_id:
-            aggregated_vulnerabilities.append({
-                'cve_id': cve_id,
+        # 检查是否有 Vulnerabilities 数组 (Inspector v2 格式)
+        vulns = finding.get('Vulnerabilities', [])
+        for vuln in vulns:
+            vuln_info = {
+                'cve_id': vuln.get('Id', ''),
                 'severity': finding.get('Severity', {}).get('Label', 'UNKNOWN'),
-                'package_name': product_fields.get('PackageName', ''),
-                'installed_version': product_fields.get('InstalledVersion', ''),
-                'fixed_version': product_fields.get('FixedVersion', ''),
-                'description': finding.get('Description', '')
-            })
+                'package_name': '',
+                'installed_version': '',
+                'fixed_version': '',
+                'description': vuln.get('Description', '') or finding.get('Description', '')
+            }
 
-    logger.info(f"Extracted container info: {container_info}, vulnerabilities: {len(aggregated_vulnerabilities)}")
+            # 提取包信息
+            packages = vuln.get('VulnerablePackages', [])
+            if packages:
+                pkg = packages[0]
+                vuln_info['package_name'] = pkg.get('Name', '')
+                vuln_info['installed_version'] = pkg.get('Version', '')
+                vuln_info['fixed_version'] = pkg.get('FixedInVersion', '')
+
+            if vuln_info['cve_id']:
+                aggregated_vulnerabilities.append(vuln_info)
+
+        # 如果 Vulnerabilities 为空，尝试从 ProductFields 提取
+        if not aggregated_vulnerabilities:
+            product_fields = finding.get('ProductFields', {})
+            cve_id = (
+                finding.get('Title', '').split(' - ')[0] if ' - ' in finding.get('Title', '')
+                else product_fields.get('CVE', '')
+            )
+            if cve_id:
+                aggregated_vulnerabilities.append({
+                    'cve_id': cve_id,
+                    'severity': finding.get('Severity', {}).get('Label', 'UNKNOWN'),
+                    'package_name': product_fields.get('PackageName', ''),
+                    'installed_version': product_fields.get('InstalledVersion', ''),
+                    'fixed_version': product_fields.get('FixedVersion', ''),
+                    'description': finding.get('Description', '')
+                })
+
+        logger.info(f"Extracted container info: {container_info}, vulnerabilities: {len(aggregated_vulnerabilities)}")
 
     # 调用容器分析器
     return run_container_analyzer(

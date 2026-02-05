@@ -13,8 +13,8 @@
 #   -h, --help          Show this help message
 #   -c, --clean         Clean before build
 #   -s, --skip-tests    Skip running tests
-#   -d, --docker        Build Docker images after Maven build
-#   -p, --push          Push Docker images to ECR (requires -d)
+#   -d, --docker        Build Podman images after Maven build
+#   -p, --push          Push Podman images to ECR (requires -d)
 #   -e, --env ENV       Environment (dev/production, default: production)
 #   -t, --tag TAG       Docker image tag (default: latest)
 #   -r, --registry ID   AWS Account ID for ECR (e.g., 123456789012)
@@ -118,13 +118,13 @@ check_prerequisites() {
         exit 1
     fi
 
-    # Check Docker (if needed)
+    # Check Podman (if needed)
     if [ "$BUILD_DOCKER" = true ]; then
-        if command -v docker &> /dev/null; then
-            DOCKER_VERSION=$(docker --version)
-            print_success "Docker found: $DOCKER_VERSION"
+        if command -v podman &> /dev/null; then
+            DOCKER_VERSION=$(podman --version)
+            print_success "Podman found: $DOCKER_VERSION"
         else
-            print_error "Docker not found. Please install Docker."
+            print_error "Podman not found. Please install Podman."
             exit 1
         fi
     fi
@@ -215,11 +215,11 @@ build_docker_image() {
     local service_dir="$SERVICES_DIR/$service"
 
     if [ ! -f "$service_dir/Dockerfile" ]; then
-        print_warning "Dockerfile not found for $service, skipping Docker build"
+        print_warning "Dockerfile not found for $service, skipping Podman build"
         return 0
     fi
 
-    print_header "Building Docker image for $service"
+    print_header "Building Podman image for $service"
 
     cd "$service_dir"
 
@@ -229,8 +229,8 @@ build_docker_image() {
 
     print_info "Building image: $local_tag"
 
-    if docker build -t "$local_tag" .; then
-        print_success "Docker image built: $local_tag"
+    if podman build -t "$local_tag" .; then
+        print_success "Podman image built: $local_tag"
 
         # Tag for ECR if registry is provided
         if [ -n "$ECR_REGISTRY" ]; then
@@ -238,11 +238,11 @@ build_docker_image() {
             # Build full ECR URL from account ID
             local ecr_url="${ECR_REGISTRY}.dkr.ecr.${AWS_REGION}.amazonaws.com"
             local ecr_tag="${ecr_url}/${ecr_repo_name}:${DOCKER_TAG}"
-            docker tag "$local_tag" "$ecr_tag"
+            podman tag "$local_tag" "$ecr_tag"
             print_info "Tagged for ECR: $ecr_tag"
         fi
     else
-        print_error "Docker build failed for $service"
+        print_error "Podman build failed for $service"
         return 1
     fi
 
@@ -255,16 +255,16 @@ push_docker_image() {
     local ecr_url="${ECR_REGISTRY}.dkr.ecr.${AWS_REGION}.amazonaws.com"
     local ecr_tag="${ecr_url}/${ecr_repo_name}:${DOCKER_TAG}"
 
-    print_header "Pushing Docker image for $service"
+    print_header "Pushing Podman image for $service"
 
     # Login to ECR
     print_info "Logging in to ECR..."
     aws ecr get-login-password --region "$AWS_REGION" | \
-        docker login --username AWS --password-stdin "$ecr_url"
+        podman login --username AWS --password-stdin "$ecr_url"
 
     print_info "Pushing: $ecr_tag"
 
-    if docker push "$ecr_tag"; then
+    if podman push "$ecr_tag"; then
         print_success "Image pushed: $ecr_tag"
     else
         print_error "Failed to push image for $service"
@@ -279,10 +279,10 @@ print_summary() {
     echo -e "Environment: ${BLUE}${ENVIRONMENT}${NC}"
     echo -e "Clean build: $([ "$CLEAN" = true ] && echo "${GREEN}Yes${NC}" || echo "${YELLOW}No${NC}")"
     echo -e "Tests: $([ "$SKIP_TESTS" = true ] && echo "${YELLOW}Skipped${NC}" || echo "${GREEN}Executed${NC}")"
-    echo -e "Docker images: $([ "$BUILD_DOCKER" = true ] && echo "${GREEN}Built${NC}" || echo "${YELLOW}Skipped${NC}")"
+    echo -e "Podman images: $([ "$BUILD_DOCKER" = true ] && echo "${GREEN}Built${NC}" || echo "${YELLOW}Skipped${NC}")"
 
     if [ "$BUILD_DOCKER" = true ]; then
-        echo -e "Docker tag: ${BLUE}$DOCKER_TAG${NC}"
+        echo -e "Podman tag: ${BLUE}$DOCKER_TAG${NC}"
         echo -e "ECR repo format: ${BLUE}${PROJECT_NAME}-${ENVIRONMENT}/<service>${NC}"
     fi
 
