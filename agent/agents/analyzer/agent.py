@@ -714,9 +714,9 @@ def run_container_analyzer(
     image_tag = container_info.get('image_tag', '')
     image_digest = container_info.get('image_digest', '')
 
-    # 格式化漏洞列表
+    # 格式化漏洞列表 - 传递所有漏洞给 LLM 分析
     vuln_summary = []
-    for vuln in aggregated_vulnerabilities[:10]:  # 最多显示 10 个
+    for vuln in aggregated_vulnerabilities:  # 传递所有漏洞，不截断
         vuln_summary.append({
             "cve_id": vuln.get("cve_id"),
             "severity": vuln.get("severity"),
@@ -791,18 +791,19 @@ get_service_metadata(
 - analysis: 步骤 4 生成的 analysis 对象
 - remediation_description: 修复方案描述
 - finding: 完整的原始 Finding 数据
-- **vulnerabilities**: 漏洞列表 (⚠️ 必须传递！邮件通知需要)
+- **vulnerabilities**: ⚠️ 必须传递所有 {len(aggregated_vulnerabilities)} 个漏洞的完整列表！邮件通知需要显示
 - **service_info**: 服务信息 (包含 github_owner, github_repo)
 - **file_changes**: 文件变更列表
 - **remediation**: 修复方案信息
 
 **步骤 6 [强制]: 返回完整 JSON 响应**
 ⚠️ 你必须在响应末尾返回完整的 JSON 输出，格式如下：
+⚠️ **vulnerabilities 必须包含所有 {len(aggregated_vulnerabilities)} 个漏洞，不要截断！**
 ```json
 {{
   "analysis": {{ ... }},
   "service_info": {{ ... }},
-  "vulnerabilities": [ ... ],
+  "vulnerabilities": [ /* 所有 {len(aggregated_vulnerabilities)} 个漏洞 */ ],
   "file_changes": [ ... ],
   "remediation": {{ ... }}
 }}
@@ -847,13 +848,20 @@ get_service_metadata(
         # 同时 Agent 应该在响应末尾返回完整的 JSON（供我们直接提取）
         analysis_data = _extract_json_from_response(response_text)
 
+        # 使用 LLM 返回的漏洞列表，确保邮件显示的是 LLM 实际分析并将修复的漏洞
+        # 如果 LLM 没有返回漏洞列表，使用原始列表作为 fallback
+        llm_vulnerabilities = analysis_data.get('vulnerabilities', [])
+        if not llm_vulnerabilities:
+            logger.warning(f"LLM did not return vulnerabilities, using original list ({len(aggregated_vulnerabilities)} items)")
+            llm_vulnerabilities = aggregated_vulnerabilities
+
         return {
             "success": True,
             "task_id": task_id,
             "remediation_type": "github_pr",
             "analysis": analysis_data.get('analysis', {}),
             "service_info": analysis_data.get('service_info', {}),
-            "vulnerabilities": analysis_data.get('vulnerabilities', []),
+            "vulnerabilities": llm_vulnerabilities,
             "file_changes": analysis_data.get('file_changes', []),
             "remediation": analysis_data.get('remediation', {}),
             "raw_response": response_text
