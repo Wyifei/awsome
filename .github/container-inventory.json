@@ -1,12 +1,12 @@
 {
   "version": "1.0",
-  "last_updated": "2025-02-04",
+  "last_updated": "2026-02-05",
   "repository": "awsome2",
   "containers": [
     {
       "name": "analyzer",
       "description": "AI agent that analyzes security findings from AWS Security Hub",
-      "ecr_pattern": "shara-analyzer",
+      "ecr_pattern": "shara-dev-analyzer-agent",
       "path": "agent/agents/analyzer",
       "dockerfile": "agent/agents/analyzer/Dockerfile",
       "base_image": "python:3.12-slim",
@@ -23,7 +23,7 @@
     {
       "name": "remediator",
       "description": "AI agent that executes remediation actions for vulnerabilities",
-      "ecr_pattern": "shara-remediator",
+      "ecr_pattern": "shara-dev-remediator-agent",
       "path": "agent/agents/remediator",
       "dockerfile": "agent/agents/remediator/Dockerfile",
       "base_image": "python:3.12-slim",
@@ -40,7 +40,7 @@
     {
       "name": "validator",
       "description": "AI agent that validates remediation results",
-      "ecr_pattern": "shara-validator",
+      "ecr_pattern": "shara-dev-validator-agent",
       "path": "agent/agents/validator",
       "dockerfile": "agent/agents/validator/Dockerfile",
       "base_image": "python:3.12-slim",
@@ -57,7 +57,7 @@
     {
       "name": "user-service",
       "description": "User management and authentication microservice",
-      "ecr_pattern": "user-service",
+      "ecr_pattern": "auth-platform-production/user-service",
       "path": "application/services/user-service",
       "dockerfile": "application/services/user-service/Dockerfile",
       "base_image": "public.ecr.aws/docker/library/amazoncorretto:21-alpine",
@@ -74,7 +74,7 @@
     {
       "name": "profile-service",
       "description": "User profile management microservice",
-      "ecr_pattern": "profile-service",
+      "ecr_pattern": "auth-platform-production/profile-service",
       "path": "application/services/profile-service",
       "dockerfile": "application/services/profile-service/Dockerfile",
       "base_image": "public.ecr.aws/docker/library/amazoncorretto:21-alpine",
@@ -91,7 +91,7 @@
     {
       "name": "notification-service",
       "description": "Email notification microservice via AWS SES",
-      "ecr_pattern": "notification-service",
+      "ecr_pattern": "auth-platform-production/notification-service",
       "path": "application/services/notification-service",
       "dockerfile": "application/services/notification-service/Dockerfile",
       "base_image": "public.ecr.aws/docker/library/amazoncorretto:21-alpine",

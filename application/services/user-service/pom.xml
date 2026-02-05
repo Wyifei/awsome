@@ -22,7 +22,6 @@
         <lombok.version>1.18.36</lombok.version>
         <aws.sdk.version>2.31.3</aws.sdk.version>
         <!-- Override vulnerable dependency versions -->
-        <tomcat.version>10.1.45</tomcat.version>
         <spring-security.version>6.5.4</spring-security.version>
         <spring-framework.version>6.2.11</spring-framework.version>
         <netty.version>4.2.5.Final</netty.version>

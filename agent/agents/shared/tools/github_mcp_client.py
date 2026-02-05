@@ -857,11 +857,28 @@ def search_container_inventory(
             # 支持多种匹配方式：
             # 1. 精确匹配: user-service == user-service
             # 2. 带前缀匹配: auth-platform-production/user-service 匹配 user-service
-            #    检查以 /<pattern> 结尾，避免 admin-user-service 错误匹配 user-service
+            # 3. 环境变体匹配: shara-dev-analyzer-agent 匹配 shara-analyzer
+            #    - 移除环境前缀 (dev-, prod-, staging-)
+            #    - 移除 -agent 后缀
             is_match = (
                 ecr_pattern == ecr_repository or  # 精确匹配
                 ecr_repository.endswith(f"/{ecr_pattern}")  # 带前缀匹配
             )
+
+            # 环境变体匹配: shara-dev-analyzer-agent → shara-analyzer
+            if not is_match:
+                # 移除环境前缀和后缀后比较
+                normalized_ecr = ecr_repository
+                for env in ['-dev-', '-prod-', '-staging-', '-test-']:
+                    normalized_ecr = normalized_ecr.replace(env, '-')
+                # 移除 -agent 后缀
+                if normalized_ecr.endswith('-agent'):
+                    normalized_ecr = normalized_ecr[:-6]
+                # 再次检查
+                is_match = (ecr_pattern == normalized_ecr)
+                if is_match:
+                    logger.info(f"[GitHub MCP] Matched via normalization: {ecr_repository} → {normalized_ecr} == {ecr_pattern}")
+
             if is_match:
                 logger.info(f"[GitHub MCP] Found matching service: {container.get('name')}")
                 return {

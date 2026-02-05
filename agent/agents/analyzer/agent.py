@@ -717,119 +717,84 @@ def run_container_analyzer(
     image_tag = container_info.get('image_tag', '')
     image_digest = container_info.get('image_digest', '')
 
-    # 格式化漏洞列表 - 传递所有漏洞给 LLM 分析
-    vuln_summary = []
-    for vuln in aggregated_vulnerabilities:  # 传递所有漏洞，不截断
-        vuln_summary.append({
-            "cve_id": vuln.get("cve_id"),
-            "severity": vuln.get("severity"),
-            "package_name": vuln.get("package_name"),
-            "installed_version": vuln.get("installed_version"),
-            "fixed_version": vuln.get("fixed_version"),
-        })
-
-    # 统计受影响的包（去重）
+    # 统计受影响的包（去重）并创建升级表
     affected_packages = list(set(v.get("package_name", "") for v in aggregated_vulnerabilities if v.get("package_name")))
+
+    # 创建紧凑的升级表（按包名去重，只保留最高修复版本）
+    upgrade_table_lines = []
+    package_versions = {}  # {package_name: (installed, fixed)}
+    for vuln in aggregated_vulnerabilities:
+        pkg = vuln.get("package_name", "")
+        if pkg:
+            # 支持两种字段名: current_version (Lambda传入) 或 installed_version
+            installed = vuln.get("current_version") or vuln.get("installed_version") or "?"
+            fixed = vuln.get("fixed_version", "?")
+            if pkg not in package_versions:
+                package_versions[pkg] = (installed, fixed)
+            else:
+                # 保留已有版本（简化处理）
+                pass
+    for pkg, (installed, fixed) in package_versions.items():
+        upgrade_table_lines.append(f"  - {pkg}: {installed} → {fixed}")
     critical_count = sum(1 for v in aggregated_vulnerabilities if v.get("severity") == "CRITICAL")
     high_count = sum(1 for v in aggregated_vulnerabilities if v.get("severity") == "HIGH")
 
     prompt = f"""
-Analyze this Container Vulnerability Finding and generate a GitHub PR remediation plan:
+**任务: 容器漏洞分析 (Task ID: {task_id})**
 
-**Task ID:** {task_id}
-**Remediation Type:** github_pr
+**⚠️⚠️⚠️ 立即执行步骤 1 - 不要跳过！⚠️⚠️⚠️**
 
-**⚠️⚠️⚠️ 关键指令 - 必须首先执行 ⚠️⚠️⚠️**
-
-**步骤 1 [强制 - 必须首先执行]: 搜索容器清单**
-调用 search_container_inventory 工具定位源代码:
+## 步骤 1 [现在执行]: 搜索容器清单
 ```
 search_container_inventory(
   ecr_repository="{repo_name}",
-  github_owner="{github_owner}"{"," if github_repo else ""}
-  {f'github_repo="{github_repo}"' if github_repo else "# github_repo 留空，工具会自动通过 GitHub Code Search 查找"}
+  github_owner="{github_owner}"
 )
 ```
-⚠️ 如果返回 found=false，设置 can_remediate=false 并说明原因。
-⚠️ 如果搜索成功，记住返回的 `github_repo` 和 `path` 值，后续步骤需要使用。
+- 如果 found=false → 设置 can_remediate=false，跳到步骤 5
+- 如果 found=true → 继续步骤 2
 
----
-
-**Container Information:**
-- ECR Repository: {repo_name}
-- Image Tag: {image_tag}
-- Image Digest: {image_digest}
-
-**GitHub Configuration:**
-- Owner: {github_owner}
-- Repo: {github_repo if github_repo else "(需要通过步骤 1 动态搜索)"}
-
-**Vulnerability Summary ({len(aggregated_vulnerabilities)} total: {critical_count} CRITICAL, {high_count} HIGH):**
-- Affected Packages: {', '.join(affected_packages[:10])}{'...' if len(affected_packages) > 10 else ''}
-
-**Full Vulnerability List (for reference):**
-```json
-{json.dumps(vuln_summary, indent=2, default=str)}
-```
-
----
-
-**继续执行以下步骤:**
-
-**步骤 2: 读取服务元数据**
-如果步骤 1 找到匹配的服务，调用 get_service_metadata:
+## 步骤 2: 读取服务元数据
 ```
 get_service_metadata(
-  service_path="<步骤 1 返回的 path>",
+  service_path="<步骤1返回的path>",
   github_owner="{github_owner}",
-  github_repo="<步骤 1 返回的 github_repo>"
+  github_repo="<步骤1返回的github_repo>"
 )
 ```
 
-**步骤 3: 读取依赖文件**
-根据 SERVICE.yaml 中的配置，使用 read_github_file 读取需要修改的文件:
-- Dockerfile (查看 base image)
-- 依赖文件 (requirements.txt, package.json 等)
+## 步骤 3: 读取依赖文件
+使用 read_github_file 读取需要修改的文件 (如 pom.xml, requirements.txt)
 
-**步骤 4: 分析漏洞并生成修复方案**
-⚠️ **关键**: 所有漏洞将合并处理！
-- 分析所有 {len(aggregated_vulnerabilities)} 个漏洞，确定哪些依赖需要升级
-- 生成 file_changes 列表:
-  - **⚠️ suggested_content 必须是完整文件内容！**
-  - 基于步骤 3 读取的原文件，修改依赖版本后作为 suggested_content
-  - Remediator 会直接用 suggested_content 创建 PR，不会再次读取文件
-- 生成 remediation 对象，包含 can_remediate, summary, description 等
+## 步骤 4: 生成 file_changes
+- 漏洞数量: {len(aggregated_vulnerabilities)} ({critical_count} CRITICAL, {high_count} HIGH)
+- 受影响包: {', '.join(affected_packages[:5])}{'...' if len(affected_packages) > 5 else ''}
+- **⚠️ suggested_content 必须是完整文件内容！**
 
-**步骤 5 [强制]: 保存分析结果**
-调用 save_analysis_result 工具，传递分析结果:
-- task_id: {task_id}
-- analysis: 步骤 4 生成的 analysis 对象
-- remediation_description: 修复方案描述
-- finding: 完整的原始 Finding 数据
-- **vulnerabilities**: ⚠️ 必须传递所有 {len(aggregated_vulnerabilities)} 个漏洞的完整列表！邮件通知需要显示
-- **service_info**: 服务信息 (包含 github_owner, github_repo)
-- **file_changes**: 文件变更列表
-- **remediation**: 修复方案信息
-
-**步骤 6 [强制]: 返回完整 JSON 响应**
-⚠️ 你必须在响应末尾返回完整的 JSON 输出，格式如下：
-⚠️ **vulnerabilities 必须包含所有 {len(aggregated_vulnerabilities)} 个漏洞，不要截断！**
-```json
-{{
-  "analysis": {{ ... }},
-  "service_info": {{ ... }},
-  "vulnerabilities": [ /* 所有 {len(aggregated_vulnerabilities)} 个漏洞 */ ],
-  "file_changes": [ ... ],
-  "remediation": {{ ... }}
-}}
+## 步骤 5 [必须]: 保存分析结果
+```
+save_analysis_result(
+  task_id="{task_id}",
+  analysis={{...}},
+  remediation_description="...",
+  finding={{...}},
+  vulnerabilities=[...],  // 所有 {len(aggregated_vulnerabilities)} 个漏洞
+  service_info={{...}},
+  file_changes=[...],     // suggested_content 是完整文件
+  remediation={{...}}
+)
 ```
 
-**重要提示:**
-- 这是容器漏洞修复分析，PR 创建由 Remediator 负责
-- **必须**传递 vulnerabilities 参数，邮件通知需要显示漏洞列表
-- **必须**在 service_info 中包含 github_owner 和 github_repo
-- **必须**在响应末尾返回完整的 JSON
-- Remediator 将根据这些信息创建 PR
+---
+
+**参考信息 (步骤 4 时使用):**
+- Container: {repo_name}:{image_tag}
+- GitHub: {github_owner}/{github_repo if github_repo else "(待搜索)"}
+
+**需要升级的依赖包 (用于步骤 4 生成 file_changes):**
+{chr(10).join(upgrade_table_lines) if upgrade_table_lines else "  (无版本信息)"}
+
+**⚠️ 现在执行步骤 1！**
 """
 
     logger.info(f"Running Container Analyzer Agent for task {task_id}, repo {repo_name}")
