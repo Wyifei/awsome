@@ -26,3 +26,7 @@ tenacity>=8.2.0
 # MCP Client and AWS Documentation MCP Server
 mcp>=1.0.0
 awslabs.aws-documentation-mcp-server>=0.1.0
+
+# Security: Pinned transitive dependencies to fix vulnerabilities
+# CVE-2026-0994: protobuf HIGH severity vulnerability
+protobuf>=6.33.5
