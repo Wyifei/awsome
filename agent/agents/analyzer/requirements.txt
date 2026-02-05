@@ -26,3 +26,7 @@ tenacity>=8.2.0
 # MCP Client and AWS Documentation MCP Server
 mcp>=1.0.0
 awslabs.aws-documentation-mcp-server>=0.1.0
+
+# Security: Pinned versions to fix vulnerabilities
+# CVE-2026-0994: DoS vulnerability in protobuf json_format.ParseDict()
+protobuf>=6.33.5
