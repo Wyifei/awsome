@@ -613,6 +613,7 @@ def _run_github_pr_analyzer(
         resources = finding.get('Resources', [{}])
         resource = resources[0] if resources else {}
         resource_arn = resource.get('Id', '')
+        logger.info(f"Fallback: resource_arn = {resource_arn[:100]}..." if len(resource_arn) > 100 else f"Fallback: resource_arn = {resource_arn}")
 
         # 解析 ECR ARN: arn:aws:ecr:region:account:repository/name/image/sha256:digest
         container_info = {
@@ -629,6 +630,17 @@ def _run_github_pr_analyzer(
                     container_info['repo_name'] = after_repo.split('/image/')[0]
             if 'sha256:' in resource_arn:
                 container_info['image_digest'] = 'sha256:' + resource_arn.split('sha256:')[-1]
+
+            # 从 Details 中提取 image_tag
+            details = resource.get('Details', {}).get('AwsEcrContainerImage', {})
+            image_tags = details.get('ImageTags', [])
+            container_info['image_tag'] = image_tags[0] if image_tags else 'latest'
+
+            # 如果 repo_name 从 ARN 提取失败，尝试从 Details 获取
+            if not container_info['repo_name']:
+                container_info['repo_name'] = details.get('RepositoryName', '')
+
+        logger.info(f"Fallback extracted container_info: {container_info}")
 
         # 从 Finding 中提取漏洞信息 (只会有 1 个)
         aggregated_vulnerabilities = []
@@ -748,7 +760,8 @@ def run_container_analyzer(
 ```
 search_container_inventory(
   ecr_repository="{repo_name}",
-  github_owner="{github_owner}"
+  github_owner="{github_owner}",
+  github_repo="{github_repo}"
 )
 ```
 - 如果 found=false → 设置 can_remediate=false，跳到步骤 5
@@ -759,7 +772,7 @@ search_container_inventory(
 get_service_metadata(
   service_path="<步骤1返回的path>",
   github_owner="{github_owner}",
-  github_repo="<步骤1返回的github_repo>"
+  github_repo="{github_repo if github_repo else '<从步骤1获取>'}"
 )
 ```
 
