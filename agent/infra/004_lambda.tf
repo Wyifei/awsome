@@ -155,6 +155,9 @@ resource "aws_lambda_function" "approval_handler" {
       SENDER_EMAIL             = var.sender_email
       RESULT_EMAIL             = coalesce(var.result_email, var.approval_email)
       API_GATEWAY_URL          = "https://${aws_api_gateway_rest_api.main.id}.execute-api.${var.aws_region}.amazonaws.com/${var.stage}/"
+      # GitHub 配置 (容器漏洞修复)
+      GITHUB_OWNER             = var.github_owner
+      GITHUB_REPO              = var.github_repo
     }
   }
 

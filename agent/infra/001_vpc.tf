@@ -179,6 +179,12 @@ resource "aws_security_group" "vpc_endpoints" {
   tags = {
     Name = "${local.name_prefix}-vpc-endpoints-sg"
   }
+
+  # 忽略 ingress 变化，因为其他规则通过 aws_security_group_rule 单独管理
+  # (如 009_agentcore_runtime.tf 中的 AgentCore Runtime 相关规则)
+  lifecycle {
+    ignore_changes = [ingress]
+  }
 }
 
 # S3 Gateway Endpoint

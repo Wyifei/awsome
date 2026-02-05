@@ -589,62 +589,82 @@ def run_github_pr_remediator(
         dict: 执行结果
     """
     prompt = f"""
-Execute GitHub PR remediation for container vulnerability:
+执行容器漏洞的 GitHub PR 修复:
 
-**Task ID:** {task_id}
-**Remediation Type:** github_pr
-**Resource ARN:** {resource_arn}
+**任务 ID:** {task_id}
+**修复类型:** github_pr
+**资源 ARN:** {resource_arn}
 **Finding ID:** {finding_id}
-**GitHub Repository:** {github_owner}/{github_repo}
+**GitHub 仓库:** {github_owner}/{github_repo}
 
-**CRITICAL: Follow the GitHub PR workflow exactly. Do NOT use execute_code.**
+**重要: 严格按照 GitHub PR 工作流执行。不要使用 execute_code。**
 
-**Instructions:**
+**⚠️ 语言要求: PR 标题、描述、commit message 必须使用中文！**
 
-**PHASE A: Get Analysis Context**
-1. Get Phase 1 analysis context using get_analysis_context tool
+**执行步骤:**
+
+**阶段 A: 获取分析上下文**
+1. 使用 get_analysis_context 工具获取 Phase 1 分析结果
    - task_id: {task_id}
-   - This returns: file_changes, pr_metadata, service_info, vulnerabilities
+   - 返回内容: file_changes, service_info, vulnerabilities
 
-**PHASE B: Verify Current Files**
-2. For each file in file_changes, use read_github_file to verify:
+**阶段 B: 验证当前文件**
+2. 对于 file_changes 中的每个文件，使用 read_github_file 验证:
    - owner: {github_owner}
    - repo: {github_repo}
    - path: file_changes[].path
-   - Confirm current content matches file_changes[].current_content
 
-**PHASE C: Create Branch and Push Changes**
-3. Create a fix branch using create_github_branch:
+**阶段 C: 创建分支并推送变更**
+3. 使用 create_github_branch 创建修复分支:
    - owner: {github_owner}
    - repo: {github_repo}
-   - branch: pr_metadata.branch_name (e.g., "security/fix-service-cve-20240204")
+   - branch: 格式为 "security/fix-服务名-cve-日期" (如 "security/fix-analyzer-cve-20240204")
 
-4. Push file changes using push_files_to_github:
+4. 使用 push_files_to_github 推送文件变更:
    - owner: {github_owner}
    - repo: {github_repo}
-   - branch: the branch created in step 3
-   - files: array of {{path, content}} using file_changes[].suggested_content
-   - message: 根据漏洞数量生成，格式如:
-     - 单漏洞: "fix: Update PACKAGE to fix CVE-2024-xxxxx"
-     - 多漏洞: "fix: Update dependencies to fix N vulnerabilities (CVE-2024-xxx, CVE-2024-yyy, ...)"
+   - branch: 步骤 3 创建的分支
+   - files: 使用 file_changes[].suggested_content 构建 {{path, content}} 数组
+   - message: **必须中文**，格式如:
+     - 单漏洞: "fix(security): 升级 PACKAGE 修复 CVE-2024-xxxxx"
+     - 多漏洞: "fix(security): 升级依赖修复 N 个漏洞 (CVE-2024-xxx, CVE-2024-yyy)"
 
-**PHASE D: Create Pull Request**
-5. Create PR using create_pull_request:
+**阶段 D: 创建 Pull Request**
+5. 使用 create_pull_request 创建 PR:
    - owner: {github_owner}
    - repo: {github_repo}
-   - title: pr_metadata.title
-   - body: pr_metadata.description
-   - head: the branch created in step 3
-   - base: "master" (or default branch)
+   - title: **必须中文**，格式: "[安全] 修复 服务名 容器镜像漏洞 (N 个 CVE)"
+   - body: **必须中文**，包含以下内容:
+     ```
+     ## 概述
+     修复 服务名 容器镜像中的 N 个安全漏洞。
 
-**PHASE E: Save and Notify**
-6. Save PR result using save_pr_result:
+     ## 修复的漏洞
+     | CVE ID | 严重性 | 软件包 | 当前版本 | 修复版本 |
+     |--------|--------|--------|----------|----------|
+     | CVE-xxx | HIGH | package | 1.0.0 | 2.0.0 |
+
+     ## 变更内容
+     - 更新 `path/to/file` 中的依赖版本
+
+     ## 测试建议
+     - 构建镜像并运行测试
+     - 验证应用功能正常
+
+     ---
+     🤖 由 SHARA 自动生成
+     ```
+   - head: 步骤 3 创建的分支
+   - base: "master"
+
+**阶段 E: 保存结果并通知**
+6. 使用 save_pr_result 保存 PR 结果:
    - task_id: {task_id}
    - resource_arn: {resource_arn}
    - pr_info: {{pr_number, pr_url, branch_name, title, state}}
-   - files_changed: list of {{path, change_type, description}}
+   - files_changed: {{path, change_type, description}} 列表
 
-7. **[ALWAYS]** Call Validator using invoke_validator_agent:
+7. **[必须]** 使用 invoke_validator_agent 调用 Validator:
    - task_id: {task_id}
    - resource_arn: {resource_arn}
    - resource_type: "AwsEcrContainerImage"
@@ -655,16 +675,16 @@ Execute GitHub PR remediation for container vulnerability:
    - is_rollback: false
    - remediation_type: "github_pr"
 
-**CHECKLIST:**
-- [ ] Did you get analysis context? (Step 1)
-- [ ] Did you verify file contents? (Step 2)
-- [ ] Did you create branch? (Step 3)
-- [ ] Did you push files? (Step 4)
-- [ ] Did you create PR? (Step 5)
-- [ ] Did you save PR result? (Step 6)
-- [ ] Did you call invoke_validator_agent? (Step 7 - ALWAYS)
+**检查清单:**
+- [ ] 获取分析上下文? (步骤 1)
+- [ ] 验证文件内容? (步骤 2)
+- [ ] 创建分支? (步骤 3)
+- [ ] 推送文件? (步骤 4)
+- [ ] 创建 PR (中文标题和描述)? (步骤 5)
+- [ ] 保存 PR 结果? (步骤 6)
+- [ ] 调用 invoke_validator_agent? (步骤 7 - 必须)
 
-Return a JSON summary with branch_created, files_pushed, pull_request, pr_result_saved, and validator_response.
+返回 JSON 摘要，包含 branch_created, files_pushed, pull_request, pr_result_saved, validator_response。
 """
 
     logger.info(f"Running GitHub PR Remediator for task {task_id}")

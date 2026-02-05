@@ -32,6 +32,9 @@ SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')
 RESULT_EMAIL = os.environ.get('RESULT_EMAIL', '')
 API_GATEWAY_URL = os.environ.get('API_GATEWAY_URL', '')
 ROLLBACK_TOKEN_EXPIRY_HOURS = int(os.environ.get('ROLLBACK_TOKEN_EXPIRY_HOURS', '24'))
+# GitHub 配置 (容器漏洞修复)
+GITHUB_OWNER = os.environ.get('GITHUB_OWNER', 'Wyifei')
+GITHUB_REPO = os.environ.get('GITHUB_REPO', 'awsome')
 
 # AWS 客户端
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
@@ -278,6 +281,10 @@ def handle_async_remediation(event: dict, context) -> dict:
             'error': f'Task {task_id} not found'
         }
 
+    # 从 task 元数据获取修复类型
+    remediation_type = task.get('remediationType', 'aws_api')
+    logger.info(f"Task {task_id} remediation_type: {remediation_type}")
+
     try:
         # Phase 2: 执行修复 (Remediator 会通过 A2A 调用 Validator)
         remediation_result = run_phase2_remediation(
@@ -287,7 +294,10 @@ def handle_async_remediation(event: dict, context) -> dict:
             finding_id=finding_id,
             resource_arn=resource_arn,
             resource_type=resource_type,
-            control_id=control_id
+            control_id=control_id,
+            remediation_type=remediation_type,
+            github_owner=GITHUB_OWNER,
+            github_repo=GITHUB_REPO
         )
 
         if not remediation_result.get('success'):
@@ -522,6 +532,10 @@ def handle_async_rollback(event: dict, context) -> dict:
             'error': f'Task {task_id} not found'
         }
 
+    # 从 task 元数据获取修复类型
+    remediation_type = task.get('remediationType', 'aws_api')
+    logger.info(f"Task {task_id} remediation_type: {remediation_type}")
+
     try:
         # 调用 Remediator with is_rollback=True
         # Remediator 会通过 A2A 调用 Validator，Validator 会发送无回滚链接的结果邮件
@@ -533,7 +547,10 @@ def handle_async_rollback(event: dict, context) -> dict:
             resource_arn=resource_arn,
             resource_type=resource_type,
             control_id=control_id,
-            is_rollback=True  # 重要: 这会让 Validator 发送不带回滚链接的邮件
+            is_rollback=True,  # 重要: 这会让 Validator 发送不带回滚链接的邮件
+            remediation_type=remediation_type,
+            github_owner=GITHUB_OWNER,
+            github_repo=GITHUB_REPO
         )
 
         if not rollback_result.get('success'):
@@ -1368,7 +1385,10 @@ def run_phase2_remediation(
     resource_arn: str,
     resource_type: str,
     control_id: str,
-    is_rollback: bool = False
+    is_rollback: bool = False,
+    remediation_type: str = "aws_api",
+    github_owner: str = "",
+    github_repo: str = ""
 ) -> dict:
     """运行 Phase 2 修复 - 通过 AgentCore Runtime 调用 Remediator Agent
 
@@ -1383,6 +1403,9 @@ def run_phase2_remediation(
         resource_type: 资源类型
         control_id: Control ID
         is_rollback: 是否为回滚操作 (True 时回滚邮件不包含回滚链接)
+        remediation_type: 修复类型 ("aws_api" 或 "github_pr")
+        github_owner: GitHub Owner (github_pr 模式需要)
+        github_repo: GitHub Repo (github_pr 模式需要)
 
     Returns:
         dict: 修复和验证结果
@@ -1411,8 +1434,15 @@ def run_phase2_remediation(
             'resource_arn': resource_arn,
             'resource_type': resource_type,
             'control_id': control_id,
-            'is_rollback': is_rollback
+            'is_rollback': is_rollback,
+            'remediation_type': remediation_type
         }
+
+        # GitHub PR 模式需要额外参数
+        if remediation_type == 'github_pr':
+            agent_input['github_owner'] = github_owner or GITHUB_OWNER
+            agent_input['github_repo'] = github_repo or GITHUB_REPO
+            logger.info(f"GitHub PR mode: owner={agent_input['github_owner']}, repo={agent_input['github_repo']}")
 
         update_task_status(task_id, 'executing')
 

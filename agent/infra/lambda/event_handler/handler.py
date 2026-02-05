@@ -619,6 +619,7 @@ def process_fsbp_finding(finding: dict, classification: dict, context) -> dict:
         'findingId': finding_id,
         'controlId': control_id,
         'findingType': 'FSBP_CONTROL',  # 标记为 FSBP Control
+        'remediationType': 'aws_api',   # 修复类型: AWS API 调用
         'status': 'pending',
         'phase': 'pre_approval',
         'severity': severity,

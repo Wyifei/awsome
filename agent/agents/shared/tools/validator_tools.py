@@ -20,6 +20,68 @@ from shared.config import get_config
 logger = logging.getLogger(__name__)
 
 
+def _strip_comments_and_docstrings(code: str) -> str:
+    """移除代码中的注释和文档字符串，只保留实际执行的代码。
+
+    Args:
+        code: Python 代码
+
+    Returns:
+        str: 移除注释和文档字符串后的代码
+    """
+    # 移除多行文档字符串 ("""...""" 或 '''...''')
+    code = re.sub(r'"""[\s\S]*?"""', '', code)
+    code = re.sub(r"'''[\s\S]*?'''", '', code)
+
+    # 移除单行注释 (# ...)
+    code = re.sub(r'#.*$', '', code, flags=re.MULTILINE)
+
+    return code
+
+
+def _is_safe_cidr_context(code: str, cidr_pattern: str) -> bool:
+    """检查 CIDR 模式是否在安全的上下文中使用。
+
+    安全上下文包括:
+    - revoke_security_group_ingress/egress (移除规则 - 安全)
+    - 只出现在注释/文档字符串中
+
+    危险上下文:
+    - authorize_security_group_ingress/egress (添加规则 - 危险)
+
+    Args:
+        code: 完整的代码
+        cidr_pattern: CIDR 模式 (如 "0.0.0.0/0")
+
+    Returns:
+        bool: True 如果是安全上下文，False 如果是危险上下文
+    """
+    # 移除注释和文档字符串后的代码
+    executable_code = _strip_comments_and_docstrings(code)
+
+    # 如果 CIDR 只出现在注释/文档中，不在可执行代码中，则安全
+    if cidr_pattern not in executable_code:
+        return True
+
+    # 检查是否在 revoke 操作中（移除规则 - 安全操作）
+    # revoke 操作是安全的，因为是在移除开放的 CIDR
+    has_revoke = bool(re.search(r'revoke_security_group_(ingress|egress)', executable_code))
+
+    # 检查是否在 authorize 操作中（添加规则 - 危险操作）
+    has_authorize = bool(re.search(r'authorize_security_group_(ingress|egress)', executable_code))
+
+    # 如果只有 revoke 没有 authorize，则是安全操作
+    if has_revoke and not has_authorize:
+        return True
+
+    # 如果有 authorize 操作且 CIDR 在可执行代码中，则危险
+    if has_authorize:
+        return False
+
+    # 其他情况（如 describe 操作等），视为安全
+    return True
+
+
 @tool
 def review_code_security(code: str) -> dict:
     """Review generated code for security risks.
@@ -29,6 +91,11 @@ def review_code_security(code: str) -> dict:
     - Sensitive information leakage (hardcoded credentials)
     - Privilege escalation risks
     - Environment damage potential
+
+    Context-aware analysis:
+    - CIDR blocks (0.0.0.0/0) in revoke operations are safe (removing open access)
+    - CIDR blocks in authorize operations are dangerous (adding open access)
+    - Patterns in comments/docstrings are ignored
 
     Args:
         code: The Python code to review
@@ -45,6 +112,9 @@ def review_code_security(code: str) -> dict:
     risk_level = "low"
 
     logger.info(f"Reviewing code security (code length: {len(code)} chars)")
+
+    # 预处理：获取移除注释后的可执行代码（用于某些检测）
+    executable_code = _strip_comments_and_docstrings(code)
 
     # === Dangerous Operation Detection ===
     dangerous_patterns = [
@@ -68,14 +138,17 @@ def review_code_security(code: str) -> dict:
         (r'sts\.assume_role\s*\(', "Detected role assumption - verify legitimacy", "medium"),
         (r'AdministratorAccess', "Reference to AdministratorAccess policy", "high"),
         (r'PowerUserAccess', "Reference to PowerUserAccess policy", "medium"),
+    ]
 
-        # Network security
-        (r'0\.0\.0\.0/0', "Detected open CIDR block (0.0.0.0/0)", "medium"),
-        (r'::/0', "Detected open IPv6 CIDR block (::/0)", "medium"),
+    # 需要上下文感知的网络安全模式（CIDR）
+    network_cidr_patterns = [
+        (r'0\.0\.0\.0/0', "0.0.0.0/0"),
+        (r'::/0', "::/0"),
     ]
 
     for pattern, message, severity in dangerous_patterns:
-        if re.search(pattern, code, re.IGNORECASE):
+        # 对于一般危险模式，在可执行代码中检测（排除注释）
+        if re.search(pattern, executable_code, re.IGNORECASE):
             issues.append({
                 "type": "dangerous_operation",
                 "message": message,
@@ -85,6 +158,22 @@ def review_code_security(code: str) -> dict:
                 risk_level = "high"
             elif severity == "medium" and risk_level != "high":
                 risk_level = "medium"
+
+    # 对 CIDR 模式进行上下文感知检测
+    for pattern, cidr_value in network_cidr_patterns:
+        if re.search(pattern, code):
+            # 检查是否在安全上下文中
+            if not _is_safe_cidr_context(code, cidr_value):
+                # 危险：在 authorize 操作中添加开放 CIDR
+                issues.append({
+                    "type": "dangerous_operation",
+                    "message": f"Detected open CIDR block ({cidr_value}) in authorize operation - adding open access",
+                    "severity": "high"
+                })
+                risk_level = "high"
+            else:
+                # 安全：在 revoke 操作中或只在注释中
+                logger.info(f"CIDR {cidr_value} found in safe context (revoke/comment) - no issue raised")
 
     # === Sensitive Information Detection ===
     sensitive_patterns = [

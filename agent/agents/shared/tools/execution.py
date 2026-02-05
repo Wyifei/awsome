@@ -72,7 +72,7 @@ def _upload_audit_log(
             Bucket=config.remediation_audit_bucket,
             Key=code_key,
             Body=code.encode('utf-8'),
-            ContentType='text/x-python',
+            ContentType='text/x-python; charset=utf-8',
             Metadata={
                 'task-id': task_id,
                 'operation-type': operation_type,
@@ -110,7 +110,7 @@ Session Closed: {execution_result.get('session_closed', 'N/A')}
             Bucket=config.remediation_audit_bucket,
             Key=log_key,
             Body=log_content.encode('utf-8'),
-            ContentType='text/plain'
+            ContentType='text/plain; charset=utf-8'
         )
         logger.info(f"[AUDIT] Uploaded execution log to s3://{config.remediation_audit_bucket}/{log_key}")
 
@@ -140,7 +140,7 @@ Session Closed: {execution_result.get('session_closed', 'N/A')}
             Bucket=config.remediation_audit_bucket,
             Key=metadata_key,
             Body=json.dumps(metadata, indent=2, ensure_ascii=False).encode('utf-8'),
-            ContentType='application/json'
+            ContentType='application/json; charset=utf-8'
         )
         logger.info(f"[AUDIT] Uploaded metadata to s3://{config.remediation_audit_bucket}/{metadata_key}")
 
