@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
@@ -46,6 +47,8 @@ APPROVAL_EMAIL = os.environ.get('APPROVAL_EMAIL', '')  # 审批者邮箱
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', '')  # 发件人邮箱
 API_GATEWAY_URL = os.environ.get('API_GATEWAY_URL', '')  # API Gateway URL
 APPROVAL_EXPIRY_HOURS = int(os.environ.get('APPROVAL_EXPIRY_HOURS', '24'))
+# Inspector 扫描等待时间（秒）- 等待 Inspector 完成全部漏洞扫描
+INSPECTOR_SCAN_WAIT_SECONDS = int(os.environ.get('INSPECTOR_SCAN_WAIT_SECONDS', '30'))
 
 # DynamoDB 资源
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
@@ -334,13 +337,15 @@ def get_container_findings(
                 "description": "..."
             }
     """
-    logger.info(f"Fetching Inspector findings for {repo_name}:{image_tag} (digest: {image_digest[:20]}...)")
+    logger.info(f"Fetching Inspector findings for {repo_name}:{image_tag}")
+    logger.info(f"Filter: repo={repo_name}, digest={image_digest}")
 
     vulnerabilities = []
     next_token = None
 
     try:
         # 构建筛选条件
+        # 注意: Inspector API 的 ecrImageHash 需要完整的 sha256:xxx 格式
         filter_criteria = {
             # 按镜像仓库和 digest 筛选
             'ecrImageRepositoryName': [{'comparison': 'EQUALS', 'value': repo_name}],
@@ -355,6 +360,8 @@ def get_container_findings(
             'resourceType': [{'comparison': 'EQUALS', 'value': 'AWS_ECR_CONTAINER_IMAGE'}]
         }
 
+        logger.info(f"Inspector filter criteria: {json.dumps(filter_criteria)}")
+
         while True:
             # 调用 Inspector API
             params = {
@@ -367,13 +374,22 @@ def get_container_findings(
             response = inspector_client.list_findings(**params)
 
             # 处理响应
-            for finding in response.get('findings', []):
+            findings_in_page = response.get('findings', [])
+            logger.info(f"Inspector API returned {len(findings_in_page)} findings in this page")
+
+            for finding in findings_in_page:
                 vuln = extract_vulnerability_from_inspector_finding(finding)
                 if vuln:
                     vulnerabilities.append(vuln)
+                else:
+                    # 记录被过滤掉的 finding 以便调试
+                    finding_arn = finding.get('findingArn', 'unknown')
+                    vuln_id = finding.get('packageVulnerabilityDetails', {}).get('vulnerabilityId', 'N/A')
+                    logger.debug(f"Filtered out finding: {finding_arn}, vuln_id: {vuln_id}")
 
             # 检查是否有更多结果
             next_token = response.get('nextToken')
+            logger.info(f"Next token: {'present' if next_token else 'none'}")
             if not next_token:
                 break
 
@@ -402,9 +418,15 @@ def extract_vulnerability_from_inspector_finding(finding: dict) -> Optional[dict
         # Inspector API 返回的结构与 Security Hub ASFF 不同
         # 参考: https://docs.aws.amazon.com/inspector/latest/user/findings-understanding.html
 
-        # 提取 CVE ID
+        # 提取 CVE ID - 支持多种格式 (CVE-, GHSA-, etc.)
         vulnerability_id = finding.get('packageVulnerabilityDetails', {}).get('vulnerabilityId', '')
-        if not vulnerability_id or not vulnerability_id.startswith('CVE-'):
+        if not vulnerability_id:
+            # 尝试从 title 提取
+            vulnerability_id = finding.get('title', '')
+            logger.debug(f"No vulnerabilityId, using title: {vulnerability_id}")
+
+        if not vulnerability_id:
+            logger.warning(f"Skipping finding without vulnerability ID: {finding.get('findingArn', 'unknown')}")
             return None
 
         # 提取严重性
@@ -424,13 +446,17 @@ def extract_vulnerability_from_inspector_finding(finding: dict) -> Optional[dict
         # 提取受影响的包信息
         vulnerable_packages = finding.get('packageVulnerabilityDetails', {}).get('vulnerablePackages', [])
         if not vulnerable_packages:
-            return None
-
-        package = vulnerable_packages[0]
-        package_name = package.get('name', 'Unknown')
-        current_version = package.get('version', 'Unknown')
-        fixed_version = package.get('fixedInVersion', 'Not available')
-        package_manager = package.get('packageManager', 'Unknown')
+            logger.debug(f"No vulnerablePackages for {vulnerability_id}, using defaults")
+            package_name = 'Unknown'
+            current_version = 'Unknown'
+            fixed_version = 'Not available'
+            package_manager = 'Unknown'
+        else:
+            package = vulnerable_packages[0]
+            package_name = package.get('name', 'Unknown')
+            current_version = package.get('version', 'Unknown')
+            fixed_version = package.get('fixedInVersion', 'Not available')
+            package_manager = package.get('packageManager', 'Unknown')
 
         # 检查是否有公开利用
         exploit_available = finding.get('exploitAvailable', 'NO') == 'YES'
@@ -776,6 +802,13 @@ def process_container_cve_finding(finding: dict, classification: dict, context) 
             'image_digest': image_digest,
             'existing_task_id': existing_record.get('taskId')
         }
+
+    # 等待 Inspector 完成扫描
+    # 当收到第一个漏洞 Finding 时，Inspector 可能还没扫描完所有漏洞
+    # 等待一段时间可以确保获取到更完整的漏洞列表
+    if INSPECTOR_SCAN_WAIT_SECONDS > 0:
+        logger.info(f"Waiting {INSPECTOR_SCAN_WAIT_SECONDS}s for Inspector to complete scan...")
+        time.sleep(INSPECTOR_SCAN_WAIT_SECONDS)
 
     # 调用 Inspector API 获取该镜像的所有漏洞
     try:
