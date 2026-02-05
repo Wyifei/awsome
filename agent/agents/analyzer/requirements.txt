@@ -1,9 +1,9 @@
 # Analyzer Agent Dependencies
 
 # Web Framework
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-pydantic>=2.0.0
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.1
+pydantic>=2.6.0
 
 # Strands Agent SDK (with OpenTelemetry support)
 strands-agents[otel]>=0.1.0
@@ -16,12 +16,12 @@ aws-opentelemetry-distro>=0.10.0
 bedrock-agentcore>=0.1.0
 
 # AWS SDK
-boto3>=1.34.0
-botocore>=1.34.0
+boto3>=1.34.34
+botocore>=1.34.34
 
 # Utilities
-python-json-logger>=2.0.0
-tenacity>=8.2.0
+python-json-logger>=2.0.7
+tenacity>=8.2.3
 
 # MCP Client and AWS Documentation MCP Server
 mcp>=1.0.0
