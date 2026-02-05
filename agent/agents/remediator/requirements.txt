@@ -25,3 +25,6 @@ tenacity>=8.2.0
 
 # MCP Client (for GitHub integration)
 mcp>=1.0.0
+
+# Security: Pinned versions to fix vulnerabilities
+protobuf>=6.33.5  # CVE-2026-0994: DoS vulnerability fix
