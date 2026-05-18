@@ -1,0 +1,49 @@
+name: Trigger DevOps Agent Investigation
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  trigger:
+    if: contains(github.event.issue.labels.*.name, 'incident')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send HMAC webhook to DevOps Agent
+        env:
+          WEBHOOK_URL: ${{ secrets.DEVOPS_AGENT_WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.DEVOPS_AGENT_WEBHOOK_SECRET }}
+        run: |
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+
+          PAYLOAD=$(jq -n \
+            --arg title "${{ github.event.issue.title }}" \
+            --arg body "${{ github.event.issue.body }}" \
+            --arg id "${{ github.repository }}#${{ github.event.issue.number }}" \
+            --arg ts "$TIMESTAMP" \
+            '{
+              eventType: "incident",
+              incidentId: $id,
+              action: "created",
+              priority: "HIGH",
+              title: $title,
+              description: $body,
+              timestamp: $ts,
+              service: "outline"
+            }')
+
+          SIGNATURE=$(printf '%s:%s' "$TIMESTAMP" "$PAYLOAD" \
+            | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" -binary | base64)
+
+          HTTP_CODE=$(curl -s -o /tmp/webhook_response.txt -w "%{http_code}" \
+            -X POST "$WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -H "x-amzn-event-timestamp: $TIMESTAMP" \
+            -H "x-amzn-event-signature: $SIGNATURE" \
+            -d "$PAYLOAD")
+
+          echo "Webhook response: $HTTP_CODE"
+          cat /tmp/webhook_response.txt
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "::error::Webhook failed with HTTP $HTTP_CODE"
+            exit 1
+          fi
